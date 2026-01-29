@@ -6,9 +6,26 @@
 
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
     <description>Unofficial Claude Agent Java SDK</description>
     <packaging>jar</packaging>
+
+    <url>https://github.com/vidyalai-in/claude-agent-sdk-java</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <organization>Vidyalai</organization>
+            <organizationUrl>https://vidyalai.in</organizationUrl>
+        </developer>
+    </developers>
 
     <properties>
         <maven.compiler.source>25</maven.compiler.source>
@@ -21,6 +38,7 @@
         <maven.exec.plugin.version>3.6.3</maven.exec.plugin.version>
         <maven.templating.plugin.version>3.1.0</maven.templating.plugin.version>
         <maven.javadoc.plugin.version>3.12.0</maven.javadoc.plugin.version>
+        <maven.source.plugin.version>3.4.0</maven.source.plugin.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jackson.databind.version>2.21.0</jackson.databind.version>
         <jackson.annotations.version>2.21</jackson.annotations.version>
@@ -29,6 +47,21 @@
         <assertj.version>3.27.7</assertj.version>
         <mockito.version>5.21.0</mockito.version>
     </properties>
+
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/vidyalai-in/claude-agent-sdk-java</url>
+        </repository>
+    </distributionManagement>
+
+    <scm>
+        <connection>scm:git:git://github.com/vidyalai-in/claude-agent-sdk-java.git</connection>
+        <developerConnection>scm:git:ssh://github.com:vidyalai-in/claude-agent-sdk-java.git</developerConnection>
+        <url>https://github.com/vidyalai-in/claude-agent-sdk-java</url>
+        <tag>HEAD</tag>
+    </scm>
 
     <dependencies>
         <!-- JSON serialization -->
@@ -176,6 +209,28 @@
                     <!-- Additional options -->
                     <quiet>true</quiet>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Generate source JAR -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>${maven.source.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

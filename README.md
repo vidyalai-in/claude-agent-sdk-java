@@ -27,17 +27,71 @@ ClaudeAgentOptions.builder()
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
 </dependency>
+```
+
+Add the GitHub Packages repository to your `pom.xml`:
+
+```xml
+<repositories>
+    <repository>
+        <id>github</id>
+        <url>https://maven.pkg.github.com/vidyalai-in/claude-agent-sdk-java</url>
+    </repository>
+</repositories>
 ```
 
 ### Gradle
 
 ```kotlin
-implementation("in.vidyalai:claude-agent-sdk-java:0.1.0-SNAPSHOT")
+implementation("in.vidyalai:claude-agent-sdk-java:0.1.0")
 ```
 
-**Note:** This is currently a SNAPSHOT version under active development.
+Add the GitHub Packages repository to your `build.gradle.kts`:
+
+```kotlin
+repositories {
+    maven {
+        url = uri("https://maven.pkg.github.com/vidyalai-in/claude-agent-sdk-java")
+        credentials {
+            username = project.findProperty("gpr.user") as String? ?: System.getenv("USERNAME")
+            password = project.findProperty("gpr.key") as String? ?: System.getenv("TOKEN")
+        }
+    }
+}
+```
+
+### Authentication for GitHub Packages
+
+To use this library from GitHub Packages, you need to authenticate with GitHub.
+
+#### Maven Authentication
+
+Add this to your `~/.m2/settings.xml`:
+
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>github</id>
+      <username>YOUR_GITHUB_USERNAME</username>
+      <password>YOUR_GITHUB_PERSONAL_ACCESS_TOKEN</password>
+    </server>
+  </servers>
+</settings>
+```
+
+Generate a personal access token with `read:packages` scope at: https://github.com/settings/tokens
+
+#### Gradle Authentication
+
+Create or update `~/.gradle/gradle.properties`:
+
+```properties
+gpr.user=YOUR_GITHUB_USERNAME
+gpr.key=YOUR_GITHUB_PERSONAL_ACCESS_TOKEN
+```
 
 ## Quick Start
 

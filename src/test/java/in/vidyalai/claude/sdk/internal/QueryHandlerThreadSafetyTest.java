@@ -197,7 +197,9 @@ class QueryHandlerThreadSafetyTest {
                     startLatch.await();
                     SDKControlResponse response = handler.initialize();
                     if (response == null) {
-                        results.add(null);
+                        synchronized (results) {
+                            results.add(null);
+                        }
                         return;
                     }
                     Map<String, Object> result = ((ControlResponse) response.response()).response();
@@ -275,6 +277,7 @@ class QueryHandlerThreadSafetyTest {
                     startExceptionCount.incrementAndGet();
                 } catch (Exception e) {
                     // Other exceptions are not expected
+                    e.printStackTrace();
                 } finally {
                     doneLatch.countDown();
                 }

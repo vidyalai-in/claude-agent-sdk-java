@@ -227,3 +227,72 @@ Thread.startVirtualThread(() -> {
 - JSpecify (Nullability annotations)
 - JUnit 5 (Testing)
 - AssertJ (Test assertions)
+
+# Publishing
+
+## Publishing to GitHub Packages
+
+The project uses GitHub Actions to publish releases to GitHub Packages.
+
+### Release Process
+
+1. **Update version in pom.xml** from SNAPSHOT to release version (e.g., `0.1.0-SNAPSHOT` to `0.1.0`)
+2. **Commit changes:**
+   ```bash
+   git add pom.xml .github/ CHANGELOG.md README.md CLAUDE.md
+   git commit -m "Prepare release 0.1.0"
+   git push origin main
+   ```
+3. **Trigger GitHub Actions workflow:**
+   - Navigate to: GitHub repository > Actions tab
+   - Select "Publish to GitHub Packages" workflow
+   - Click "Run workflow"
+   - Enter version: `0.1.0`
+   - Click "Run workflow" button
+4. **Monitor workflow execution** in the Actions tab
+5. **Verify publication:**
+   - Go to: https://github.com/vidyalai-in/claude-agent-sdk-java/packages
+   - Verify version is published with all JARs (main, sources, javadoc)
+6. **Post-release - update to next SNAPSHOT version:**
+   ```bash
+   # Update pom.xml version to next SNAPSHOT (e.g., 0.2.0-SNAPSHOT)
+   git add pom.xml
+   git commit -m "Prepare for next development iteration"
+   git push origin main
+   ```
+
+### Manual Publishing
+
+To publish manually (requires GitHub personal access token):
+
+1. **Configure Maven settings** (`~/.m2/settings.xml`):
+   ```xml
+   <settings>
+     <servers>
+       <server>
+         <id>github</id>
+         <username>YOUR_GITHUB_USERNAME</username>
+         <password>YOUR_GITHUB_PERSONAL_ACCESS_TOKEN</password>
+       </server>
+     </servers>
+   </settings>
+   ```
+2. **Generate GitHub PAT** with `write:packages` scope at: https://github.com/settings/tokens
+3. **Run Maven deploy:**
+   ```bash
+   mvn clean deploy -DskipTests
+   ```
+
+### Pre-Release Checklist
+
+Before publishing a release:
+
+1. Run full test suite: `mvn clean test`
+2. Build locally: `mvn clean package`
+3. Verify JARs are generated in `target/`:
+   - `claude-agent-sdk-java-X.Y.Z.jar`
+   - `claude-agent-sdk-java-X.Y.Z-sources.jar`
+   - `claude-agent-sdk-java-X.Y.Z-javadoc.jar`
+4. Update CHANGELOG.md with release notes
+5. Update README.md if needed
+6. Ensure all documentation is up to date
