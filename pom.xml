@@ -6,7 +6,7 @@
 
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1-SNAPSHOT</version>
     <description>Unofficial Claude Agent Java SDK</description>
     <packaging>jar</packaging>
 
