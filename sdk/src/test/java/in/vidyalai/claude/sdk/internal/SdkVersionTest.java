@@ -26,10 +26,4 @@ class SdkVersionTest {
                 .matches("\\d+\\.\\d+\\.\\d+(-SNAPSHOT)?");
     }
 
-    @Test
-    void testVersionStartsWith0_1_0() {
-        // Verify it matches the current pom.xml version
-        assertThat(SdkVersion.VERSION).startsWith("0.1.0");
-    }
-
 }

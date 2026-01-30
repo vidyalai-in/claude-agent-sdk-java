@@ -1,6 +1,53 @@
+# Multi-Module Project Structure
+
+This is a multi-module Maven project with two modules:
+- `sdk/` - The Claude Agent SDK library (published to GitHub Packages)
+- `examples/` - Usage examples (depends on published SDK)
+
+## CI-Friendly Versioning
+
+The project uses Maven's CI-friendly version feature with the `${revision}` property. This means:
+- **Version is defined once** in the parent `pom.xml` as `<revision>0.1.1-SNAPSHOT</revision>`
+- All modules inherit this version automatically
+- To change the version, edit only one place: the `<revision>` property in the root `pom.xml`
+- The `flatten-maven-plugin` resolves `${revision}` before deployment
+
 # Workflow
 
+## Building the Project
+
 ```bash
+# Build all modules from root directory
+mvn clean install
+
+# Build only SDK module
+mvn clean install -pl sdk
+
+# Build only examples module
+mvn clean install -pl examples
+
+# Build without tests
+mvn clean install -DskipTests
+
+# Run all tests (SDK module)
+mvn test -pl sdk
+
+# Run specific test class
+mvn test -Dtest=IntegrationTest -pl sdk
+
+# Run specific test method
+mvn test -Dtest=IntegrationTest#testQuerySinglePrompt -pl sdk
+
+# Generate Javadoc for SDK
+mvn javadoc:javadoc -pl sdk
+```
+
+## SDK Module Commands
+
+```bash
+# Navigate to SDK directory
+cd sdk
+
 # Compile source code
 mvn compile
 
@@ -10,14 +57,11 @@ mvn test-compile
 # Run all tests
 mvn test
 
-# Run specific test class
-mvn test -Dtest=IntegrationTest
-
-# Run specific test method
-mvn test -Dtest=IntegrationTest#testQuerySinglePrompt
-
 # Build JAR (skip tests)
 mvn package -DskipTests
+
+# Install locally for examples development
+mvn install -DskipTests
 
 # Clean build
 mvn clean
@@ -28,43 +72,78 @@ mvn javadoc:javadoc
 
 # Running Examples
 
-Examples are located in the `usage/examples/` directory and are compiled as part of the main build (but excluded from the SDK JAR).
+Examples are located in the `examples/` module, which is a separate Maven module that depends on the published SDK from GitHub Packages.
+
+## From Root Directory (Recommended)
 
 ```bash
-# Build project and prepare dependencies
+# Build all modules and run an example
 mvn clean package -DskipTests
-
-# Method 1: Run example using Maven exec plugin (must specify -Dexec.mainClass)
-mvn exec:java -Dexec.mainClass="examples.QuickStart"
+mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
 
 # Run different examples (sorted alphabetically)
-mvn exec:java -Dexec.mainClass="examples.AdvancedFeatures"
-mvn exec:java -Dexec.mainClass="examples.AutoSchemaGeneration"
-mvn exec:java -Dexec.mainClass="examples.ErrorHandling"
-mvn exec:java -Dexec.mainClass="examples.Hooks"
-mvn exec:java -Dexec.mainClass="examples.MaxBudgetExample"
-mvn exec:java -Dexec.mainClass="examples.McpServer"
-mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation"
-mvn exec:java -Dexec.mainClass="examples.PermissionCallbacks"
-mvn exec:java -Dexec.mainClass="examples.PluginsExample"
-mvn exec:java -Dexec.mainClass="examples.QuickStart"
-mvn exec:java -Dexec.mainClass="examples.SettingSourcesExample" -Dexec.args="all"
-mvn exec:java -Dexec.mainClass="examples.StderrCallbackExample"
-mvn exec:java -Dexec.mainClass="examples.StreamingEvents"
-mvn exec:java -Dexec.mainClass="examples.ToolsConfigurationExample"
-mvn exec:java -Dexec.mainClass="examples.ToolUsage"
+mvn exec:java -Dexec.mainClass="examples.AdvancedFeatures" -pl examples
+mvn exec:java -Dexec.mainClass="examples.AutoSchemaGeneration" -pl examples
+mvn exec:java -Dexec.mainClass="examples.ErrorHandling" -pl examples
+mvn exec:java -Dexec.mainClass="examples.Hooks" -pl examples
+mvn exec:java -Dexec.mainClass="examples.MaxBudgetExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples
+mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation" -pl examples
+mvn exec:java -Dexec.mainClass="examples.PermissionCallbacks" -pl examples
+mvn exec:java -Dexec.mainClass="examples.PluginsExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
+mvn exec:java -Dexec.mainClass="examples.SettingSourcesExample" -Dexec.args="all" -pl examples
+mvn exec:java -Dexec.mainClass="examples.StderrCallbackExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.StreamingEvents" -pl examples
+mvn exec:java -Dexec.mainClass="examples.ToolsConfigurationExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.ToolUsage" -pl examples
+```
 
-# Method 2: Run example using java -cp
+## From Examples Directory
+
+```bash
+# Navigate to examples directory
+cd examples
+
+# Build examples (downloads published SDK from GitHub Packages)
+mvn clean package -DskipTests
+
+# Run an example using Maven exec plugin
+mvn exec:java -Dexec.mainClass="examples.QuickStart"
+
+# Or use java -cp
 java -cp target/classes:target/dependency/* examples.QuickStart
 java -cp target/classes:target/dependency/* examples.MultiTurnConversation
-
-# Note: Must run 'mvn package' first to copy dependencies to target/dependency/
 ```
+
+## Testing Examples Against Local SDK Changes
+
+To test examples against your local development version (not the published package):
+
+1. **Install SDK locally:**
+   ```bash
+   cd sdk
+   mvn clean install -DskipTests
+   cd ..
+   ```
+
+2. **Update `examples/pom.xml`** dependency version to `0.1.1-SNAPSHOT`:
+   ```xml
+   <dependency>
+       <groupId>in.vidyalai</groupId>
+       <artifactId>claude-agent-sdk-java</artifactId>
+       <version>0.1.1-SNAPSHOT</version>
+   </dependency>
+   ```
+
+3. **Run examples** as described in "From Root Directory" or "From Examples Directory" sections above.
 
 # Codebase Structure
 
+## SDK Module (`sdk/`)
+
 ```
-src/main/java/in/vidyalai/claude/sdk/
+sdk/src/main/java/in/vidyalai/claude/sdk/
 ├── ClaudeSDK.java              # Main facade with static helper methods
 ├── ClaudeSDKClient.java        # Interactive client for bidirectional conversations
 ├── ClaudeAgentOptions.java     # Configuration options (builder pattern)
@@ -105,6 +184,28 @@ src/main/java/in/vidyalai/claude/sdk/
     ├── Hook*.java                  # Hook-related types
     ├── McpServerConfig.java        # MCP server configs
     └── ...                         # Other type definitions
+```
+
+## Examples Module (`examples/`)
+
+```
+examples/src/main/java/examples/
+├── QuickStart.java                 # Basic usage
+├── MultiTurnConversation.java      # Interactive conversations
+├── ToolUsage.java                  # Using built-in tools
+├── McpServer.java                  # Creating custom MCP tools
+├── AutoSchemaGeneration.java       # Automatic schema generation
+├── Hooks.java                      # Hook callbacks
+├── PermissionCallbacks.java        # Custom permission logic
+├── StreamingEvents.java            # Real-time streaming
+├── ErrorHandling.java              # Exception handling
+├── AdvancedFeatures.java           # Checkpointing, sandbox, output format
+├── ToolsConfigurationExample.java  # Tools configuration
+├── MaxBudgetExample.java           # Budget limiting
+├── SettingSourcesExample.java      # Settings sources
+├── StderrCallbackExample.java      # CLI stderr output
+├── PluginsExample.java             # Plugin system
+└── plugins/                        # Example plugin implementations
 ```
 
 # Key Classes
@@ -159,8 +260,10 @@ ClaudeAgentOptions.builder()
 
 # Test Structure
 
+Tests are located in the SDK module:
+
 ```
-src/test/java/in/vidyalai/claude/sdk/
+sdk/src/test/java/in/vidyalai/claude/sdk/
 ├── IntegrationTest.java           # End-to-end tests
 ├── StreamingClientTest.java       # ClaudeSDKClient tests
 ├── ClaudeAgentOptionsTest.java    # Options builder tests
@@ -232,30 +335,43 @@ Thread.startVirtualThread(() -> {
 
 ## Publishing to GitHub Packages
 
-The project uses GitHub Actions to publish releases to GitHub Packages.
+The project uses GitHub Actions to publish the SDK module to GitHub Packages. The examples module is **not** published.
 
 ### Release Process
 
-1. **Update version in pom.xml** from SNAPSHOT to release version (e.g., `0.1.0-SNAPSHOT` to `0.1.0`)
+1. **Update the `<revision>` property in root `pom.xml`** from SNAPSHOT to release version:
+   ```xml
+   <!-- Change from: -->
+   <revision>0.1.1-SNAPSHOT</revision>
+   <!-- To: -->
+   <revision>0.1.1</revision>
+   ```
+   This automatically updates the version for all modules (parent, SDK, examples).
+
 2. **Commit changes:**
    ```bash
    git add pom.xml .github/ CHANGELOG.md README.md CLAUDE.md
-   git commit -m "Prepare release 0.1.0"
+   git commit -m "Prepare release 0.1.1"
    git push origin main
    ```
+
 3. **Trigger GitHub Actions workflow:**
    - Navigate to: GitHub repository > Actions tab
    - Select "Publish to GitHub Packages" workflow
    - Click "Run workflow"
-   - Enter version: `0.1.0`
+   - Enter version: `0.1.1`
    - Click "Run workflow" button
+
 4. **Monitor workflow execution** in the Actions tab
+
 5. **Verify publication:**
    - Go to: https://github.com/vidyalai-in/claude-agent-sdk-java/packages
-   - Verify version is published with all JARs (main, sources, javadoc)
+   - Verify SDK version is published with all JARs (main, sources, javadoc)
+
 6. **Post-release - update to next SNAPSHOT version:**
    ```bash
-   # Update pom.xml version to next SNAPSHOT (e.g., 0.2.0-SNAPSHOT)
+   # Update <revision> in root pom.xml to next SNAPSHOT (e.g., 0.1.2-SNAPSHOT)
+   # Edit: <revision>0.1.2-SNAPSHOT</revision>
    git add pom.xml
    git commit -m "Prepare for next development iteration"
    git push origin main
@@ -278,21 +394,32 @@ To publish manually (requires GitHub personal access token):
    </settings>
    ```
 2. **Generate GitHub PAT** with `write:packages` scope at: https://github.com/settings/tokens
-3. **Run Maven deploy:**
+3. **Run Maven deploy** (only deploys SDK module):
    ```bash
-   mvn clean deploy -DskipTests
+   mvn clean deploy -DskipTests -pl sdk
    ```
 
 ### Pre-Release Checklist
 
 Before publishing a release:
 
-1. Run full test suite: `mvn clean test`
+1. Run full test suite: `mvn clean test -pl sdk`
 2. Build locally: `mvn clean package`
-3. Verify JARs are generated in `target/`:
+3. Verify JARs are generated in `sdk/target/`:
    - `claude-agent-sdk-java-X.Y.Z.jar`
    - `claude-agent-sdk-java-X.Y.Z-sources.jar`
    - `claude-agent-sdk-java-X.Y.Z-javadoc.jar`
 4. Update CHANGELOG.md with release notes
 5. Update README.md if needed
 6. Ensure all documentation is up to date
+
+**Note:** With CI-friendly versioning, you only need to update the `<revision>` property in one place (root `pom.xml`). All modules automatically inherit the new version.
+
+### Why Examples Module is Not Published
+
+The examples module is **not** published to GitHub Packages because:
+- Examples are reference code for learning, not a reusable library
+- They depend on the SDK and have no independent value as an artifact
+- Users should clone the repository to view/run examples
+- Publishing would create confusion about which artifact to use
+- Examples are version-specific and don't need independent versioning

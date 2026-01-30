@@ -46,7 +46,7 @@ public class PluginsExample {
         // Get the path to the demo plugin
         // In production, you can use any path to your plugin directory
         Path base = Path.of(System.getProperty("user.dir"));
-        Path pluginPath = base.resolve("usage/examples/plugins/demo-plugin");
+        Path pluginPath = base.resolve("examples/src/main/java/examples/plugins/demo-plugin");
 
         // Create plugin configuration
         SdkPluginConfig plugin = SdkPluginConfig.local(pluginPath.toString());

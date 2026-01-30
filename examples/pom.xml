@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>in.vidyalai</groupId>
+        <artifactId>claude-agent-sdk-parent</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>claude-agent-sdk-examples</artifactId>
+    <packaging>jar</packaging>
+
+    <name>Claude Agent SDK Java - Examples</name>
+    <description>Usage examples for Claude Agent Java SDK</description>
+
+    <repositories>
+        <!-- GitHub Packages repository for downloading published SDK -->
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/vidyalai-in/claude-agent-sdk-java</url>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <!-- Depend on the SDK -->
+        <!--
+             For local development: Uses ${project.version} (inherits from parent)
+             For testing against published package: Change to release version (e.g., 0.1.0)
+             and ensure GitHub authentication is configured in ~/.m2/settings.xml
+        -->
+        <dependency>
+            <groupId>in.vidyalai</groupId>
+            <artifactId>claude-agent-sdk-java</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <!-- Copy dependencies to target/dependency for java -cp usage -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-dependencies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/dependency</outputDirectory>
+                            <includeScope>runtime</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Configure exec plugin for running examples -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+            <!-- Configure Javadoc generation -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <configuration>
+                    <!-- Exclude examples from javadoc -->
+                    <excludePackageNames>examples.*</excludePackageNames>
+                    <!-- Disable strict doclint checking -->
+                    <doclint>none</doclint>
+                    <!-- Don't fail build on javadoc errors -->
+                    <failOnError>false</failOnError>
+                    <failOnWarnings>false</failOnWarnings>
+                    <!-- Additional options -->
+                    <quiet>true</quiet>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

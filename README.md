@@ -908,7 +908,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 ## Examples
 
-See the `usage/examples/` directory for complete working examples:
+See the `examples/` module for complete working examples:
 
 - `QuickStart.java` - Basic usage
 - `MultiTurnConversation.java` - Interactive conversations
@@ -926,32 +926,65 @@ See the `usage/examples/` directory for complete working examples:
 - `StderrCallbackExample.java` - Capturing CLI stderr output
 - `PluginsExample.java` - Plugin system usage
 
-### Building and Running Examples
+### Running Examples
 
-First, build the SDK and download dependencies:
+The examples module is a separate Maven module that depends on the published SDK from GitHub Packages.
 
-```bash
-mvn compile dependency:copy-dependencies
-```
+#### Option 1: Run Examples from Root Directory (Recommended)
 
-Compile examples:
+Build all modules and run an example:
 
 ```bash
+# Build all modules (SDK + examples)
 mvn clean package -DskipTests
-javac -cp target/classes:target/dependency/* -d target/example-classes usage/examples/*.java
+
+# Run an example using Maven exec plugin
+mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
+
+# Run different examples
+mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation" -pl examples
+mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples
 ```
 
-Run an example:
+#### Option 2: Run Examples from Examples Directory
 
 ```bash
-java -cp target/classes:target/dependency/*:target/example-classes examples.QuickStart
-```
+# Navigate to examples directory
+cd examples
 
-Or use Maven exec plugin:
+# Build examples (downloads published SDK from GitHub Packages)
+mvn clean package -DskipTests
 
-```bash
+# Run an example using Maven exec plugin
 mvn exec:java -Dexec.mainClass="examples.QuickStart"
+
+# Or use java -cp
+java -cp target/classes:target/dependency/* examples.QuickStart
 ```
+
+#### Option 3: Run Examples with Local Development SDK
+
+To test examples against your local development version of the SDK (not the published version):
+
+1. Install the SDK locally:
+   ```bash
+   cd sdk
+   mvn clean install -DskipTests
+   cd ..
+   ```
+
+2. Update `examples/pom.xml` to use the SNAPSHOT version:
+   ```xml
+   <dependency>
+       <groupId>in.vidyalai</groupId>
+       <artifactId>claude-agent-sdk-java</artifactId>
+       <version>0.1.1-SNAPSHOT</version>
+   </dependency>
+   ```
+
+3. Run examples as described in Option 1 or 2.
+
+**Note:** You can also make the examples module depend on the published version from GitHub Packages. You need GitHub authentication configured to download it (see "Authentication for GitHub Packages" section above).
 
 ## Thread Safety
 

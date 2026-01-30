@@ -31,10 +31,10 @@ jobs:
       - name: Verify version matches input
         run: |
           POM_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          echo "POM version: $POM_VERSION"
+          echo "Parent POM version: $POM_VERSION"
           echo "Input version: ${{ github.event.inputs.version }}"
           if [ "$POM_VERSION" != "${{ github.event.inputs.version }}" ]; then
-            echo "Error: POM version does not match input version"
+            echo "Error: Parent POM version does not match input version"
             exit 1
           fi
           if [[ "$POM_VERSION" == *SNAPSHOT ]]; then
@@ -42,11 +42,11 @@ jobs:
             exit 1
           fi
 
-      - name: Build and test
+      - name: Build and test all modules
         run: mvn -B clean verify
 
-      - name: Publish to GitHub Packages
-        run: mvn -B deploy -DskipTests -s ${{ github.workspace }}/settings.xml
+      - name: Publish SDK module to GitHub Packages
+        run: mvn -B deploy -DskipTests -s ${{ github.workspace }}/settings.xml -pl sdk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -71,6 +71,10 @@ jobs:
             </dependency>
             ```
 
-            Add repository and authentication - see README for details.
+            Add GitHub Packages repository and authentication to your `pom.xml` or `~/.m2/settings.xml` - see README for details.
+
+            ## Examples
+
+            Example code is available in the `examples/` module. See the README for instructions on running examples.
           draft: false
           prerelease: false

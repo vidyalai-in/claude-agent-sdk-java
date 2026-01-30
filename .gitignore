@@ -7,6 +7,9 @@ firebase*.json
 !**/src/main/**/target/
 !**/src/test/**/target/
 
+### Maven ###
+.flattened-pom.xml
+
 ### STS ###
 .apt_generated
 .classpath
