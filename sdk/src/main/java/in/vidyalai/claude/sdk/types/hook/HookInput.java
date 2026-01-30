@@ -13,6 +13,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  * <ul>
  * <li>{@link PreToolUseHookInput} - Before a tool is used</li>
  * <li>{@link PostToolUseHookInput} - After a tool is used</li>
+ * <li>{@link PostToolUseFailureHookInput} - After a tool use fails</li>
  * <li>{@link UserPromptSubmitHookInput} - When user submits a prompt</li>
  * <li>{@link StopHookInput} - When the session stops</li>
  * <li>{@link SubagentStopHookInput} - When a subagent stops</li>
@@ -23,6 +24,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 @JsonSubTypes({
         @JsonSubTypes.Type(value = PreToolUseHookInput.class, name = "PreToolUse"),
         @JsonSubTypes.Type(value = PostToolUseHookInput.class, name = "PostToolUse"),
+        @JsonSubTypes.Type(value = PostToolUseFailureHookInput.class, name = "PostToolUseFailure"),
         @JsonSubTypes.Type(value = UserPromptSubmitHookInput.class, name = "UserPromptSubmit"),
         @JsonSubTypes.Type(value = StopHookInput.class, name = "Stop"),
         @JsonSubTypes.Type(value = SubagentStopHookInput.class, name = "SubagentStop"),
@@ -31,6 +33,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 public sealed interface HookInput permits
         PreToolUseHookInput,
         PostToolUseHookInput,
+        PostToolUseFailureHookInput,
         UserPromptSubmitHookInput,
         StopHookInput,
         SubagentStopHookInput,

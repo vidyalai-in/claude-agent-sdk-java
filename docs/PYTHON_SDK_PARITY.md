@@ -2,7 +2,7 @@
 
 **Analysis Date:** 2026-01-29 (Updated)
 **Java SDK Version:** 0.1.0-SNAPSHOT
-**Python SDK Version:** [0.1.25](https://github.com/anthropics/claude-agent-sdk-python/commit/597c758f98c9067ccf785f9d1f2b139925f7bb20)
+**Python SDK Version:** [0.1.25](https://github.com/anthropics/claude-agent-sdk-python/commit/e514a889d09ed118768b617f09ee01aba4369582)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---

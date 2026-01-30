@@ -22,6 +22,11 @@ public enum HookEvent {
     POST_TOOL_USE("PostToolUse"),
 
     /**
+     * Triggered after a tool use fails.
+     */
+    POST_TOOL_USE_FAILURE("PostToolUseFailure"),
+
+    /**
      * Triggered when the user submits a prompt.
      */
     USER_PROMPT_SUBMIT("UserPromptSubmit"),

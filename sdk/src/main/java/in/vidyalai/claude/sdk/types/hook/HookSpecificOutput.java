@@ -15,6 +15,7 @@ import org.jspecify.annotations.Nullable;
  * <li>PreToolUse: permissionDecision, permissionDecisionReason,
  * updatedInput</li>
  * <li>PostToolUse: additionalContext</li>
+ * <li>PostToolUseFailure: additionalContext</li>
  * <li>UserPromptSubmit: additionalContext</li>
  * </ul>
  *
@@ -67,6 +68,13 @@ public final class HookSpecificOutput {
      */
     public static Builder postToolUse() {
         return new Builder(HookEvent.POST_TOOL_USE);
+    }
+
+    /**
+     * Creates a builder for PostToolUseFailure hook output.
+     */
+    public static Builder postToolUseFailure() {
+        return new Builder(HookEvent.POST_TOOL_USE_FAILURE);
     }
 
     /**
