@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-01-29 (Updated)
-**Java SDK Version:** 0.1.0-SNAPSHOT
-**Python SDK Version:** [0.1.25](https://github.com/anthropics/claude-agent-sdk-python/commit/e514a889d09ed118768b617f09ee01aba4369582)
+**Analysis Date:** 2026-01-31 (Updated)
+**Java SDK Version:** 0.1.1
+**Python SDK Version:** [0.1.26](https://github.com/anthropics/claude-agent-sdk-python/commit/438ddf7e1bd2723ecf5f6bd705435fc1a78b81db)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,8 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.25):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.25. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.26):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.26. These updates include:
+- **v0.1.26** - CLI update to 2.1.27 (CLI version only) and PostToolUseFailureHook related changes
 - **v0.1.25** - CLI update to 2.1.23 (CLI version only)
 - **v0.1.24** - CLI update to 2.1.22 (CLI version only)
 - **v0.1.23** - `get_mcp_status()` made public, CLI 2.1.20 (already in Java SDK)

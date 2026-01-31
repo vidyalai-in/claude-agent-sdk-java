@@ -62,6 +62,8 @@
                         <configuration>
                             <outputDirectory>${project.build.directory}/dependency</outputDirectory>
                             <includeScope>runtime</includeScope>
+                            <!-- Exclude reactor artifacts to avoid MDEP-187 error -->
+                            <excludeGroupIds>in.vidyalai</excludeGroupIds>
                         </configuration>
                     </execution>
                 </executions>

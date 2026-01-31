@@ -108,12 +108,16 @@ cd examples
 # Build examples (downloads published SDK from GitHub Packages)
 mvn clean package -DskipTests
 
-# Run an example using Maven exec plugin
+# Run an example using Maven exec plugin (recommended)
 mvn exec:java -Dexec.mainClass="examples.QuickStart"
 
-# Or use java -cp
+# Or use java -cp (requires SDK installed in local Maven repo)
+# First ensure SDK is installed: cd ../sdk && mvn install -DskipTests && cd ../examples
 java -cp target/classes:target/dependency/* examples.QuickStart
 java -cp target/classes:target/dependency/* examples.MultiTurnConversation
+
+# Alternative: java -cp with explicit SDK path (for local development)
+java -cp target/classes:../sdk/target/classes:target/dependency/* examples.QuickStart
 ```
 
 ## Testing Examples Against Local SDK Changes
@@ -126,17 +130,28 @@ To test examples against your local development version (not the published packa
    mvn clean install -DskipTests
    cd ..
    ```
+   This installs the SDK JAR to your local Maven repository (~/.m2/repository).
 
-2. **Update `examples/pom.xml`** dependency version to `0.1.1-SNAPSHOT`:
-   ```xml
-   <dependency>
-       <groupId>in.vidyalai</groupId>
-       <artifactId>claude-agent-sdk-java</artifactId>
-       <version>0.1.1-SNAPSHOT</version>
-   </dependency>
-   ```
+2. **Run examples:**
+   - **Using Maven (recommended):** Maven automatically uses the local repository version
+     ```bash
+     mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
+     # Or from examples directory:
+     cd examples && mvn exec:java -Dexec.mainClass="examples.QuickStart"
+     ```
 
-3. **Run examples** as described in "From Root Directory" or "From Examples Directory" sections above.
+   - **Using java -cp:** Include SDK from local Maven repo or target directory
+     ```bash
+     # After mvn install, SDK is in ~/.m2/repository
+     cd examples
+     mvn package -DskipTests  # Copies SDK from local repo
+     java -cp target/classes:target/dependency/* examples.QuickStart
+
+     # Or include SDK target directory directly (no install needed)
+     java -cp target/classes:../sdk/target/classes:target/dependency/* examples.QuickStart
+     ```
+
+**Note:** The examples module already uses `${project.version}` to depend on the same version as the parent, so no pom.xml changes are needed for local development.
 
 # Codebase Structure
 
