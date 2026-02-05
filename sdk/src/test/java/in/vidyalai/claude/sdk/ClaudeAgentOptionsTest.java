@@ -15,7 +15,7 @@ import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
-import in.vidyalai.claude.sdk.types.hook.HookOutput;
+import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
 import in.vidyalai.claude.sdk.types.mcp.McpServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpStdioServerConfig;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;

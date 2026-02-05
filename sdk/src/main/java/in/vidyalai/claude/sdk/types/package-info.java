@@ -37,8 +37,8 @@
  * <ul>
  *   <li>{@link in.vidyalai.claude.sdk.types.hook.HookEvent} - Supported hook events</li>
  *   <li>{@link in.vidyalai.claude.sdk.types.hook.HookMatcher} - Hook matcher configuration</li>
- *   <li>{@link in.vidyalai.claude.sdk.types.hook.HookInput} - Input data for hooks</li>
- *   <li>{@link in.vidyalai.claude.sdk.types.hook.HookOutput} - Output from hooks</li>
+ *   <li>{@link in.vidyalai.claude.sdk.types.hook.input.HookInput} - Input data for hooks</li>
+ *   <li>{@link in.vidyalai.claude.sdk.types.hook.output.HookOutput} - Output from hooks</li>
  * </ul>
  *
  * <h3>SDK Control Protocol Types</h3>

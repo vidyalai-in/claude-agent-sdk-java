@@ -1,10 +1,12 @@
-package in.vidyalai.claude.sdk.types.hook;
+package in.vidyalai.claude.sdk.types.hook.input;
 
 import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import in.vidyalai.claude.sdk.types.hook.HookEvent;
 
 /**
  * Input for PreToolUse hook events.
@@ -20,6 +22,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param permissionMode current permission mode (can be null)
  * @param toolName       name of the tool being invoked
  * @param toolInput      input parameters for the tool
+ * @param toolUseId      unique identifier for this tool use
  */
 public record PreToolUseHookInput(
         @JsonProperty("session_id") String sessionId,
@@ -27,7 +30,8 @@ public record PreToolUseHookInput(
         @JsonProperty("cwd") String cwd,
         @JsonProperty("permission_mode") @Nullable String permissionMode,
         @JsonProperty("tool_name") String toolName,
-        @JsonProperty("tool_input") Map<String, Object> toolInput) implements HookInput {
+        @JsonProperty("tool_input") Map<String, Object> toolInput,
+        @JsonProperty("tool_use_id") String toolUseId) implements HookInput {
 
     @JsonProperty("hook_event_name")
     @Override

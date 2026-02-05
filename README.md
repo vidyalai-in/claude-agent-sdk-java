@@ -27,7 +27,7 @@ ClaudeAgentOptions.builder()
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.2</version>
 </dependency>
 ```
 
@@ -45,7 +45,7 @@ Add the GitHub Packages repository to your `pom.xml`:
 ### Gradle
 
 ```kotlin
-implementation("in.vidyalai:claude-agent-sdk-java:0.1.0")
+implementation("in.vidyalai:claude-agent-sdk-java:0.1.2")
 ```
 
 Add the GitHub Packages repository to your `build.gradle.kts`:
@@ -915,7 +915,7 @@ See the `examples/` module for complete working examples:
 - `ToolUsage.java` - Using built-in tools
 - `McpServer.java` - Creating custom MCP tools
 - `AutoSchemaGeneration.java` - Automatic schema generation for tools
-- `Hooks.java` - Hook callbacks
+- `Hooks.java` - Hook callbacks (including new hook events: Notification, SubagentStart, PermissionRequest)
 - `PermissionCallbacks.java` - Custom permission logic
 - `StreamingEvents.java` - Real-time streaming
 - `ErrorHandling.java` - Exception handling
@@ -925,6 +925,10 @@ See the `examples/` module for complete working examples:
 - `SettingSourcesExample.java` - Settings sources (user, project, local)
 - `StderrCallbackExample.java` - Capturing CLI stderr output
 - `PluginsExample.java` - Plugin system usage
+- `AgentsExample.java` - Programmatic subagent definitions
+- `FilesystemAgentsExample.java` - Filesystem-based agent configuration
+- `SystemPromptExample.java` - Custom system prompt usage
+- `IncludePartialMessagesExample.java` - Streaming with partial message updates
 
 ### Running Examples
 

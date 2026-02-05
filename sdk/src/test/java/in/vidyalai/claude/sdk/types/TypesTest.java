@@ -15,8 +15,9 @@ import in.vidyalai.claude.sdk.types.config.SettingSource;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.config.ToolsPreset;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
-import in.vidyalai.claude.sdk.types.hook.HookOutput;
-import in.vidyalai.claude.sdk.types.hook.HookSpecificOutput;
+import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
+import in.vidyalai.claude.sdk.types.hook.output.HookSpecificOutput;
+import in.vidyalai.claude.sdk.types.hook.output.PreToolUseHookSpecificOutput;
 import in.vidyalai.claude.sdk.types.mcp.McpHttpServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpSseServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpStdioServerConfig;
@@ -178,10 +179,11 @@ class TypesTest {
 
     @Test
     void hookSpecificOutput_preToolUse() {
-        HookSpecificOutput output = HookSpecificOutput.preToolUse()
-                .permissionDecision(PermissionDecision.ALLOW)
-                .permissionDecisionReason("Safe operation")
-                .build();
+        HookSpecificOutput output = new PreToolUseHookSpecificOutput(
+                PermissionDecision.ALLOW,
+                "Safe operation",
+                null,
+                null);
 
         Map<String, Object> map = output.toMap();
         assertThat(map).containsEntry("hookEventName", "PreToolUse");

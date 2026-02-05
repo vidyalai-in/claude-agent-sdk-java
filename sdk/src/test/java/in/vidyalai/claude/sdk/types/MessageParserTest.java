@@ -380,6 +380,84 @@ class MessageParserTest {
         assertThat(assistantMessage.parentToolUseId()).isEqualTo("toolu_01Xrwd5Y13sEHtzScxR77So8");
     }
 
+    @Test
+    void parseAssistantMessage_withoutError() {
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "model", "claude-opus-4-5-20251101",
+                        "content", List.of(
+                                Map.of("type", "text", "text", "Hello"))));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(AssistantMessage.class);
+        AssistantMessage assistantMessage = (AssistantMessage) message;
+        assertThat(assistantMessage.error()).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseAssistantMessage_withAuthenticationError() {
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "model", "<synthetic>",
+                        "content", List.of(
+                                Map.of("type", "text", "text", "Invalid API key · Fix external API key"))),
+                "session_id", "test-session",
+                "error", "authentication_failed");
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(AssistantMessage.class);
+        AssistantMessage assistantMessage = (AssistantMessage) message;
+        assertThat(assistantMessage.error()).isNotNull();
+        assertThat(assistantMessage.error().getValue()).isEqualTo("authentication_failed");
+        assertThat(assistantMessage.content()).hasSize(1);
+        assertThat(assistantMessage.content().get(0)).isInstanceOf(TextBlock.class);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseAssistantMessage_withUnknownError() {
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "model", "<synthetic>",
+                        "content", List.of(
+                                Map.of("type", "text", "text",
+                                        "API Error: 500 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"}}"))),
+                "session_id", "test-session",
+                "error", "unknown");
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(AssistantMessage.class);
+        AssistantMessage assistantMessage = (AssistantMessage) message;
+        assertThat(assistantMessage.error()).isNotNull();
+        assertThat(assistantMessage.error().getValue()).isEqualTo("unknown");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseAssistantMessage_withRateLimitError() {
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "model", "<synthetic>",
+                        "content", List.of(
+                                Map.of("type", "text", "text", "Rate limit exceeded"))),
+                "error", "rate_limit");
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(AssistantMessage.class);
+        AssistantMessage assistantMessage = (AssistantMessage) message;
+        assertThat(assistantMessage.error()).isNotNull();
+        assertThat(assistantMessage.error().getValue()).isEqualTo("rate_limit");
+    }
+
     // ==================== Additional Error Handling Tests ====================
 
     @SuppressWarnings("null")

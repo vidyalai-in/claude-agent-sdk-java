@@ -1,4 +1,4 @@
-package in.vidyalai.claude.sdk.types.hook;
+package in.vidyalai.claude.sdk.types.hook.input;
 
 import org.jspecify.annotations.Nullable;
 
@@ -18,6 +18,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  * <li>{@link StopHookInput} - When the session stops</li>
  * <li>{@link SubagentStopHookInput} - When a subagent stops</li>
  * <li>{@link PreCompactHookInput} - Before context compaction</li>
+ * <li>{@link NotificationHookInput} - When a notification is sent</li>
+ * <li>{@link SubagentStartHookInput} - When a subagent starts</li>
+ * <li>{@link PermissionRequestHookInput} - When a permission request is
+ * made</li>
  * </ul>
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "hook_event_name")
@@ -28,7 +32,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = UserPromptSubmitHookInput.class, name = "UserPromptSubmit"),
         @JsonSubTypes.Type(value = StopHookInput.class, name = "Stop"),
         @JsonSubTypes.Type(value = SubagentStopHookInput.class, name = "SubagentStop"),
-        @JsonSubTypes.Type(value = PreCompactHookInput.class, name = "PreCompact")
+        @JsonSubTypes.Type(value = PreCompactHookInput.class, name = "PreCompact"),
+        @JsonSubTypes.Type(value = NotificationHookInput.class, name = "Notification"),
+        @JsonSubTypes.Type(value = SubagentStartHookInput.class, name = "SubagentStart"),
+        @JsonSubTypes.Type(value = PermissionRequestHookInput.class, name = "PermissionRequest")
 })
 public sealed interface HookInput permits
         PreToolUseHookInput,
@@ -37,7 +44,10 @@ public sealed interface HookInput permits
         UserPromptSubmitHookInput,
         StopHookInput,
         SubagentStopHookInput,
-        PreCompactHookInput {
+        PreCompactHookInput,
+        NotificationHookInput,
+        SubagentStartHookInput,
+        PermissionRequestHookInput {
 
     /**
      * The hook event name.

@@ -182,23 +182,76 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
 │   ├── Tool.java                   # @Tool annotation
 │   └── ToolResult.java             # Tool result wrapper
 └── types/                      # Type definitions
-    ├── Message.java                # Sealed interface for messages
-    ├── UserMessage.java            # User message record
-    ├── AssistantMessage.java       # Assistant message record
-    ├── SystemMessage.java          # System message record
-    ├── ResultMessage.java          # Result message record
-    ├── StreamEvent.java            # Stream event record
-    ├── ContentBlock.java           # Sealed interface for content
-    ├── TextBlock.java              # Text content record
-    ├── ThinkingBlock.java          # Thinking content record
-    ├── ToolUseBlock.java           # Tool use record
-    ├── ToolResultBlock.java        # Tool result record
-    ├── PermissionMode.java         # Permission mode enum
-    ├── PermissionResult*.java      # Permission callback results
-    ├── HookEvent.java              # Hook event enum
-    ├── Hook*.java                  # Hook-related types
-    ├── McpServerConfig.java        # MCP server configs
-    └── ...                         # Other type definitions
+    ├── message/                    # Message and content types
+    │   ├── Message.java                # Sealed interface for messages
+    │   ├── UserMessage.java            # User message record
+    │   ├── AssistantMessage.java       # Assistant message record
+    │   ├── AssistantMessageError.java  # Error types enum
+    │   ├── SystemMessage.java          # System message record
+    │   ├── ResultMessage.java          # Result message record
+    │   ├── StreamEvent.java            # Stream event record
+    │   ├── ContentBlock.java           # Sealed interface for content
+    │   ├── TextBlock.java              # Text content record
+    │   ├── ThinkingBlock.java          # Thinking content record
+    │   ├── ToolUseBlock.java           # Tool use record
+    │   └── ToolResultBlock.java        # Tool result record
+    ├── permission/                 # Permission types
+    │   ├── PermissionMode.java         # Permission mode enum
+    │   ├── PermissionResult*.java      # Permission callback results
+    │   ├── PermissionUpdate.java       # Permission update types
+    │   ├── PermissionBehavior.java     # Permission behavior enum
+    │   ├── PermissionRuleValue.java    # Permission rule value enum
+    │   ├── CanUseTool.java             # Permission callback interface
+    │   └── ToolPermissionContext.java  # Permission context record
+    ├── hook/                       # Hook system types
+    │   ├── HookEvent.java              # Hook event enum (10 events)
+    │   ├── HookMatcher.java            # Hook matcher class
+    │   ├── HookContext.java            # Hook context record
+    │   ├── input/                      # Hook input types (from CLI)
+    │   │   ├── HookInput.java              # Base sealed interface
+    │   │   ├── PreToolUseHookInput.java    # Pre-tool-use hook
+    │   │   ├── PostToolUseHookInput.java   # Post-tool-use hook
+    │   │   ├── PostToolUseFailureHookInput.java # Tool failure hook
+    │   │   ├── UserPromptSubmitHookInput.java  # User prompt hook
+    │   │   ├── StopHookInput.java          # Stop hook
+    │   │   ├── SubagentStopHookInput.java  # Subagent stop hook
+    │   │   ├── SubagentStartHookInput.java # Subagent start hook
+    │   │   ├── PreCompactHookInput.java    # Pre-compact hook
+    │   │   ├── NotificationHookInput.java  # Notification hook
+    │   │   └── PermissionRequestHookInput.java # Permission request hook
+    │   └── output/                     # Hook output types (to CLI)
+    │       ├── HookOutput.java             # Hook output class
+    │       ├── HookSpecificOutput.java     # Hook-specific output builder
+    │       ├── PreToolUseHookSpecificOutput.java
+    │       ├── PostToolUseHookSpecificOutput.java
+    │       ├── PostToolUseFailureHookSpecificOutput.java
+    │       ├── UserPromptSubmitHookSpecificOutput.java
+    │       ├── NotificationHookSpecificOutput.java
+    │       ├── SubagentStartHookSpecificOutput.java
+    │       └── PermissionRequestHookSpecificOutput.java
+    ├── config/                     # Configuration types
+    │   ├── AIModel.java                # AI model enum
+    │   ├── AgentDefinition.java        # Agent definition
+    │   ├── SystemPromptPreset.java     # System prompt preset
+    │   ├── ToolsPreset.java            # Tools preset
+    │   ├── SettingSource.java          # Setting source enum
+    │   ├── SdkBeta.java                # Beta features enum
+    │   ├── SandboxSettings.java        # Sandbox configuration
+    │   ├── SandboxNetworkConfig.java   # Network config
+    │   └── CompactTriggerType.java     # Compact trigger types
+    ├── mcp/                        # MCP server types
+    │   ├── McpServerConfig.java        # MCP server config interface
+    │   ├── StdioMcpServerConfig.java   # Stdio server config
+    │   ├── SseMcpServerConfig.java     # SSE server config
+    │   ├── HttpMcpServerConfig.java    # HTTP server config
+    │   └── McpSdkServerConfig.java     # SDK server config
+    ├── control/                    # Control protocol types
+    │   ├── request/                    # Request types
+    │   │   ├── SDKHookCallbackRequest.java
+    │   │   └── ...
+    │   └── response/                   # Response types
+    │       └── ...
+    └── package-info.java           # Package documentation
 ```
 
 ## Examples Module (`examples/`)

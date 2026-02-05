@@ -6,8 +6,9 @@ import com.fasterxml.jackson.annotation.JsonValue;
  * Supported hook event types.
  *
  * <p>
- * Note: Due to setup limitations, the SDK does not support SessionStart,
- * SessionEnd, and Notification hooks.
+ * Note: SessionStart, SessionEnd, and Setup hooks are not included as they fire
+ * in the CLI before the SDK connection is established, so SDK callbacks for
+ * them would never execute.
  */
 public enum HookEvent {
 
@@ -44,7 +45,22 @@ public enum HookEvent {
     /**
      * Triggered before context compaction.
      */
-    PRE_COMPACT("PreCompact");
+    PRE_COMPACT("PreCompact"),
+
+    /**
+     * Triggered when a notification is sent.
+     */
+    NOTIFICATION("Notification"),
+
+    /**
+     * Triggered when a subagent starts.
+     */
+    SUBAGENT_START("SubagentStart"),
+
+    /**
+     * Triggered when a permission request is made.
+     */
+    PERMISSION_REQUEST("PermissionRequest");
 
     private final String value;
 

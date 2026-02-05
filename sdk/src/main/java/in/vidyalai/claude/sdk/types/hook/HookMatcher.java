@@ -6,6 +6,9 @@ import java.util.function.BiFunction;
 
 import org.jspecify.annotations.Nullable;
 
+import in.vidyalai.claude.sdk.types.hook.input.HookInput;
+import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
+
 /**
  * Hook matcher configuration.
  *

@@ -5,7 +5,7 @@ import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 
-import in.vidyalai.claude.sdk.types.hook.HookInput;
+import in.vidyalai.claude.sdk.types.hook.input.HookInput;
 
 /**
  * Request to invoke a hook callback.

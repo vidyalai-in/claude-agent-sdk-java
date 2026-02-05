@@ -14,16 +14,25 @@ import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.types.config.CompactTriggerType;
 import in.vidyalai.claude.sdk.types.hook.HookContext;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
-import in.vidyalai.claude.sdk.types.hook.HookInput;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
-import in.vidyalai.claude.sdk.types.hook.HookOutput;
-import in.vidyalai.claude.sdk.types.hook.HookSpecificOutput;
-import in.vidyalai.claude.sdk.types.hook.PostToolUseHookInput;
-import in.vidyalai.claude.sdk.types.hook.PreCompactHookInput;
-import in.vidyalai.claude.sdk.types.hook.PreToolUseHookInput;
-import in.vidyalai.claude.sdk.types.hook.StopHookInput;
-import in.vidyalai.claude.sdk.types.hook.SubagentStopHookInput;
-import in.vidyalai.claude.sdk.types.hook.UserPromptSubmitHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.HookInput;
+import in.vidyalai.claude.sdk.types.hook.input.NotificationHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.PermissionRequestHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.PostToolUseHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.PreCompactHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.PreToolUseHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.StopHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.SubagentStartHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.SubagentStopHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.UserPromptSubmitHookInput;
+import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
+import in.vidyalai.claude.sdk.types.hook.output.HookSpecificOutput;
+import in.vidyalai.claude.sdk.types.hook.output.NotificationHookSpecificOutput;
+import in.vidyalai.claude.sdk.types.hook.output.PermissionRequestHookSpecificOutput;
+import in.vidyalai.claude.sdk.types.hook.output.PostToolUseHookSpecificOutput;
+import in.vidyalai.claude.sdk.types.hook.output.PreToolUseHookSpecificOutput;
+import in.vidyalai.claude.sdk.types.hook.output.SubagentStartHookSpecificOutput;
+import in.vidyalai.claude.sdk.types.hook.output.UserPromptSubmitHookSpecificOutput;
 import in.vidyalai.claude.sdk.types.permission.PermissionDecision;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;
 import in.vidyalai.claude.sdk.types.permission.PermissionResultAllow;
@@ -189,7 +198,7 @@ class CallbacksTest {
         };
 
         callback.apply(
-                new PreToolUseHookInput("session", "/path", "/cwd", "default", "Bash", Map.of()),
+                new PreToolUseHookInput("session", "/path", "/cwd", "default", "Bash", Map.of(), "tool-id"),
                 new HookContext("tool-use-123")).join();
 
         assertThat(hookCalled.get()).isTrue();
@@ -206,7 +215,7 @@ class CallbacksTest {
 
         PreToolUseHookInput input = new PreToolUseHookInput(
                 "session-123", "/transcript", "/cwd", "bypassPermissions",
-                "Bash", Map.of("command", "ls"));
+                "Bash", Map.of("command", "ls"), "tool-use-id-123");
         callback.apply(input, new HookContext("tool-123")).join();
 
         assertThat(capturedInput.get()).isInstanceOf(PreToolUseHookInput.class);
@@ -214,6 +223,7 @@ class CallbacksTest {
         assertThat(captured.toolName()).isEqualTo("Bash");
         assertThat(captured.toolInput()).containsEntry("command", "ls");
         assertThat(captured.sessionId()).isEqualTo("session-123");
+        assertThat(captured.toolUseId()).isEqualTo("tool-use-id-123");
     }
 
     @Test
@@ -227,7 +237,7 @@ class CallbacksTest {
 
         HookContext context = new HookContext("tool-use-456");
         callback.apply(
-                new PreToolUseHookInput("s", "/t", "/c", "d", "Tool", Map.of()),
+                new PreToolUseHookInput("s", "/t", "/c", "d", "Tool", Map.of(), "tool-id"),
                 context).join();
 
         assertThat(capturedContext.get().toolUseId()).isEqualTo("tool-use-456");
@@ -256,10 +266,11 @@ class CallbacksTest {
 
     @Test
     void testHookSpecificOutputPreToolUse() {
-        HookSpecificOutput output = HookSpecificOutput.preToolUse()
-                .permissionDecision(PermissionDecision.ALLOW)
-                .permissionDecisionReason("Safe operation")
-                .build();
+        HookSpecificOutput output = new PreToolUseHookSpecificOutput(
+                PermissionDecision.ALLOW,
+                "Safe operation",
+                null,
+                null);
 
         Map<String, Object> map = output.toMap();
 
@@ -270,9 +281,9 @@ class CallbacksTest {
 
     @Test
     void testHookSpecificOutputPostToolUse() {
-        HookSpecificOutput output = HookSpecificOutput.postToolUse()
-                .additionalContext("Additional context here")
-                .build();
+        HookSpecificOutput output = new PostToolUseHookSpecificOutput(
+                "Additional context here",
+                null);
 
         Map<String, Object> map = output.toMap();
 
@@ -282,9 +293,8 @@ class CallbacksTest {
 
     @Test
     void testHookSpecificOutputUserPromptSubmit() {
-        HookSpecificOutput output = HookSpecificOutput.userPromptSubmit()
-                .additionalContext("Modified prompt context")
-                .build();
+        HookSpecificOutput output = new UserPromptSubmitHookSpecificOutput(
+                "Modified prompt context");
 
         Map<String, Object> map = output.toMap();
 
@@ -373,13 +383,15 @@ class CallbacksTest {
     void testHookInputTypes() {
         // Test all hook input types
         PreToolUseHookInput preToolUse = new PreToolUseHookInput(
-                "s", "/t", "/c", "d", "Tool", Map.of());
+                "s", "/t", "/c", "d", "Tool", Map.of(), "tool-id-123");
         assertThat(preToolUse.hookEventName()).isEqualTo("PreToolUse");
+        assertThat(preToolUse.toolUseId()).isEqualTo("tool-id-123");
 
         PostToolUseHookInput postToolUse = new PostToolUseHookInput(
-                "s", "/t", "/c", "d", "Tool", Map.of(), "result");
+                "s", "/t", "/c", "d", "Tool", Map.of(), "result", "tool-id-456");
         assertThat(postToolUse.hookEventName()).isEqualTo("PostToolUse");
         assertThat(postToolUse.toolResponse()).isEqualTo("result");
+        assertThat(postToolUse.toolUseId()).isEqualTo("tool-id-456");
 
         UserPromptSubmitHookInput userPrompt = new UserPromptSubmitHookInput(
                 "s", "/t", "/c", "d", "Hello");
@@ -390,14 +402,91 @@ class CallbacksTest {
         assertThat(stop.hookEventName()).isEqualTo("Stop");
         assertThat(stop.stopHookActive()).isTrue();
 
-        SubagentStopHookInput subagentStop = new SubagentStopHookInput("s", "/t", "/c", "d", false);
+        SubagentStopHookInput subagentStop = new SubagentStopHookInput(
+                "s", "/t", "/c", "d", false, "agent-123", "/agent/transcript", "explore");
         assertThat(subagentStop.hookEventName()).isEqualTo("SubagentStop");
+        assertThat(subagentStop.agentId()).isEqualTo("agent-123");
+        assertThat(subagentStop.agentTranscriptPath()).isEqualTo("/agent/transcript");
+        assertThat(subagentStop.agentType()).isEqualTo("explore");
 
         PreCompactHookInput preCompact = new PreCompactHookInput(
                 "s", "/t", "/c", "d", CompactTriggerType.MANUAL, "custom instructions");
         assertThat(preCompact.hookEventName()).isEqualTo("PreCompact");
         assertThat(preCompact.trigger()).isEqualTo(CompactTriggerType.MANUAL);
         assertThat(preCompact.customInstructions()).isEqualTo("custom instructions");
+    }
+
+    @Test
+    void testNewHookInputTypes() {
+        // Test new hook input types added in latest version
+        NotificationHookInput notification = new NotificationHookInput(
+                "s", "/t", "/c", "d", "Notification message", "Title", "info");
+        assertThat(notification.hookEventName()).isEqualTo("Notification");
+        assertThat(notification.message()).isEqualTo("Notification message");
+        assertThat(notification.title()).isEqualTo("Title");
+        assertThat(notification.notificationType()).isEqualTo("info");
+
+        SubagentStartHookInput subagentStart = new SubagentStartHookInput(
+                "s", "/t", "/c", "d", "agent-789", "plan");
+        assertThat(subagentStart.hookEventName()).isEqualTo("SubagentStart");
+        assertThat(subagentStart.agentId()).isEqualTo("agent-789");
+        assertThat(subagentStart.agentType()).isEqualTo("plan");
+
+        PermissionRequestHookInput permissionRequest = new PermissionRequestHookInput(
+                "s", "/t", "/c", "d", "Bash", Map.of("command", "ls"), List.of());
+        assertThat(permissionRequest.hookEventName()).isEqualTo("PermissionRequest");
+        assertThat(permissionRequest.toolName()).isEqualTo("Bash");
+        assertThat(permissionRequest.toolInput()).containsEntry("command", "ls");
+        assertThat(permissionRequest.permissionSuggestions()).isNotNull();
+    }
+
+    @Test
+    void testHookSpecificOutputWithNewFields() {
+        // Test PreToolUse with additionalContext
+        HookSpecificOutput preToolOutput = new PreToolUseHookSpecificOutput(
+                PermissionDecision.ALLOW,
+                null,
+                null,
+                "This command is running in a test environment");
+
+        Map<String, Object> preToolMap = preToolOutput.toMap();
+        assertThat(preToolMap).containsEntry("hookEventName", "PreToolUse");
+        assertThat(preToolMap).containsEntry("permissionDecision", "allow");
+        assertThat(preToolMap).containsEntry("additionalContext", "This command is running in a test environment");
+
+        // Test PostToolUse with updatedMCPToolOutput
+        HookSpecificOutput postToolOutput = new PostToolUseHookSpecificOutput(
+                "Modified output",
+                Map.of("modified", "output"));
+
+        Map<String, Object> postToolMap = postToolOutput.toMap();
+        assertThat(postToolMap).containsEntry("hookEventName", "PostToolUse");
+        assertThat(postToolMap).containsEntry("updatedMCPToolOutput", Map.of("modified", "output"));
+        assertThat(postToolMap).containsEntry("additionalContext", "Modified output");
+
+        // Test Notification
+        HookSpecificOutput notificationOutput = new NotificationHookSpecificOutput(
+                "Notification received");
+
+        Map<String, Object> notificationMap = notificationOutput.toMap();
+        assertThat(notificationMap).containsEntry("hookEventName", "Notification");
+        assertThat(notificationMap).containsEntry("additionalContext", "Notification received");
+
+        // Test SubagentStart
+        HookSpecificOutput subagentStartOutput = new SubagentStartHookSpecificOutput(
+                "Subagent starting");
+
+        Map<String, Object> subagentStartMap = subagentStartOutput.toMap();
+        assertThat(subagentStartMap).containsEntry("hookEventName", "SubagentStart");
+        assertThat(subagentStartMap).containsEntry("additionalContext", "Subagent starting");
+
+        // Test PermissionRequest
+        HookSpecificOutput permissionRequestOutput = new PermissionRequestHookSpecificOutput(
+                Map.of("allow", true));
+
+        Map<String, Object> permissionRequestMap = permissionRequestOutput.toMap();
+        assertThat(permissionRequestMap).containsEntry("hookEventName", "PermissionRequest");
+        assertThat(permissionRequestMap).containsEntry("decision", Map.of("allow", true));
     }
 
 }

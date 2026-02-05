@@ -1,13 +1,13 @@
-package in.vidyalai.claude.sdk.types.hook;
-
-import java.util.Map;
+package in.vidyalai.claude.sdk.types.hook.input;
 
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import in.vidyalai.claude.sdk.types.hook.HookEvent;
+
 /**
- * Input for PostToolUse hook events.
+ * Input for SubagentStart hook events.
  *
  * <p>
  * <b>JSON Naming Convention:</b> This type uses {@code snake_case} for JSON
@@ -18,23 +18,21 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param transcriptPath path to the conversation transcript
  * @param cwd            current working directory
  * @param permissionMode current permission mode (can be null)
- * @param toolName       name of the tool that was invoked
- * @param toolInput      input parameters that were passed to the tool
- * @param toolResponse   response returned by the tool
+ * @param agentId        unique identifier for the subagent
+ * @param agentType      type of the subagent
  */
-public record PostToolUseHookInput(
+public record SubagentStartHookInput(
         @JsonProperty("session_id") String sessionId,
         @JsonProperty("transcript_path") String transcriptPath,
         @JsonProperty("cwd") String cwd,
         @JsonProperty("permission_mode") @Nullable String permissionMode,
-        @JsonProperty("tool_name") String toolName,
-        @JsonProperty("tool_input") Map<String, Object> toolInput,
-        @JsonProperty("tool_response") Object toolResponse) implements HookInput {
+        @JsonProperty("agent_id") String agentId,
+        @JsonProperty("agent_type") String agentType) implements HookInput {
 
     @JsonProperty("hook_event_name")
     @Override
     public String hookEventName() {
-        return HookEvent.POST_TOOL_USE.getValue();
+        return HookEvent.SUBAGENT_START.getValue();
     }
 
 }

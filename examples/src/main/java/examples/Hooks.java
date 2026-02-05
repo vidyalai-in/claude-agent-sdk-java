@@ -9,12 +9,13 @@ import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDK;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
-import in.vidyalai.claude.sdk.types.hook.HookOutput;
-import in.vidyalai.claude.sdk.types.hook.HookSpecificOutput;
-import in.vidyalai.claude.sdk.types.hook.PostToolUseHookInput;
-import in.vidyalai.claude.sdk.types.hook.PreToolUseHookInput;
-import in.vidyalai.claude.sdk.types.hook.StopHookInput;
-import in.vidyalai.claude.sdk.types.hook.UserPromptSubmitHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.PostToolUseHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.PreToolUseHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.StopHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.UserPromptSubmitHookInput;
+import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
+import in.vidyalai.claude.sdk.types.hook.output.PreToolUseHookSpecificOutput;
+import in.vidyalai.claude.sdk.types.hook.output.UserPromptSubmitHookSpecificOutput;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.permission.PermissionDecision;
@@ -67,12 +68,10 @@ public class Hooks {
                             return CompletableFuture.completedFuture(
                                     HookOutput.builder()
                                             .hookSpecificOutput(
-                                                    HookSpecificOutput.preToolUse()
-                                                            .permissionDecision(PermissionDecision.DENY)
-                                                            .permissionDecisionReason(
-                                                                    "Command blocked: contains dangerous pattern '"
-                                                                            + pattern + "'")
-                                                            .build())
+                                                    new PreToolUseHookSpecificOutput(PermissionDecision.DENY,
+                                                            "Command blocked: contains dangerous pattern '" + pattern
+                                                                    + "'",
+                                                            null, null))
                                             .build());
                         }
                     }
@@ -229,9 +228,7 @@ public class Hooks {
                 return CompletableFuture.completedFuture(
                         HookOutput.builder()
                                 .hookSpecificOutput(
-                                        HookSpecificOutput.userPromptSubmit()
-                                                .additionalContext("User is running in example mode")
-                                                .build())
+                                        new UserPromptSubmitHookSpecificOutput("User is running in example mode"))
                                 .build());
             }
             return CompletableFuture.completedFuture(HookOutput.empty());

@@ -120,7 +120,8 @@ public final class MessageParser {
                 throw new MessageParseException("Missing 'model' field in assistant message", data);
             }
 
-            String errorStr = (String) message.get("error");
+            // Error field is at top level of response, not inside message
+            String errorStr = (String) data.get("error");
             AssistantMessageError error = ((errorStr != null)
                     ? AssistantMessageError.fromValue(errorStr)
                     : null);

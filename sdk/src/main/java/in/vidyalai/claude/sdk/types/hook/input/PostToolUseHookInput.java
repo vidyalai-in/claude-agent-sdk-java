@@ -1,11 +1,15 @@
-package in.vidyalai.claude.sdk.types.hook;
+package in.vidyalai.claude.sdk.types.hook.input;
+
+import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import in.vidyalai.claude.sdk.types.hook.HookEvent;
+
 /**
- * Input for Stop hook events.
+ * Input for PostToolUse hook events.
  *
  * <p>
  * <b>JSON Naming Convention:</b> This type uses {@code snake_case} for JSON
@@ -16,19 +20,25 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param transcriptPath path to the conversation transcript
  * @param cwd            current working directory
  * @param permissionMode current permission mode (can be null)
- * @param stopHookActive whether the stop hook is currently active
+ * @param toolName       name of the tool that was invoked
+ * @param toolInput      input parameters that were passed to the tool
+ * @param toolResponse   response returned by the tool
+ * @param toolUseId      unique identifier for this tool use
  */
-public record StopHookInput(
+public record PostToolUseHookInput(
         @JsonProperty("session_id") String sessionId,
         @JsonProperty("transcript_path") String transcriptPath,
         @JsonProperty("cwd") String cwd,
         @JsonProperty("permission_mode") @Nullable String permissionMode,
-        @JsonProperty("stop_hook_active") boolean stopHookActive) implements HookInput {
+        @JsonProperty("tool_name") String toolName,
+        @JsonProperty("tool_input") Map<String, Object> toolInput,
+        @JsonProperty("tool_response") Object toolResponse,
+        @JsonProperty("tool_use_id") String toolUseId) implements HookInput {
 
     @JsonProperty("hook_event_name")
     @Override
     public String hookEventName() {
-        return HookEvent.STOP.getValue();
+        return HookEvent.POST_TOOL_USE.getValue();
     }
 
 }

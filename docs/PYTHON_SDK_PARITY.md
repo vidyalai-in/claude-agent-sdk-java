@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-01-31 (Updated)
-**Java SDK Version:** 0.1.1
-**Python SDK Version:** [0.1.27](https://github.com/anthropics/claude-agent-sdk-python/commit/b82f9b9bf5ee729a058f52e834722f49da7292dd)
+**Analysis Date:** 2026-02-05 (Updated)
+**Java SDK Version:** 0.1.2
+**Python SDK Version:** [0.1.29](https://github.com/anthropics/claude-agent-sdk-python/commit/7519c9642ce38eb779d5623153c0e3188a5edf8a)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,14 +11,17 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.27):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.27. These updates include:
-- **v0.1.26** - CLI update to 2.1.27 (CLI version only) and PostToolUseFailureHook related changes
+**Recent Python SDK Updates (v0.1.22-0.1.29):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.29. These updates include:
+- **v0.1.29** - Three new hook events (Notification, SubagentStart, PermissionRequest) and enhanced hook input/output types with additional fields (tool_use_id, agent_id, additionalContext, updatedMCPToolOutput), CLI 2.1.31
+- **v0.1.28** - Bug fix: AssistantMessage.error field now correctly populated from top-level response data, CLI 2.1.30
+- **v0.1.27** - CLI update to 2.1.29 (CLI version only)
+- **v0.1.26** - PostToolUseFailure hook event, CLI 2.1.27
 - **v0.1.25** - CLI update to 2.1.23 (CLI version only)
 - **v0.1.24** - CLI update to 2.1.22 (CLI version only)
 - **v0.1.23** - `get_mcp_status()` made public, CLI 2.1.20 (already in Java SDK)
 - **v0.1.22** - `tool_use_result` field added to UserMessage, CLI 2.1.19 (already in Java SDK)
 
-✅ **No new API features** were added in these versions that affect parity. The Java SDK already includes all features from Python SDK v0.1.25.
+✅ **All new features from Python SDK v0.1.29 are implemented in Java SDK v0.1.2**. The Java SDK includes all hook events, enhanced hook types, and the AssistantMessage.error field fix.
 
 ---
 
@@ -105,21 +108,32 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 | Permission behavior | `PermissionBehavior` | `PermissionBehavior` enum | ✅ |
 | Permission rule value | `PermissionRuleValue` | `PermissionRuleValue` enum | ✅ |
 
-### Hook System (11 types)
+### Hook System (20 types)
 
 | Type | Python | Java | Status |
 |------|--------|------|--------|
 | Hook input (base) | `HookInput` union | `HookInput` sealed interface | ✅ |
-| PreToolUse input | `PreToolUseHookInput` | `PreToolUseHookInput` record | ✅ |
-| PostToolUse input | `PostToolUseHookInput` | `PostToolUseHookInput` record | ✅ |
-| UserPromptSubmit | `UserPromptSubmitHookInput` | `UserPromptSubmitHookInput` record | ✅ |
+| PreToolUse input | `PreToolUseHookInput` (with tool_use_id) | `PreToolUseHookInput` (with toolUseId) | ✅ |
+| PostToolUse input | `PostToolUseHookInput` (with tool_use_id) | `PostToolUseHookInput` (with toolUseId) | ✅ |
+| PostToolUseFailure input | `PostToolUseFailureHookInput` | `PostToolUseFailureHookInput` record | ✅ |
+| UserPromptSubmit input | `UserPromptSubmitHookInput` | `UserPromptSubmitHookInput` record | ✅ |
 | Stop input | `StopHookInput` | `StopHookInput` record | ✅ |
-| SubagentStop input | `SubagentStopHookInput` | `SubagentStopHookInput` record | ✅ |
+| SubagentStop input | `SubagentStopHookInput` (with agent_id, agent_transcript_path, agent_type) | `SubagentStopHookInput` (with agentId, agentTranscriptPath, agentType) | ✅ |
+| SubagentStart input | `SubagentStartHookInput` | `SubagentStartHookInput` record | ✅ |
 | PreCompact input | `PreCompactHookInput` | `PreCompactHookInput` record | ✅ |
+| Notification input | `NotificationHookInput` | `NotificationHookInput` record | ✅ |
+| PermissionRequest input | `PermissionRequestHookInput` | `PermissionRequestHookInput` record | ✅ |
 | Hook matcher | `HookMatcher` | `HookMatcher` class | ✅ |
 | Hook output | `HookJSONOutput` | `HookOutput` class | ✅ |
 | Hook context | `HookContext` | `HookContext` record | ✅ |
-| Hook specific output | `HookSpecificOutput` | `HookSpecificOutput` class | ✅ |
+| Hook specific output (base) | `HookSpecificOutput` union | `HookSpecificOutput` class | ✅ |
+| PreToolUse specific output | With additionalContext | With additionalContext | ✅ |
+| PostToolUse specific output | With additionalContext, updatedMCPToolOutput | With additionalContext, updatedMCPToolOutput | ✅ |
+| PostToolUseFailure specific output | `PostToolUseFailureHookSpecificOutput` | `PostToolUseFailureHookSpecificOutput` | ✅ |
+| UserPromptSubmit specific output | `UserPromptSubmitHookSpecificOutput` | `UserPromptSubmitHookSpecificOutput` | ✅ |
+| Notification specific output | `NotificationHookSpecificOutput` | `NotificationHookSpecificOutput` | ✅ |
+| SubagentStart specific output | `SubagentStartHookSpecificOutput` | `SubagentStartHookSpecificOutput` | ✅ |
+| PermissionRequest specific output | `PermissionRequestHookSpecificOutput` | `PermissionRequestHookSpecificOutput` | ✅ |
 
 ### MCP Server Types (5 types)
 
@@ -151,7 +165,7 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 | JSON decode error | `CLIJSONDecodeError` | `CLIJSONDecodeException` | ✅ |
 | Message parse error | `MessageParseError` | `MessageParseException` | ✅ |
 
-**Total Type Count:** 67+ types with 100% parity
+**Total Type Count:** 76+ types with 100% parity
 
 ---
 
@@ -216,16 +230,17 @@ All 35+ configuration options are implemented with 100% parity:
 | **Max budget** | ✅ `max_budget_usd.py` | ✅ `MaxBudgetExample.java` | ✅ **NEW** |
 | **Setting sources** | ✅ `setting_sources.py` | ✅ `SettingSourcesExample.java` | ✅ **NEW** |
 | **Stderr callback** | ✅ `stderr_callback_example.py` | ✅ `StderrCallbackExample.java` | ✅ **NEW** |
-| **Plugins** | ✅ `plugin_example.py` | ✅ `PluginsExample.java` | ✅ **NEW** |
-| Agents | ✅ `agents.py` | ✅ Covered in `AdvancedFeatures.java` | ✅ |
-| System prompts | ✅ `system_prompt.py` | ✅ Covered in `AdvancedFeatures.java` | ✅ |
-| Filesystem agents | ✅ `filesystem_agents.py` | ✅ Covered in `AdvancedFeatures.java` | ✅ |
+| **Plugins** | ✅ `plugin_example.py` | ✅ `PluginsExample.java` | ✅ |
+| Agents | ✅ `agents.py` | ✅ `AgentsExample.java` | ✅ |
+| System prompts | ✅ `system_prompt.py` | ✅ `SystemPromptExample.java` | ✅ |
+| Filesystem agents | ✅ `filesystem_agents.py` | ✅ `FilesystemAgentsExample.java` | ✅ |
+| Include partial messages | ✅ `include_partial_messages.py` | ✅ `IncludePartialMessagesExample.java` | ✅ |
 | Trio async | ✅ `streaming_mode_trio.py` | N/A (Java uses threads) | N/A |
 | IPython interactive | ✅ `streaming_mode_ipython.py` | N/A (Java nature) | N/A |
 
 **Python Examples: 16 files**
-**Java Examples: 14 files** (covers all functionality)
-**Coverage: 100%** - All Python SDK features have Java examples
+**Java Examples: 19 files** (covers all functionality plus additional examples)
+**Coverage: 100%** - All Python SDK features have Java examples, plus additional Java-specific examples
 
 ---
 
@@ -325,10 +340,12 @@ All 35+ configuration options are implemented with 100% parity:
 
 ### ✅ Hook System: 100% Parity
 
-- [x] All 6 hook events (PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact)
+- [x] All 10 hook events (PreToolUse, PostToolUse, PostToolUseFailure, UserPromptSubmit, Stop, SubagentStop, SubagentStart, PreCompact, Notification, PermissionRequest)
+- [x] Enhanced hook input types with new fields (tool_use_id, agent_id, agent_transcript_path, agent_type)
+- [x] Enhanced hook output types with new fields (additionalContext, updatedMCPToolOutput)
 - [x] Hook matchers with patterns
 - [x] Hook callbacks
-- [x] Hook-specific outputs
+- [x] Hook-specific outputs for all event types
 - [x] Hook context passing
 - [x] Multiple hooks per event
 - [x] Async hook execution
@@ -551,10 +568,12 @@ All previously identified gaps have been closed:
 - ✅ Stderr callback example added
 - ✅ Plugins example added
 
-**Post-Initial Analysis (v0.1.22-0.1.25):**
-- ✅ No new features added to Python SDK requiring Java updates
-- ✅ All Python SDK updates (CLI versions, minor refinements) already accounted for
-- ✅ Parity status verified as of 2026-01-29
+**Post-Initial Analysis (v0.1.26-0.1.29):**
+- ✅ All new hook events (Notification, SubagentStart, PermissionRequest) implemented in Java SDK
+- ✅ All enhanced hook input/output fields implemented in Java SDK
+- ✅ AssistantMessage.error field bug fix already implemented in Java SDK
+- ✅ Additional examples created (AgentsExample, FilesystemAgentsExample, SystemPromptExample, IncludePartialMessagesExample)
+- ✅ Parity status verified as of 2026-02-05
 
 ### Assessment
 
@@ -565,7 +584,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-01-29
-**Python SDK Version:** 0.1.25
-**Java SDK Version:** 0.1.0-SNAPSHOT
+**Latest Verification:** 2026-02-05
+**Python SDK Version:** 0.1.29 (commit 7519c96)
+**Java SDK Version:** 0.1.2
 **Status:** ✅ 100% Feature Parity Maintained

@@ -1,11 +1,13 @@
-package in.vidyalai.claude.sdk.types.hook;
+package in.vidyalai.claude.sdk.types.hook.input;
 
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import in.vidyalai.claude.sdk.types.hook.HookEvent;
+
 /**
- * Input for SubagentStop hook events.
+ * Input for Stop hook events.
  *
  * <p>
  * <b>JSON Naming Convention:</b> This type uses {@code snake_case} for JSON
@@ -18,7 +20,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param permissionMode current permission mode (can be null)
  * @param stopHookActive whether the stop hook is currently active
  */
-public record SubagentStopHookInput(
+public record StopHookInput(
         @JsonProperty("session_id") String sessionId,
         @JsonProperty("transcript_path") String transcriptPath,
         @JsonProperty("cwd") String cwd,
@@ -28,7 +30,7 @@ public record SubagentStopHookInput(
     @JsonProperty("hook_event_name")
     @Override
     public String hookEventName() {
-        return HookEvent.SUBAGENT_STOP.getValue();
+        return HookEvent.STOP.getValue();
     }
 
 }

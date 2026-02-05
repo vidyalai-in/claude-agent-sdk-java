@@ -1,4 +1,4 @@
-package in.vidyalai.claude.sdk.types.hook;
+package in.vidyalai.claude.sdk.types.hook.output;
 
 import java.util.HashMap;
 import java.util.Map;

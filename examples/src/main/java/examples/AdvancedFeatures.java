@@ -19,7 +19,7 @@ import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.config.ToolsPreset;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
-import in.vidyalai.claude.sdk.types.hook.HookOutput;
+import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;

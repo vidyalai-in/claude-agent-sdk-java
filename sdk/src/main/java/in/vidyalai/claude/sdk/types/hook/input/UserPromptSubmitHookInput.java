@@ -1,8 +1,10 @@
-package in.vidyalai.claude.sdk.types.hook;
+package in.vidyalai.claude.sdk.types.hook.input;
 
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import in.vidyalai.claude.sdk.types.hook.HookEvent;
 
 /**
  * Input for UserPromptSubmit hook events.
