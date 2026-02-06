@@ -88,7 +88,7 @@ Automatically scan the repository and create/update technical documentation base
       - Error handling and edge cases
       - Related features or dependencies
 
-11. **Generate Index/README**
+11. **Generate README**
     - Create/update `docs/README.md` with:
       - Project overview
       - Link to architecture documentation
@@ -114,6 +114,7 @@ Automatically scan the repository and create/update technical documentation base
     - Verify all public APIs are covered
     - Confirm examples are practical and useful
     - Ensure architecture matches actual code structure
+    - Ensure NOTHING is marked as to be documented, in progress, planned etc. Complete ALL documentation
 
 ### Phase 5: Commit Documentation
 
