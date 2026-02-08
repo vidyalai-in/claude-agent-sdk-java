@@ -81,9 +81,25 @@ import java.lang.annotation.Target;
  * }
  * }</pre>
  *
+ * <h2>Tool Annotations</h2>
+ * <p>
+ * To add semantic hints, implement {@link ToolAnnotations} and reference the
+ * class:
+ *
+ * <pre>{@code
+ * public class ReadOnlyHints implements ToolAnnotations {
+ *     public String title() { return "Data Reader"; }
+ *     public Boolean readOnlyHint() { return true; }
+ * }
+ *
+ * @Tool(name = "read", description = "Read data", annotations = ReadOnlyHints.class)
+ * public ToolResult readData(Map<String, Object> args) { ... }
+ * }</pre>
+ *
  * @see SdkMcpServer#fromAnnotatedMethods(String, Object)
  * @see SdkMcpTool
  * @see ToolResult
+ * @see ToolAnnotations
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)
@@ -109,7 +125,7 @@ public @interface Tool {
      * Optional. If not specified, an empty object schema is used.
      * <p>
      * Example:
-     * 
+     *
      * <pre>{@code
      * inputSchema = """
      *         {
@@ -123,5 +139,21 @@ public @interface Tool {
      * }</pre>
      */
     String inputSchema() default "";
+
+    /**
+     * A human-readable title for the tool.
+     * <p>
+     * Optional. Provides a short, friendly display name distinct from the
+     * technical tool name.
+     */
+    String title() default "";
+
+    /**
+     * The {@link ToolAnnotations} implementation class providing semantic hints.
+     * <p>
+     * Optional. If not specified, no annotation hints are attached to the tool.
+     * The referenced class must have a public no-arg constructor.
+     */
+    Class<? extends ToolAnnotations> annotations() default ToolAnnotations.None.class;
 
 }

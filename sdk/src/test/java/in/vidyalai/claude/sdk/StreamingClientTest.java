@@ -395,6 +395,148 @@ class StreamingClientTest {
         client.close();
     }
 
+    // ==================== Streaming Input Tests ====================
+
+    @Test
+    void testConnectWithIterableMessages() {
+        // Java equivalent of Python's test_connect_with_async_iterable
+        // Tests sending multiple messages via query() with an Iterator
+
+        MockTransport mockTransport = createMockTransport();
+        mockTransport.addAssistantMessage("Processed all messages");
+        mockTransport.addResultMessage();
+
+        // Create an iterator that yields multiple messages
+        List<Map<String, Object>> messageList = new ArrayList<>();
+        messageList.add(Map.of(
+                "type", "user",
+                "session_id", "default",
+                "message", Map.of(
+                        "role", "user",
+                        "content", "First message")));
+        messageList.add(Map.of(
+                "type", "user",
+                "session_id", "default",
+                "message", Map.of(
+                        "role", "user",
+                        "content", "Second message")));
+
+        Iterator<Map<String, Object>> messageIterator = messageList.iterator();
+
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport);
+        client.connect();
+
+        // Use query() with iterator to send multiple messages
+        client.query(messageIterator);
+
+        assertThat(client.isConnected()).isTrue();
+
+        // Verify query() accepted the iterator (implementation detail: messages are queued asynchronously)
+        // The key test is that query(Iterator) method exists and doesn't throw
+        assertThat(mockTransport.getWrittenData()).isNotEmpty();
+
+        client.close();
+    }
+
+    @Test
+    void testQueryWithIterableMessages() {
+        // Java equivalent of Python's test_query_with_async_iterable
+        // Tests query() method with an Iterator of messages
+
+        MockTransport mockTransport = createMockTransport();
+        mockTransport.addAssistantMessage("Response to both messages");
+        mockTransport.addResultMessage();
+
+        // Create an iterator that yields multiple messages
+        List<Map<String, Object>> messageList = new ArrayList<>();
+        messageList.add(Map.of(
+                "type", "user",
+                "session_id", "default",
+                "message", Map.of(
+                        "role", "user",
+                        "content", "First query")));
+        messageList.add(Map.of(
+                "type", "user",
+                "session_id", "default",
+                "message", Map.of(
+                        "role", "user",
+                        "content", "Second query")));
+
+        Iterator<Map<String, Object>> messageIterator = messageList.iterator();
+
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport);
+        client.connect();
+        client.query(messageIterator);
+
+        // Consume response
+        Iterable<Message> messages = client.receiveResponse();
+        List<Message> messagesList = new ArrayList<>();
+        messages.forEach(messagesList::add);
+
+        // Should have at least assistant message and result
+        assertThat(messagesList).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(messagesList).anyMatch(m -> m instanceof AssistantMessage);
+        assertThat(messagesList).anyMatch(m -> m instanceof ResultMessage);
+
+        client.close();
+    }
+
+    @Test
+    void testConcurrentSendAndReceive() {
+        // Java equivalent of Python's test_concurrent_send_receive
+        // Tests sending messages from one thread while receiving from another
+
+        MockTransport mockTransport = createMockTransport();
+        mockTransport.addAssistantMessage("Response 1");
+        mockTransport.addAssistantMessage("Response 2");
+        mockTransport.addResultMessage();
+
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport);
+        client.connect();
+
+        // Send first message
+        client.sendMessage("Message 1");
+
+        AtomicBoolean receivedFirstMessage = new AtomicBoolean(false);
+        AtomicBoolean sentSecondMessage = new AtomicBoolean(false);
+
+        // Receive messages in a separate thread
+        Thread receiveThread = Thread.startVirtualThread(() -> {
+            try {
+                Iterator<Message> messages = client.receiveMessages();
+                while (messages.hasNext()) {
+                    Message msg = messages.next();
+                    if (msg instanceof AssistantMessage && !receivedFirstMessage.get()) {
+                        receivedFirstMessage.set(true);
+
+                        // Send second message while receiving
+                        if (!sentSecondMessage.get()) {
+                            client.sendMessage("Message 2");
+                            sentSecondMessage.set(true);
+                        }
+                    } else if (msg instanceof ResultMessage) {
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                // Expected in test environment
+            }
+        });
+
+        // Wait for receive thread to complete
+        try {
+            receiveThread.join(5000); // 5 second timeout
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        // Verify concurrent operations completed
+        assertThat(receivedFirstMessage.get()).isTrue();
+        assertThat(sentSecondMessage.get()).isTrue();
+
+        client.close();
+    }
+
     // ==================== Mock Transport Implementation ====================
 
     /**

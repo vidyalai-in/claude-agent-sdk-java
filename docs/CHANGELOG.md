@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-02-08
+
+### Added
+- **MCP Tool Annotations Support**: Added `ToolAnnotations` class with support for `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` to provide semantic hints about tool behavior (matching Python SDK v0.1.31)
+- Annotations can be specified via `@Tool` annotation attributes or `SdkMcpTool.Builder.annotations()`
+- Annotations are automatically included in MCP `tools/list` responses when set
+- **LargeAgentsExample**: New example demonstrating that 260KB+ agent definitions work correctly via the initialize request, covering both `ClaudeSDKClient` and `query()` usage
+
+### Changed
+- **Agent Definitions Fix**: Agents are now sent via initialize request through stdin instead of CLI `--agents` flag, avoiding platform-specific ARG_MAX limits and enabling arbitrarily large agent definitions (260KB+) (matching Python SDK v0.1.31)
+- Removed `--agents` CLI flag handling from `SubprocessCLITransport`
+- Updated `SDKControlInitializeRequest` to include optional `agents` field
+- All agent definitions are now passed through the control protocol initialization handshake
+
+### Fixed
+- Large agent definitions (260KB+) no longer fail silently due to command-line argument length limits
+- Agents are properly registered when using both `query()` and `ClaudeSDKClient`
+
+[0.1.3]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.3
+
 ## [0.1.2] - 2026-02-05
 
 ### Added

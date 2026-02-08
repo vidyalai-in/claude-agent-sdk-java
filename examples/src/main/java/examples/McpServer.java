@@ -4,11 +4,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import org.jspecify.annotations.Nullable;
+
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDK;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.mcp.SdkMcpTool;
 import in.vidyalai.claude.sdk.mcp.Tool;
+import in.vidyalai.claude.sdk.mcp.ToolAnnotations;
 import in.vidyalai.claude.sdk.mcp.ToolResult;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpStdioServerConfig;
@@ -46,25 +49,40 @@ public class McpServer {
      */
     public static class AnnotatedTools {
 
-        @Tool(name = "greet", description = "Greet a user by first and last name")
+        public static class RIHints implements ToolAnnotations {
+
+            @Override
+            public @Nullable Boolean idempotentHint() {
+                return Boolean.TRUE;
+            }
+
+            @Override
+            public @Nullable Boolean readOnlyHint() {
+                return Boolean.TRUE;
+            }
+
+        }
+
+        @Tool(name = "greet", description = "Greet a user by first and last name", title = "Greet User", annotations = RIHints.class)
         public CompletableFuture<ToolResult> greet(String first, String last) {
             return CompletableFuture.completedFuture(
                     ToolResult.text("Hello, " + first + " " + last + "! Nice to meet you."));
         }
 
-        @Tool(name = "get_time", description = "Get the current time")
+        @Tool(name = "get_time", description = "Get the current time", title = "Get Time", annotations = RIHints.class)
         public CompletableFuture<ToolResult> getTime(Map<String, Object> args) {
             String time = java.time.LocalTime.now().toString();
             return CompletableFuture.completedFuture(
                     ToolResult.text("The current time is: " + time));
         }
 
-        @Tool(name = "reverse_string", description = "Reverse a string")
+        @Tool(name = "reverse_string", description = "Reverse a string", title = "String Reverse", annotations = RIHints.class)
         public CompletableFuture<ToolResult> reverseString(String input) {
             String reversed = new StringBuilder(input).reverse().toString();
             return CompletableFuture.completedFuture(
                     ToolResult.text("Reversed: " + reversed));
         }
+
     }
 
     /**
@@ -108,10 +126,13 @@ public class McpServer {
      * Creating tools programmatically using SdkMcpTool.
      */
     static void programmaticTools() {
+        ToolAnnotations hints = ToolAnnotations.builder().readOnlyHint(true)
+                .idempotentHint(true).build();
         // Create a tool programmatically
         SdkMcpTool<Map<String, Object>> uppercaseTool = SdkMcpTool.create(
                 "uppercase",
                 "Convert text to uppercase",
+                "UpperCase Converter",
                 Map.of(
                         "type", "object",
                         "properties", Map.of(
@@ -123,11 +144,13 @@ public class McpServer {
                     String text = (String) args.get("text");
                     return CompletableFuture.completedFuture(
                             ToolResult.text(text.toUpperCase()));
-                });
+                },
+                hints);
 
         SdkMcpTool<Map<String, Object>> lowercaseTool = SdkMcpTool.create(
                 "lowercase",
                 "Convert text to lowercase",
+                "LowerCase Converter",
                 Map.of(
                         "type", "object",
                         "properties", Map.of(
@@ -139,7 +162,8 @@ public class McpServer {
                     String text = (String) args.get("text");
                     return CompletableFuture.completedFuture(
                             ToolResult.text(text.toLowerCase()));
-                });
+                },
+                hints);
 
         // Create server with multiple tools
         SdkMcpServer server = SdkMcpServer.create(
@@ -175,9 +199,12 @@ public class McpServer {
      * Calculator tool example.
      */
     static void calculator() {
+        ToolAnnotations hints = ToolAnnotations.builder().readOnlyHint(true)
+                .idempotentHint(true).build();
         SdkMcpTool<Map<String, Object>> calcTool = SdkMcpTool.create(
                 "calculate",
                 "Perform mathematical calculations",
+                "Calculator",
                 Map.of(
                         "type", "object",
                         "properties", Map.of(
@@ -208,7 +235,8 @@ public class McpServer {
 
                     return CompletableFuture.completedFuture(
                             ToolResult.text(a + " " + op + " " + b + " = " + result));
-                });
+                },
+                hints);
 
         SdkMcpServer server = SdkMcpServer.create("calculator", "1.0.0", List.of(calcTool));
 

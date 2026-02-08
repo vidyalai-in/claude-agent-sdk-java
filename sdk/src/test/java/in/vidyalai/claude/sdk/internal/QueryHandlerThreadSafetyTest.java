@@ -244,6 +244,7 @@ class QueryHandlerThreadSafetyTest {
                 .hasMessageContaining("closed");
     }
 
+    @SuppressWarnings("null")
     @Test
     @Timeout(10)
     void testConcurrentStartAndClose() throws Exception {
@@ -258,6 +259,8 @@ class QueryHandlerThreadSafetyTest {
         AtomicInteger startSuccessCount = new AtomicInteger(0);
         AtomicInteger startExceptionCount = new AtomicInteger(0);
         AtomicInteger closeSuccessCount = new AtomicInteger(0);
+        AtomicInteger unexpectedExceptionCount = new AtomicInteger(0);
+        AtomicReference<Exception> firstUnexpectedException = new AtomicReference<>();
 
         // When: Half threads call start(), half call close() simultaneously
         for (int i = 0; i < threadCount; i++) {
@@ -276,7 +279,9 @@ class QueryHandlerThreadSafetyTest {
                     // Expected if start() called after close()
                     startExceptionCount.incrementAndGet();
                 } catch (Exception e) {
-                    // Other exceptions are not expected
+                    // Count unexpected exceptions to ensure assertion passes
+                    unexpectedExceptionCount.incrementAndGet();
+                    firstUnexpectedException.compareAndSet(null, e);
                     e.printStackTrace();
                 } finally {
                     doneLatch.countDown();
@@ -289,8 +294,17 @@ class QueryHandlerThreadSafetyTest {
         assertThat(completed).isTrue();
 
         // Then: No crashes, all operations completed
-        assertThat(startSuccessCount.get() + startExceptionCount.get() + closeSuccessCount.get())
+        int totalOperations = startSuccessCount.get() + startExceptionCount.get() +
+                closeSuccessCount.get() + unexpectedExceptionCount.get();
+        assertThat(totalOperations)
+                .as("All operations should be accounted for (success, expected exception, or unexpected exception)")
                 .isEqualTo(threadCount);
+
+        // If there were unexpected exceptions, fail with details
+        if (unexpectedExceptionCount.get() > 0) {
+            throw new AssertionError("Unexpected exceptions occurred: " + unexpectedExceptionCount.get(),
+                    firstUnexpectedException.get());
+        }
     }
 
     @Test

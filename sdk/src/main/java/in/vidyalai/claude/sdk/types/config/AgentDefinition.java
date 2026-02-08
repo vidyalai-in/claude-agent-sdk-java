@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
@@ -16,6 +17,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param model       model to use ("sonnet", "opus", "haiku", or "inherit") or
  *                    null
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record AgentDefinition(
         @JsonProperty("description") String description,
         @JsonProperty("prompt") String prompt,

@@ -83,9 +83,14 @@ mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
 
 # Run different examples (sorted alphabetically)
 mvn exec:java -Dexec.mainClass="examples.AdvancedFeatures" -pl examples
+mvn exec:java -Dexec.mainClass="examples.AgentsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.AutoSchemaGeneration" -pl examples
+mvn exec:java -Dexec.mainClass="examples.DynamicControlExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ErrorHandling" -pl examples
+mvn exec:java -Dexec.mainClass="examples.FilesystemAgentsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.Hooks" -pl examples
+mvn exec:java -Dexec.mainClass="examples.IncludePartialMessagesExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.LargeAgentsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.MaxBudgetExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples
 mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation" -pl examples
@@ -95,6 +100,8 @@ mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SettingSourcesExample" -Dexec.args="all" -pl examples
 mvn exec:java -Dexec.mainClass="examples.StderrCallbackExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.StreamingEvents" -pl examples
+mvn exec:java -Dexec.mainClass="examples.StructuredOutputExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.SystemPromptExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolsConfigurationExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolUsage" -pl examples
 ```
@@ -266,6 +273,8 @@ examples/src/main/java/examples/
 ├── Hooks.java                      # Hook callbacks
 ├── PermissionCallbacks.java        # Custom permission logic
 ├── StreamingEvents.java            # Real-time streaming
+├── StructuredOutputExample.java    # Structured output with JSON Schema validation
+├── DynamicControlExample.java      # Dynamic control (setPermissionMode, setModel, interrupt)
 ├── ErrorHandling.java              # Exception handling
 ├── AdvancedFeatures.java           # Checkpointing, sandbox, output format
 ├── ToolsConfigurationExample.java  # Tools configuration
@@ -273,6 +282,10 @@ examples/src/main/java/examples/
 ├── SettingSourcesExample.java      # Settings sources
 ├── StderrCallbackExample.java      # CLI stderr output
 ├── PluginsExample.java             # Plugin system
+├── AgentsExample.java              # Programmatic subagent definitions
+├── FilesystemAgentsExample.java    # Filesystem-based agent configuration
+├── SystemPromptExample.java        # Custom system prompt usage
+├── IncludePartialMessagesExample.java # Streaming with partial message updates
 └── plugins/                        # Example plugin implementations
 ```
 

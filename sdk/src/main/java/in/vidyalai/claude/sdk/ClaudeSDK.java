@@ -85,8 +85,6 @@ import in.vidyalai.claude.sdk.types.message.ResultMessage;
  */
 public final class ClaudeSDK {
 
-    private static final Duration DEFAULT_INITIALIZE_TIMEOUT = Duration.ofMinutes(1);
-
     private ClaudeSDK() {
         // Utility class
     }
@@ -133,51 +131,11 @@ public final class ClaudeSDK {
      *                                  mode)
      */
     public static List<Message> query(String prompt, ClaudeAgentOptions options, Transport transport) {
-        // Set entrypoint for analytics (matches Python SDK)
-        System.setProperty("CLAUDE_CODE_ENTRYPOINT", "sdk-java");
+        var messages = List.of(
+                Map.of("type", "user", "session_id", "",
+                        "message", Map.of("role", "user", "content", (prompt == null) ? "" : prompt)));
 
-        // Validate and configure options
-        ClaudeAgentOptions effectiveOptions = validateAndConfigureOptions(options, false);
-
-        if (transport == null) {
-            // Create transport in non-streaming mode (prompt passed via CLI args)
-            transport = new SubprocessCLITransport(prompt, false, effectiveOptions);
-        }
-
-        List<Message> messages = new ArrayList<>();
-        QueryHandler queryHandler = null;
-        try {
-            transport.connect();
-
-            // Extract SDK MCP servers
-            Map<String, SdkMcpServer> sdkMcpServers = extractSdkMcpServers(effectiveOptions);
-
-            // Create QueryHandler for unified control protocol handling
-            // Use non-streaming mode (no initialize call needed)
-            queryHandler = new QueryHandler(
-                    transport,
-                    false, // Non-streaming mode
-                    effectiveOptions.canUseTool(),
-                    effectiveOptions.hooks(),
-                    sdkMcpServers,
-                    DEFAULT_INITIALIZE_TIMEOUT,
-                    effectiveOptions.maxMsgQSize());
-
-            // Start reader thread
-            queryHandler.start();
-
-            // Collect all messages
-            Iterator<Message> iterator = queryHandler.receiveMessages();
-            while (iterator.hasNext()) {
-                messages.add(iterator.next());
-            }
-        } finally {
-            if (queryHandler != null) {
-                queryHandler.close();
-            }
-        }
-
-        return messages;
+        return queryInternal(messages.iterator(), options, transport, false);
     }
 
     /**
@@ -236,15 +194,20 @@ public final class ClaudeSDK {
      */
     public static List<Message> query(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options,
             Transport transport) {
+        return queryInternal(messageStream, options, transport, true);
+    }
+
+    private static List<Message> queryInternal(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options,
+            Transport transport, boolean promptStream) {
         // Set entrypoint for analytics (matches Python SDK)
         System.setProperty("CLAUDE_CODE_ENTRYPOINT", "sdk-java");
 
         // Validate and configure options
-        ClaudeAgentOptions effectiveOptions = validateAndConfigureOptions(options, true);
+        ClaudeAgentOptions effectiveOptions = validateAndConfigureOptions(options, promptStream);
 
         if (transport == null) {
             // Create transport in streaming mode
-            transport = new SubprocessCLITransport(null, true, effectiveOptions);
+            transport = new SubprocessCLITransport(effectiveOptions);
         }
 
         List<Message> messages = new ArrayList<>();
@@ -268,6 +231,7 @@ public final class ClaudeSDK {
                     effectiveOptions.canUseTool(),
                     effectiveOptions.hooks(),
                     sdkMcpServers,
+                    effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
                     initializeTimeout,
                     effectiveOptions.maxMsgQSize());
 

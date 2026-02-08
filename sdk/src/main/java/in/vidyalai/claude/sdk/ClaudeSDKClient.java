@@ -234,7 +234,7 @@ public class ClaudeSDKClient implements AutoCloseable {
         if (customTransport != null) {
             transport = customTransport;
         } else {
-            transport = new SubprocessCLITransport(initialPrompt, true, effectiveOptions);
+            transport = new SubprocessCLITransport(effectiveOptions);
         }
 
         transport.connect();
@@ -253,6 +253,7 @@ public class ClaudeSDKClient implements AutoCloseable {
                 effectiveOptions.canUseTool(),
                 effectiveOptions.hooks(),
                 sdkMcpServers,
+                effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
                 initializeTimeout,
                 effectiveOptions.maxMsgQSize());
 

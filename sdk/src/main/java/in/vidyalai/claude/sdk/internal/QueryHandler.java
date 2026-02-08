@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -33,6 +34,7 @@ import in.vidyalai.claude.sdk.ClaudeSDKClient;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.transport.Transport;
+import in.vidyalai.claude.sdk.types.config.AgentDefinition;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlInitializeRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlInterruptRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlMCPStatusRequest;
@@ -247,6 +249,8 @@ public class QueryHandler implements AutoCloseable {
     private final Map<HookEvent, List<HookMatcher>> hooks;
     @Nullable
     private final Map<String, SdkMcpServer> sdkMcpServers;
+    @Nullable
+    private final Map<String, AgentDefinition> agents;
     private final Duration initializeTimeout;
 
     // Control protocol state
@@ -287,7 +291,7 @@ public class QueryHandler implements AutoCloseable {
             ClaudeAgentOptions.CanUseTool canUseTool, // may be null
             @Nullable Map<HookEvent, List<HookMatcher>> hooks,
             Duration initializeTimeout) {
-        this(transport, isStreamingMode, canUseTool, hooks, null, initializeTimeout, DEFAULT_MSG_Q_SIZE);
+        this(transport, isStreamingMode, canUseTool, hooks, null, null, initializeTimeout, DEFAULT_MSG_Q_SIZE);
     }
 
     /**
@@ -300,6 +304,8 @@ public class QueryHandler implements AutoCloseable {
      * @param hooks             optional hook configurations
      * @param sdkMcpServers     optional SDK MCP servers for in-process tool
      *                          execution
+     * @param agents            optional agent definitions to send via initialize
+     *                          request
      * @param initializeTimeout timeout for the initialize request
      * @param maxMsgQSize       max message queue size
      */
@@ -309,6 +315,7 @@ public class QueryHandler implements AutoCloseable {
             ClaudeAgentOptions.CanUseTool canUseTool, // may be null
             @Nullable Map<HookEvent, List<HookMatcher>> hooks,
             @Nullable Map<String, SdkMcpServer> sdkMcpServers,
+            @Nullable Map<String, AgentDefinition> agents,
             Duration initializeTimeout,
             @Nullable Integer maxMsgQSize) {
         this.transport = transport;
@@ -316,6 +323,7 @@ public class QueryHandler implements AutoCloseable {
         this.canUseTool = canUseTool;
         this.hooks = hooks;
         this.sdkMcpServers = sdkMcpServers;
+        this.agents = agents;
         this.initializeTimeout = initializeTimeout;
         this.messageQueue = new LinkedBlockingQueue<>((maxMsgQSize != null) ? maxMsgQSize : DEFAULT_MSG_Q_SIZE);
 
@@ -385,9 +393,12 @@ public class QueryHandler implements AutoCloseable {
                 }
             }
 
-            // Send initialize request
+            // Send initialize request with agents (sent via stdin, no size limit)
+            // This matches the Python SDK behavior where agents are always sent via
+            // the initialize request instead of CLI flags to avoid ARG_MAX limits
             SDKControlInitializeRequest request = new SDKControlInitializeRequest(
-                    hooksConfig.isEmpty() ? null : hooksConfig);
+                    hooksConfig.isEmpty() ? null : hooksConfig,
+                    ((agents == null) || agents.isEmpty()) ? null : agents);
 
             initializationResult = sendControlRequest(request, initializeTimeout);
             return initializationResult;
@@ -418,7 +429,14 @@ public class QueryHandler implements AutoCloseable {
 
         // Use atomic compare-and-set to ensure only one reader task is started
         if (readerStarted.compareAndSet(false, true)) {
-            readerExecutor.submit(this::readMessages);
+            try {
+                readerExecutor.submit(this::readMessages);
+            } catch (RejectedExecutionException e) {
+                // Executor was shut down between closed check and submit
+                // This can happen in concurrent start()/close() scenarios
+                readerStarted.set(false); // Reset state
+                throw new IllegalStateException("QueryHandler is closed", e);
+            }
         }
         // If already started, this is a no-op (idempotent)
     }

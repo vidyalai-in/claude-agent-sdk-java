@@ -165,7 +165,7 @@ public class ControlProtocolIntegrationTest {
         SDKControlRequestData[] requests = {
                 new SDKControlInterruptRequest(),
                 new SDKControlPermissionRequest("Bash", Map.of(), null, null),
-                new SDKControlInitializeRequest(null),
+                new SDKControlInitializeRequest(null, null),
                 new SDKControlSetPermissionModeRequest(PermissionMode.ACCEPT_EDITS),
                 new SDKControlSetModelRequest("claude-opus-4-5"),
                 new SDKControlRewindFilesRequest("msg-123")

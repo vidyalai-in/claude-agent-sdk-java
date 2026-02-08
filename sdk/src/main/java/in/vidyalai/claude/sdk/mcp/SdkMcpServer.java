@@ -80,6 +80,7 @@ public final class SdkMcpServer {
     private static final String KEY_DESCRIPTION = "description";
     private static final String KEY_INPUT_SCHEMA = "inputSchema";
     private static final String KEY_ARGUMENTS = "arguments";
+    private static final String KEY_ANNOTATIONS = "annotations";
 
     // Schema keys
     private static final String KEY_TYPE = "type";
@@ -207,6 +208,7 @@ public final class SdkMcpServer {
             Tool toolAnnotation = method.getAnnotation(Tool.class);
             String toolName = toolAnnotation.name();
             String description = toolAnnotation.description();
+            String title = toolAnnotation.title();
             String schemaJson = toolAnnotation.inputSchema();
 
             // Parse input schema
@@ -224,11 +226,24 @@ public final class SdkMcpServer {
                 }
             }
 
+            // Instantiate ToolAnnotations from the class referenced in @Tool
+            ToolAnnotations annotations = null;
+            Class<? extends ToolAnnotations> annotationsClass = toolAnnotation.annotations();
+            try {
+                annotations = annotationsClass.getDeclaredConstructor().newInstance();
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalArgumentException(
+                        "Cannot instantiate ToolAnnotations class '" + annotationsClass.getName()
+                                + "'. Ensure it has a public no-arg constructor.",
+                        e);
+            }
+
             // Create tool that invokes the method
             method.setAccessible(true);
             SdkMcpTool<Map<String, Object>> tool = SdkMcpTool.create(
-                    toolName, description, inputSchema,
-                    args -> invokeToolMethod(instance, method, args));
+                    toolName, description, title, inputSchema,
+                    args -> invokeToolMethod(instance, method, args),
+                    annotations);
             tools.add(tool);
         }
 
@@ -485,6 +500,17 @@ public final class SdkMcpServer {
                     toolInfo.put(KEY_NAME, tool.name());
                     toolInfo.put(KEY_DESCRIPTION, tool.description());
                     toolInfo.put(KEY_INPUT_SCHEMA, tool.inputSchema());
+
+                    // Include annotations if present (matching Python SDK behavior)
+                    // Only add the annotations field if at least one hint or title is set
+                    if (tool.annotations() != null) {
+                        @SuppressWarnings("null")
+                        Map<String, Object> annotationsMap = tool.annotations().toMap(tool.title());
+                        if (annotationsMap != null) {
+                            toolInfo.put(KEY_ANNOTATIONS, annotationsMap);
+                        }
+                    }
+
                     return toolInfo;
                 })
                 .toList();

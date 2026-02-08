@@ -699,4 +699,183 @@ class SdkMcpTest {
         assertThat(byteProp.get("type")).isEqualTo("integer");
     }
 
+    @SuppressWarnings("null")
+    @Test
+    void testToolAnnotations() throws ExecutionException, InterruptedException {
+        // Create tools with different annotations
+        ToolAnnotations readOnlyAnnotations = ToolAnnotations.builder()
+                .readOnlyHint(true)
+                .build();
+
+        ToolAnnotations destructiveAnnotations = ToolAnnotations.builder()
+                .destructiveHint(true)
+                .idempotentHint(true)
+                .build();
+
+        SdkMcpTool<Map<String, Object>> readTool = SdkMcpTool.<Map<String, Object>>builder("read_data", "Read data")
+                .inputSchema(Map.of("type", "object"))
+                .handler(args -> CompletableFuture.completedFuture(ToolResult.text("Data")))
+                .annotations(readOnlyAnnotations)
+                .build();
+
+        SdkMcpTool<Map<String, Object>> deleteTool = SdkMcpTool.<Map<String, Object>>builder("delete_item", "Delete")
+                .inputSchema(Map.of("type", "object"))
+                .handler(args -> CompletableFuture.completedFuture(ToolResult.text("Deleted")))
+                .annotations(destructiveAnnotations)
+                .build();
+
+        SdkMcpTool<Map<String, Object>> plainTool = SdkMcpTool.<Map<String, Object>>builder("plain", "Plain")
+                .inputSchema(Map.of("type", "object"))
+                .handler(args -> CompletableFuture.completedFuture(ToolResult.text("OK")))
+                .build();
+
+        // Verify annotations are stored
+        assertThat(readTool.annotations()).isNotNull();
+        assertThat(readTool.annotations().readOnlyHint()).isTrue();
+
+        assertThat(deleteTool.annotations()).isNotNull();
+        assertThat(deleteTool.annotations().destructiveHint()).isTrue();
+        assertThat(deleteTool.annotations().idempotentHint()).isTrue();
+
+        assertThat(plainTool.annotations()).isNull();
+
+        // Create server and verify annotations in tools/list
+        SdkMcpServer server = SdkMcpServer.create("test", List.of(readTool, deleteTool, plainTool));
+
+        Map<String, Object> response = server.handleMessage(Map.of(
+                "jsonrpc", "2.0",
+                "id", 1,
+                "method", "tools/list",
+                "params", Map.of())).get();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) response.get("result");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> tools = (List<Map<String, Object>>) result.get("tools");
+
+        Map<String, Map<String, Object>> toolsByName = tools.stream()
+                .collect(java.util.stream.Collectors.toMap(t -> (String) t.get("name"), t -> t));
+
+        // Verify annotations in response
+        assertThat(toolsByName.get("read_data")).containsKey("annotations");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> readAnnotations = (Map<String, Object>) toolsByName.get("read_data").get("annotations");
+        assertThat(readAnnotations.get("readOnlyHint")).isEqualTo(true);
+
+        assertThat(toolsByName.get("delete_item")).containsKey("annotations");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> delAnnotations = (Map<String, Object>) toolsByName.get("delete_item").get("annotations");
+        assertThat(delAnnotations.get("destructiveHint")).isEqualTo(true);
+        assertThat(delAnnotations.get("idempotentHint")).isEqualTo(true);
+
+        // Tool without annotations should not have annotations key
+        assertThat(toolsByName.get("plain")).doesNotContainKey("annotations");
+    }
+
+    @Test
+    void testToolAnnotationsToMap() {
+        // Test toMap() method
+        ToolAnnotations annotations = ToolAnnotations.builder()
+                .readOnlyHint(true)
+                .destructiveHint(false)
+                .idempotentHint(true)
+                .openWorldHint(false)
+                .build();
+
+        Map<String, Object> map = annotations.toMap("Test Tool");
+
+        assertThat(map).hasSize(5);
+        assertThat(map.get("title")).isEqualTo("Test Tool");
+        assertThat(map.get("readOnlyHint")).isEqualTo(true);
+        assertThat(map.get("destructiveHint")).isEqualTo(false);
+        assertThat(map.get("idempotentHint")).isEqualTo(true);
+        assertThat(map.get("openWorldHint")).isEqualTo(false);
+
+        // Test with only some fields set
+        ToolAnnotations partialAnnotations = ToolAnnotations.builder()
+                .readOnlyHint(true)
+                .build();
+
+        Map<String, Object> partialMap = partialAnnotations.toMap(null);
+
+        assertThat(partialMap).hasSize(1);
+        assertThat(partialMap.get("readOnlyHint")).isEqualTo(true);
+
+        // Test empty annotations
+        ToolAnnotations emptyAnnotations = ToolAnnotations.builder().build();
+        Map<String, Object> nullMap = emptyAnnotations.toMap("");
+        assertThat(nullMap).isNull();
+    }
+
+    @Test
+    void testToolAnnotationsJsonSerialization() throws Exception {
+        // Verify that @JsonIgnore doesn't affect Jackson serialization
+        ToolAnnotations annotations = ToolAnnotations.builder()
+                .readOnlyHint(true)
+                .build();
+
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        String json = mapper.writeValueAsString(annotations);
+
+        // Should contain readOnlyHint, but NOT toMap or hasAnyAnnotation
+        assertThat(json).contains("\"readOnlyHint\":true");
+        assertThat(json).doesNotContain("toMap");
+        assertThat(json).doesNotContain("hasAnyAnnotation");
+    }
+
+    static class TestAnnotationsWithHints implements ToolAnnotations {
+        @Override
+        public Boolean readOnlyHint() {
+            return true;
+        }
+
+        @Override
+        public Boolean destructiveHint() {
+            return true;
+        }
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testToolAnnotationsFromToolAnnotation() throws ReflectiveOperationException {
+        // Create a class with @Tool annotation
+        class ToolsClass {
+            @Tool(name = "test", description = "Test")
+            void noAnnotations() {
+            }
+
+            @Tool(name = "withAnnotations", description = "Test", annotations = TestAnnotationsWithHints.class)
+            void withAnnotations() {
+            }
+        }
+
+        // Test default case - annotations class is None
+        Tool noAnnotationsTool = null;
+        for (java.lang.reflect.Method method : ToolsClass.class.getDeclaredMethods()) {
+            if (method.getName().equals("noAnnotations")) {
+                noAnnotationsTool = method.getAnnotation(Tool.class);
+                break;
+            }
+        }
+        assertThat(noAnnotationsTool).isNotNull();
+        assertThat(noAnnotationsTool.annotations()).isEqualTo(ToolAnnotations.None.class);
+
+        // Test with annotations class - instantiate and verify
+        Tool withAnnotationsTool = null;
+        for (java.lang.reflect.Method method : ToolsClass.class.getDeclaredMethods()) {
+            if (method.getName().equals("withAnnotations")) {
+                withAnnotationsTool = method.getAnnotation(Tool.class);
+                break;
+            }
+        }
+        assertThat(withAnnotationsTool).isNotNull();
+        assertThat(withAnnotationsTool.annotations()).isEqualTo(TestAnnotationsWithHints.class);
+
+        ToolAnnotations result = withAnnotationsTool.annotations().getDeclaredConstructor().newInstance();
+        assertThat(result.readOnlyHint()).isTrue();
+        assertThat(result.destructiveHint()).isTrue();
+        assertThat(result.idempotentHint()).isNull();
+        assertThat(result.openWorldHint()).isNull();
+    }
+
 }

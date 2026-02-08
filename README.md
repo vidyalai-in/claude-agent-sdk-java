@@ -918,6 +918,8 @@ See the `examples/` module for complete working examples:
 - `Hooks.java` - Hook callbacks (including new hook events: Notification, SubagentStart, PermissionRequest)
 - `PermissionCallbacks.java` - Custom permission logic
 - `StreamingEvents.java` - Real-time streaming
+- `StructuredOutputExample.java` - Structured output with JSON Schema validation (simple, nested, enum, with tools)
+- `DynamicControlExample.java` - Dynamic control features (setPermissionMode, setModel, interrupt)
 - `ErrorHandling.java` - Exception handling
 - `AdvancedFeatures.java` - Checkpointing, sandbox, structured output
 - `ToolsConfigurationExample.java` - Tools configuration (array, preset, empty)
@@ -927,6 +929,7 @@ See the `examples/` module for complete working examples:
 - `PluginsExample.java` - Plugin system usage
 - `AgentsExample.java` - Programmatic subagent definitions
 - `FilesystemAgentsExample.java` - Filesystem-based agent configuration
+- `LargeAgentsExample.java` - Large agent definitions (260KB+) via initialize request
 - `SystemPromptExample.java` - Custom system prompt usage
 - `IncludePartialMessagesExample.java` - Streaming with partial message updates
 
@@ -995,6 +998,123 @@ To test examples against your local development version of the SDK (not the publ
 - `ClaudeSDKClient` is **not thread-safe**. Use one client per thread or synchronize access.
 - `ClaudeSDK.query()` methods create new connections and are safe to call from multiple threads.
 - Callbacks (hooks, permissions) may be called from different threads; ensure your callback implementations are thread-safe.
+
+## Concurrency Model: Python vs Java
+
+The Java SDK uses a fundamentally different concurrency model than the Python SDK. Understanding these differences helps when porting code or comparing examples.
+
+### Python SDK: Async/Await Model
+
+The Python SDK uses Python's `async`/`await` syntax with asyncio or trio:
+
+```python
+# Python SDK - async/await with asyncio
+async def example():
+    async with ClaudeSDKClient() as client:
+        await client.connect("Hello")
+        async for message in client.receive_response():
+            print(message)
+
+# Python SDK - streaming with async iterables
+async def message_stream():
+    yield {"type": "user", "message": {"role": "user", "content": "Hi"}}
+    yield {"type": "user", "message": {"role": "user", "content": "Bye"}}
+
+await client.connect(message_stream())
+```
+
+**Key Python Features:**
+- `async`/`await` keywords for non-blocking operations
+- `async for` for iterating over async iterables
+- `async with` for async context managers
+- Async iterables/generators (`async def` with `yield`)
+- Libraries: asyncio, trio
+
+### Java SDK: Synchronous + CompletableFuture Model
+
+The Java SDK uses synchronous APIs with CompletableFuture for asynchronous operations:
+
+```java
+// Java SDK - synchronous with try-with-resources
+try (var client = ClaudeSDK.createClient()) {
+    client.connect("Hello");
+    for (Message message : client.receiveResponse()) {
+        System.out.println(message);
+    }
+}
+
+// Java SDK - streaming with Iterator
+List<Map<String, Object>> messages = List.of(
+    Map.of("type", "user", "message", Map.of("role", "user", "content", "Hi")),
+    Map.of("type", "user", "message", Map.of("role", "user", "content", "Bye"))
+);
+client.query(messages.iterator());
+```
+
+**Key Java Features:**
+- **Synchronous iterators** (`Iterator<Message>`) instead of async iterables
+- **Try-with-resources** (`try (...)`) instead of async context managers
+- **CompletableFuture** for async callbacks (hooks, permissions)
+- **Virtual threads** (Java 21+) for efficient blocking I/O
+- **ExecutorService** for background task management
+
+### Why Python Async Examples Don't Directly Translate
+
+Some Python SDK examples don't have direct Java equivalents because they demonstrate async-specific patterns:
+
+| Python Example | Why Not in Java | Java Equivalent |
+|----------------|-----------------|-----------------|
+| `streaming_mode_ipython.py` | IPython-specific async REPL integration | Use Java REPL (jshell) with synchronous APIs |
+| `streaming_mode_trio.py` | Trio-specific concurrency library | Use standard Java concurrency (ExecutorService, virtual threads) |
+| `test_connect_with_async_iterable` | Async generator pattern | `client.query(Iterator<Map>)` with regular Iterator |
+| `test_concurrent_send_receive` | Async concurrent operations | Use `Thread.startVirtualThread()` or ExecutorService |
+
+### Concurrent Operations in Java
+
+For operations that need true concurrency in Java:
+
+```java
+// Concurrent send and receive using virtual threads
+try (var client = ClaudeSDK.createClient()) {
+    client.connect();
+
+    // Receive in background thread
+    Thread receiveThread = Thread.startVirtualThread(() -> {
+        for (Message msg : client.receiveMessages()) {
+            if (msg instanceof ResultMessage) break;
+            System.out.println("Received: " + msg);
+        }
+    });
+
+    // Send from main thread
+    client.sendMessage("First message");
+    Thread.sleep(1000);
+    client.sendMessage("Second message");
+
+    receiveThread.join();
+}
+```
+
+### Performance Considerations
+
+- **Python**: Async I/O is efficient for I/O-bound operations but requires explicit `await` points
+- **Java**: Virtual threads (Project Loom) make blocking I/O as efficient as async without syntax changes
+- **Java**: Synchronous APIs are simpler to use and debug than async code
+- **Python**: Trio provides structured concurrency; Java achieves similar with try-with-resources and ExecutorService
+
+### Migration Guide: Python to Java
+
+| Python Pattern | Java Equivalent |
+|----------------|-----------------|
+| `async with client:` | `try (var client = ...) {` |
+| `await client.connect()` | `client.connect()` (synchronous) |
+| `async for msg in client.receive():` | `for (Message msg : client.receiveResponse())` |
+| `await asyncio.sleep(1)` | `Thread.sleep(1000)` |
+| `asyncio.create_task()` | `Thread.startVirtualThread(() -> ...)` |
+| `async def generator():` + `yield` | `Iterator<T>` implementation |
+| `CompletableFuture.completed()` | `CompletableFuture.completedFuture()` |
+
+**Bottom Line:** The Java SDK prioritizes simplicity and uses synchronous APIs with virtual threads for efficient concurrency, while the Python SDK uses async/await for non-blocking operations. Both achieve similar functionality with their respective language idioms.
 
 ## Best Practices
 

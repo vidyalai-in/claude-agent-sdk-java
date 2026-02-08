@@ -9,7 +9,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -171,13 +170,6 @@ public class SubprocessCLITransport implements Transport {
     private static final String MINIMUM_CLAUDE_CODE_VERSION = "2.0.0";
     private static final String CLAUDE_CLI_NAME = "claude";
 
-    // Platform-specific command line length limits
-    private static final int CMD_LENGTH_LIMIT = System.getProperty("os.name").toLowerCase().contains("win")
-            ? 8000
-            : 100000;
-
-    private final String prompt;
-    private final boolean isStreaming;
     private final ClaudeAgentOptions options;
     private final String cliPath;
     @Nullable
@@ -185,7 +177,6 @@ public class SubprocessCLITransport implements Transport {
     private final int maxBufferSize;
     private final int maxMsgQSize;
     private final ReentrantLock writeLock = new ReentrantLock();
-    private final List<Path> tempFiles = Collections.synchronizedList(new ArrayList<>());
     private final AtomicBoolean iteratorCreated = new AtomicBoolean(false);
     private final AtomicBoolean ready = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -208,13 +199,9 @@ public class SubprocessCLITransport implements Transport {
     /**
      * Creates a new subprocess transport.
      *
-     * @param prompt      the prompt to send (null for streaming mode)
-     * @param isStreaming whether to use streaming mode
      * @param options     the agent options
      */
-    public SubprocessCLITransport(@Nullable String prompt, boolean isStreaming, ClaudeAgentOptions options) {
-        this.prompt = ((prompt != null) ? prompt : "");
-        this.isStreaming = isStreaming;
+    public SubprocessCLITransport(ClaudeAgentOptions options) {
         this.options = options;
         Path path = options.cliPath();
         this.cliPath = ((path != null) ? path.toString() : findCli());
@@ -499,16 +486,9 @@ public class SubprocessCLITransport implements Transport {
             cmd.add("--fork-session");
         }
 
-        // Agents
-        if ((options.agents() != null) && (!options.agents().isEmpty())) {
-            try {
-                String agentsJson = MAPPER.writeValueAsString(options.agents());
-                cmd.add("--agents");
-                cmd.add(agentsJson);
-            } catch (JsonProcessingException e) {
-                logger.warning("Failed to serialize agents: " + e.getMessage());
-            }
-        }
+        // Agents are always sent via initialize request (matching TypeScript/Python SDKs)
+        // This avoids platform-specific command-line argument length limits (ARG_MAX)
+        // No --agents CLI flag needed
 
         // Setting sources
         String sourcesValue = ((options.settingSources() != null)
@@ -554,39 +534,10 @@ public class SubprocessCLITransport implements Transport {
             }
         }
 
-        // Prompt handling - MUST come after all flags
-        // because everything after "--" is treated as arguments
-        if (isStreaming) {
-            cmd.add("--input-format");
-            cmd.add("stream-json");
-        } else {
-            cmd.add("--print");
-            cmd.add("--");
-            cmd.add(prompt);
-        }
-
-        // Handle long command lines
-        if ((String.join(" ", cmd).length() > CMD_LENGTH_LIMIT) && (options.agents() != null)) {
-            optimizeCommandLine(cmd);
-        }
+        cmd.add("--input-format");
+        cmd.add("stream-json");
 
         return cmd;
-    }
-
-    private void optimizeCommandLine(List<String> cmd) {
-        int agentsIdx = cmd.indexOf("--agents");
-        if ((agentsIdx >= 0) && (agentsIdx + 1 < cmd.size())) {
-            String agentsJson = cmd.get(agentsIdx + 1);
-            try {
-                Path tempFile = Files.createTempFile("claude-agents-", ".json");
-                Files.writeString(tempFile, agentsJson);
-                tempFiles.add(tempFile);
-                cmd.set(agentsIdx + 1, "@" + tempFile);
-                logger.info("Command line too long, using temp file for --agents: " + tempFile);
-            } catch (IOException e) {
-                logger.warning("Failed to optimize command line: " + e.getMessage());
-            }
-        }
     }
 
     @SuppressWarnings("null")
@@ -640,12 +591,6 @@ public class SubprocessCLITransport implements Transport {
                         new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8));
                 // Submit stderr reading task to dedicated executor
                 stderrExecutor.submit(() -> handleStderr(stderr));
-            }
-
-            // Close stdin immediately if not streaming
-            if (!isStreaming) {
-                stdin.close();
-                stdin = null;
             }
 
             ready.set(true);
@@ -812,16 +757,6 @@ public class SubprocessCLITransport implements Transport {
         if (closed.getAndSet(true)) {
             return; // Already closed
         }
-
-        // Clean up temp files
-        for (Path tempFile : tempFiles) {
-            try {
-                Files.deleteIfExists(tempFile);
-            } catch (IOException e) {
-                // Ignore
-            }
-        }
-        tempFiles.clear();
 
         if (process == null) {
             ready.set(false);
