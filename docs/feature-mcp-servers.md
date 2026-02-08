@@ -7,6 +7,7 @@ MCP (Model Context Protocol) allows you to create custom tools that Claude can u
 - [SDK MCP Servers vs External Servers](#sdk-mcp-servers-vs-external-servers)
 - [Creating SDK MCP Servers](#creating-sdk-mcp-servers)
 - [Using @Tool Annotation](#using-tool-annotation)
+- [Tool Title and Annotations](#tool-title-and-annotations)
 - [Programmatic Tool Creation](#programmatic-tool-creation)
 - [Tool Schema](#tool-schema)
 - [Tool Execution](#tool-execution)
@@ -132,6 +133,55 @@ public class Calculator {
     }
 }
 ```
+
+## Tool Title and Annotations
+
+### Tool Title
+
+Use the `title` attribute to provide a friendly display name distinct from the technical tool name:
+
+```java
+@Tool(
+    name = "fetch_user_data",
+    title = "User Data Fetcher",
+    description = "Fetch user data from the database"
+)
+public CompletableFuture<ToolResult> fetchUserData(String userId) {
+    // ...
+}
+```
+
+### Tool Annotations (Semantic Hints)
+
+Use the `annotations` attribute to attach behavioral hints to a tool. Implement the `ToolAnnotations` interface:
+
+```java
+import in.vidyalai.claude.sdk.mcp.ToolAnnotations;
+
+public class ReadOnlyHints implements ToolAnnotations {
+    @Override
+    public Boolean readOnlyHint() { return true; }
+}
+
+@Tool(
+    name = "read_file",
+    title = "File Reader",
+    description = "Read the contents of a file",
+    annotations = ReadOnlyHints.class
+)
+public CompletableFuture<ToolResult> readFile(String path) {
+    // ...
+}
+```
+
+Available annotation hints:
+
+| Hint | Description |
+|------|-------------|
+| `readOnlyHint` | Tool only reads data, does not modify state |
+| `destructiveHint` | Tool performs irreversible operations |
+| `idempotentHint` | Repeated calls with same inputs produce same results |
+| `openWorldHint` | Tool queries external systems with unbounded results |
 
 ### Method Signatures
 
@@ -262,12 +312,13 @@ McpSdkServerConfig server = ClaudeSDK.createSdkMcpServer(
 
 ## Programmatic Tool Creation
 
-For dynamic tool creation, use `SdkMcpTool.create()`:
+For dynamic tool creation, use `SdkMcpTool.create()` or the builder:
 
 ```java
 import in.vidyalai.claude.sdk.mcp.SdkMcpTool;
 import java.util.concurrent.CompletableFuture;
 
+// Simple creation
 SdkMcpTool<Map<String, Object>> uppercaseTool = SdkMcpTool.create(
     "uppercase",                           // Tool name
     "Convert text to uppercase",           // Description
@@ -288,6 +339,23 @@ SdkMcpTool<Map<String, Object>> uppercaseTool = SdkMcpTool.create(
         );
     }
 );
+
+// With title and annotations using builder
+ToolAnnotations hints = ToolAnnotations.builder()
+    .readOnlyHint(true)
+    .idempotentHint(true)
+    .build();
+
+SdkMcpTool<Map<String, Object>> searchTool = SdkMcpTool.builder("search", "Search records")
+    .title("Record Search")
+    .inputSchema(Map.of("type", "object", "properties", Map.of(
+        "query", Map.of("type", "string")
+    ), "required", List.of("query")))
+    .handler(args -> CompletableFuture.completedFuture(
+        ToolResult.text("Results for: " + args.get("query"))
+    ))
+    .annotations(hints)
+    .build();
 ```
 
 ### Creating Server from Tools

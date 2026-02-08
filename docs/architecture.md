@@ -103,6 +103,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Environment: `cwd()`, `env()`, `cliPath()`
   - Hooks: `hooks()`
   - MCP: `mcpServers()`
+  - Agents: `agents()` (sent via stdin initialize request, no size limit)
   - Advanced: `sandbox()`, `outputFormat()`, `checkpointFiles()`
 
 **Design Pattern**: Builder + Immutable Object
@@ -116,7 +117,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Hook callbacks
   - Tool permission callbacks
   - Message streaming
-  - Initialization handshake
+  - Initialization handshake (includes hooks and agent definitions)
   - MCP server lifecycle management
 - **Thread Safety**: Fully thread-safe with atomic operations and synchronization
 - **Key Features**:

@@ -64,6 +64,12 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Async execution patterns
   - Complete examples (calculator, database, API integration)
 
+- **[Agent Definitions](./feature-agents.md)** - Custom subagents with specialized prompts, tools, and models
+  - Inline agent definitions
+  - Filesystem-based agents
+  - Large agent support (260KB+ via stdin)
+  - AgentDefinition API
+
 ### Advanced Features
 - **[Hooks System](./feature-hooks.md)** - Intercepting and responding to lifecycle events
   - 10 hook events
@@ -237,12 +243,13 @@ See the `examples/` directory in the repository.
 ### ✅ Completed - All Core Documentation
 - Main README with quick start and overview
 - Architecture overview (comprehensive with diagrams)
-- All feature guides (10 comprehensive guides):
+- All feature guides (11 comprehensive guides):
   - Simple Queries
   - Interactive Conversations
   - Configuration Options
   - Message Types
-  - MCP Servers
+  - MCP Servers (with ToolAnnotations and tool titles)
+  - Agent Definitions
   - Hooks System
   - Permission System
   - Streaming Events
@@ -254,7 +261,7 @@ See the `examples/` directory in the repository.
   - ClaudeAgentOptions
   - Message Types
   - Exception Types
-- Code examples (17+ examples in examples/ directory)
+- Code examples (20+ examples in examples/ directory)
 - Python SDK Parity documentation
 
 ## Contributing to Documentation
