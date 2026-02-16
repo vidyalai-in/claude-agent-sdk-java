@@ -267,12 +267,55 @@ Maximum bytes for buffering CLI stdout.
 
 Default: 100MB. Increase for large outputs.
 
+### thinking()
+
+**NEW**: Control extended thinking behavior with fine-grained configuration.
+
+```java
+// Adaptive thinking (32K token default)
+.thinking(new ThinkingConfigAdaptive())
+
+// Fixed token budget
+.thinking(new ThinkingConfigEnabled(10000))
+
+// Disable thinking
+.thinking(new ThinkingConfigDisabled())
+```
+
+**Types**:
+- `ThinkingConfigAdaptive` - Adaptive thinking with 32,000 token default
+- `ThinkingConfigEnabled(int budgetTokens)` - Fixed token budget (must be > 0)
+- `ThinkingConfigDisabled` - No thinking tokens
+
+**Note**: This option takes precedence over the deprecated `maxThinkingTokens()`.
+
+See [Extended Thinking Configuration](./feature-thinking-config.md) for complete guide.
+
+### effort()
+
+**NEW**: Set thinking depth/intensity level.
+
+```java
+.effort("low")     // Minimal thinking
+.effort("medium")  // Balanced (default)
+.effort("high")    // Deep thinking
+.effort("max")     // Maximum reasoning
+```
+
+**Valid values**: `"low"`, `"medium"`, `"high"`, `"max"`
+
+Works in conjunction with `thinking()` to control reasoning depth.
+
+See [Extended Thinking Configuration](./feature-thinking-config.md) for examples.
+
 ### maxThinkingTokens()
+
+**DEPRECATED**: Use `thinking()` instead.
 
 Maximum tokens for thinking blocks.
 
 ```java
-.maxThinkingTokens(10000)
+.maxThinkingTokens(10000)  // Deprecated - use thinking() instead
 ```
 
 ### maxMsgQSize()

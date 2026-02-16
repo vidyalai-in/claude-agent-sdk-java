@@ -54,7 +54,9 @@ options.toBuilder()
 - `maxTurns(Integer)` - Max conversation turns
 - `maxBudgetUsd(Double)` - Max cost in USD
 - `maxBufferSize(Integer)` - Max stdout buffer bytes
-- `maxThinkingTokens(Integer)` - Max thinking tokens
+- `thinking(ThinkingConfig)` - **NEW** Extended thinking configuration
+- `effort(String)` - **NEW** Thinking depth level ("low", "medium", "high", "max")
+- `maxThinkingTokens(Integer)` - **DEPRECATED** Use `thinking()` instead
 - `maxMsgQSize(Integer)` - Max message queue size
 
 ### Model

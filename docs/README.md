@@ -71,6 +71,12 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - AgentDefinition API
 
 ### Advanced Features
+- **[Extended Thinking Configuration](./feature-thinking-config.md)** - Control Claude's reasoning depth
+  - ThinkingConfig types (Adaptive, Enabled, Disabled)
+  - Effort levels (low, medium, high, max)
+  - Budget control and optimization
+  - Complete usage examples
+
 - **[Hooks System](./feature-hooks.md)** - Intercepting and responding to lifecycle events
   - 10 hook events
   - HookMatcher and HookOutput
@@ -243,13 +249,14 @@ See the `examples/` directory in the repository.
 ### ✅ Completed - All Core Documentation
 - Main README with quick start and overview
 - Architecture overview (comprehensive with diagrams)
-- All feature guides (11 comprehensive guides):
+- All feature guides (12 comprehensive guides):
   - Simple Queries
   - Interactive Conversations
   - Configuration Options
   - Message Types
   - MCP Servers (with ToolAnnotations and tool titles)
   - Agent Definitions
+  - Extended Thinking Configuration
   - Hooks System
   - Permission System
   - Streaming Events

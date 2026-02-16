@@ -449,6 +449,10 @@ ClaudeAgentOptions
     ├── SdkBeta (enum)
     ├── SettingSource (enum)
     ├── SandboxSettings (record)
+    ├── ThinkingConfig (sealed interface)
+    │       ├── ThinkingConfigAdaptive (record)
+    │       ├── ThinkingConfigEnabled (record)
+    │       └── ThinkingConfigDisabled (record)
     ├── McpServerConfig (sealed interface)
     │       ├── McpStdioServerConfig
     │       ├── McpSseServerConfig
