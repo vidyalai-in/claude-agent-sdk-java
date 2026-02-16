@@ -38,6 +38,10 @@ import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfig;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfigAdaptive;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfigDisabled;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfigEnabled;
 import in.vidyalai.claude.sdk.types.mcp.McpServerConfig;
 
 /**
@@ -199,7 +203,7 @@ public class SubprocessCLITransport implements Transport {
     /**
      * Creates a new subprocess transport.
      *
-     * @param options     the agent options
+     * @param options the agent options
      */
     public SubprocessCLITransport(ClaudeAgentOptions options) {
         this.options = options;
@@ -486,7 +490,8 @@ public class SubprocessCLITransport implements Transport {
             cmd.add("--fork-session");
         }
 
-        // Agents are always sent via initialize request (matching TypeScript/Python SDKs)
+        // Agents are always sent via initialize request (matching TypeScript/Python
+        // SDKs)
         // This avoids platform-specific command-line argument length limits (ARG_MAX)
         // No --agents CLI flag needed
 
@@ -513,9 +518,36 @@ public class SubprocessCLITransport implements Transport {
             }
         }
 
-        if (options.maxThinkingTokens() != null) {
+        // Resolve thinking config → --max-thinking-tokens
+        // `thinking` takes precedence over the deprecated `max_thinking_tokens`
+        @SuppressWarnings("deprecation")
+        Integer resolvedMaxThinkingTokens = options.maxThinkingTokens();
+        ThinkingConfig thinking = options.thinking();
+        if (thinking != null) {
+            switch (thinking) {
+                case ThinkingConfigAdaptive _ -> {
+                    if (resolvedMaxThinkingTokens == null) {
+                        resolvedMaxThinkingTokens = 32_000;
+                    }
+                }
+                case ThinkingConfigEnabled enabled -> {
+                    resolvedMaxThinkingTokens = enabled.budgetTokens();
+                }
+                case ThinkingConfigDisabled _ -> {
+                    resolvedMaxThinkingTokens = 0;
+                }
+            }
+        }
+        if (resolvedMaxThinkingTokens != null) {
             cmd.add("--max-thinking-tokens");
-            cmd.add(String.valueOf(options.maxThinkingTokens()));
+            cmd.add(String.valueOf(resolvedMaxThinkingTokens));
+        }
+
+        // Add effort level if specified
+        String effort = options.effort();
+        if (effort != null) {
+            cmd.add("--effort");
+            cmd.add(effort);
         }
 
         // Extract schema from output_format structure if provided

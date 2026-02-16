@@ -605,6 +605,14 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     // Model configuration
     .model("claude-sonnet-4-5")
     .fallbackModel("claude-haiku-3-5")
+
+    // Thinking configuration (new in v0.1.36 - takes precedence over maxThinkingTokens)
+    .thinking(new ThinkingConfigEnabled(10_000))  // Enable with 10k token budget
+    // Or: .thinking(new ThinkingConfigAdaptive())  // Adaptive (32k default)
+    // Or: .thinking(new ThinkingConfigDisabled())  // Disable thinking
+    .effort("medium")  // Thinking depth: "low", "medium", "high", "max"
+
+    // Legacy thinking config (deprecated - use .thinking() instead)
     .maxThinkingTokens(8000)
 
     // Tool configuration
@@ -672,6 +680,31 @@ PermissionMode.ACCEPT_EDITS      // Auto-accept file edits
 PermissionMode.PLAN              // Show plans before execution
 PermissionMode.BYPASS_PERMISSIONS // Allow all tools (use with caution)
 ```
+
+### Thinking Configuration
+
+Control extended thinking behavior with `ThinkingConfig` types (added in v0.1.36):
+
+```java
+import in.vidyalai.claude.sdk.types.config.*;
+
+// Adaptive thinking - uses 32,000 token budget by default
+ThinkingConfig adaptive = new ThinkingConfigAdaptive();
+
+// Enabled thinking - specify exact token budget
+ThinkingConfig enabled = new ThinkingConfigEnabled(10_000);
+
+// Disabled thinking - no extended thinking
+ThinkingConfig disabled = new ThinkingConfigDisabled();
+
+// Use with ClaudeAgentOptions
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .thinking(enabled)
+    .effort("medium")  // Control thinking depth: "low", "medium", "high", "max"
+    .build();
+```
+
+**Note:** The `thinking` field takes precedence over the deprecated `maxThinkingTokens` field.
 
 ### MCP Server Configurations
 

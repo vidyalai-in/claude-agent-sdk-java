@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-02-16
+
+### Added
+- **ThinkingConfig Types**: Added `ThinkingConfig` sealed interface with three variants for controlling extended thinking behavior (matching Python SDK v0.1.36):
+  - `ThinkingConfigAdaptive` — uses adaptive thinking with default 32,000 token budget
+  - `ThinkingConfigEnabled` — enables thinking with a specified token budget
+  - `ThinkingConfigDisabled` — disables extended thinking
+- **Thinking Configuration Option**: Added `thinking` field to `ClaudeAgentOptions` that takes precedence over the deprecated `maxThinkingTokens` field
+- **Effort Option**: Added `effort` field to `ClaudeAgentOptions` for controlling thinking depth with values: "low", "medium", "high", "max" (matching Python SDK v0.1.36)
+
+### Changed
+- Updated thinking token resolution logic in `SubprocessCLITransport` to support new `ThinkingConfig` types
+- `thinking` config now takes precedence over deprecated `maxThinkingTokens` field
+- Thinking config resolves to `--max-thinking-tokens` CLI flag: adaptive → 32,000 (default), enabled → budget_tokens, disabled → 0
+- Effort level is passed to CLI via `--effort` flag
+
+### Documentation
+- Updated `docs/PYTHON_SDK_PARITY.md` to reflect 100% parity with Python SDK v0.1.36
+- Added 4 new type definitions (ThinkingConfig, ThinkingConfigAdaptive, ThinkingConfigEnabled, ThinkingConfigDisabled)
+- Updated configuration options count from 35+ to 37+ options
+
+[0.1.4]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.4
+
 ## [0.1.3] - 2026-02-08
 
 ### Added

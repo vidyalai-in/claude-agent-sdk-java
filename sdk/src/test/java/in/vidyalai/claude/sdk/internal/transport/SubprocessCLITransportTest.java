@@ -17,6 +17,8 @@ import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfigAdaptive;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfigDisabled;
 import in.vidyalai.claude.sdk.types.config.ToolsPreset;
 import in.vidyalai.claude.sdk.types.mcp.McpHttpServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpServerConfig;
@@ -141,6 +143,7 @@ class SubprocessCLITransportTest {
         assertThat(options.maxBudgetUsd()).isEqualTo(1.5);
     }
 
+    @SuppressWarnings("deprecation")
     @Test
     void testOptionsWithMaxThinkingTokens() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -148,6 +151,17 @@ class SubprocessCLITransportTest {
                 .build();
 
         assertThat(options.maxThinkingTokens()).isEqualTo(8000);
+    }
+
+    @Test
+    void testOptionsWithThinkingConfig() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigAdaptive())
+                .effort("high")
+                .build();
+
+        assertThat(options.thinking()).isInstanceOf(ThinkingConfigAdaptive.class);
+        assertThat(options.effort()).isEqualTo("high");
     }
 
     @Test
@@ -647,7 +661,7 @@ class SubprocessCLITransportTest {
 
     // ==================== Full Options Combination Test ====================
 
-    @SuppressWarnings("null")
+    @SuppressWarnings({ "null", "deprecation" })
     @Test
     void testAllOptionsCombined() {
         SandboxSettings sandbox = new SandboxSettings(true);
@@ -663,6 +677,8 @@ class SubprocessCLITransportTest {
                 .maxBudgetUsd(5.0)
                 .maxBufferSize(2048)
                 .maxThinkingTokens(8000)
+                .thinking(new ThinkingConfigDisabled())
+                .effort("low")
                 .systemPrompt("Be helpful and concise")
                 .tools(List.of("Bash", "Read", "Write"))
                 .allowedTools(List.of("Edit"))
@@ -692,6 +708,8 @@ class SubprocessCLITransportTest {
         assertThat(options.maxBudgetUsd()).isEqualTo(5.0);
         assertThat(options.maxBufferSize()).isEqualTo(2048);
         assertThat(options.maxThinkingTokens()).isEqualTo(8000);
+        assertThat(options.thinking()).isInstanceOf(ThinkingConfigDisabled.class);
+        assertThat(options.effort()).isEqualTo("low");
         assertThat(options.systemPrompt()).isEqualTo("Be helpful and concise");
         assertThat(options.tools()).isEqualTo(List.of("Bash", "Read", "Write"));
         assertThat(options.allowedTools()).containsExactly("Edit");

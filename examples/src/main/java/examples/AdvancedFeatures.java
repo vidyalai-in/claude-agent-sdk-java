@@ -16,6 +16,7 @@ import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfigEnabled;
 import in.vidyalai.claude.sdk.types.config.ToolsPreset;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
@@ -299,7 +300,7 @@ public class AdvancedFeatures {
     static void betaFeatures() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .betas(List.of(SdkBeta.CONTEXT_1M)) // Extended context beta
-                .maxThinkingTokens(16000) // Extended thinking
+                .thinking(new ThinkingConfigEnabled(16000)) // Extended thinking
                 .build();
 
         System.out.println("Beta features enabled:");
@@ -328,7 +329,7 @@ public class AdvancedFeatures {
                 // Model settings
                 .model("claude-sonnet-4-5")
                 .fallbackModel("claude-haiku-3-5")
-                .maxThinkingTokens(8000)
+                .thinking(new ThinkingConfigEnabled(8000))
 
                 // System prompt
                 .systemPrompt(SystemPromptPreset.claudeCode("Be concise and helpful."))

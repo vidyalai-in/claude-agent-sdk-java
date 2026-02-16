@@ -15,6 +15,7 @@ import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfig;
 import in.vidyalai.claude.sdk.types.config.ToolsPreset;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
@@ -76,8 +77,17 @@ public final class ClaudeAgentOptions {
     @Nullable
     private final Integer maxBufferSize;
     // Max tokens for thinking blocks
+    // @deprecated Use {@link #thinking} instead
+    @Deprecated
     @Nullable
     private final Integer maxThinkingTokens;
+    // Controls extended thinking behavior. Takes precedence over
+    // max_thinking_tokens.
+    @Nullable
+    private final ThinkingConfig thinking;
+    // Effort level for thinking depth ("low", "medium", "high", "max")
+    @Nullable
+    private final String effort;
     // Max message queue size
     @Nullable
     private final Integer maxMsgQSize;
@@ -166,6 +176,8 @@ public final class ClaudeAgentOptions {
         this.maxBudgetUsd = builder.maxBudgetUsd;
         this.maxBufferSize = builder.maxBufferSize;
         this.maxThinkingTokens = builder.maxThinkingTokens;
+        this.thinking = builder.thinking;
+        this.effort = builder.effort;
         this.maxMsgQSize = builder.maxMsgQSize;
         this.model = builder.model;
         this.fallbackModel = builder.fallbackModel;
@@ -233,6 +245,8 @@ public final class ClaudeAgentOptions {
         builder.maxBudgetUsd = this.maxBudgetUsd;
         builder.maxBufferSize = this.maxBufferSize;
         builder.maxThinkingTokens = this.maxThinkingTokens;
+        builder.thinking = this.thinking;
+        builder.effort = this.effort;
         builder.maxMsgQSize = this.maxMsgQSize;
         builder.model = this.model;
         builder.fallbackModel = this.fallbackModel;
@@ -359,10 +373,33 @@ public final class ClaudeAgentOptions {
      * Returns the maximum tokens for thinking blocks.
      *
      * @return the max thinking tokens, or null if not set
+     * @deprecated Use {@link #thinking()} instead
      */
+    @Deprecated
     @Nullable
     public Integer maxThinkingTokens() {
         return maxThinkingTokens;
+    }
+
+    /**
+     * Returns the thinking configuration for extended thinking behavior.
+     * This takes precedence over the deprecated maxThinkingTokens field.
+     *
+     * @return the thinking config, or null if not set
+     */
+    @Nullable
+    public ThinkingConfig thinking() {
+        return thinking;
+    }
+
+    /**
+     * Returns the effort level for thinking depth.
+     *
+     * @return the effort level ("low", "medium", "high", "max"), or null if not set
+     */
+    @Nullable
+    public String effort() {
+        return effort;
     }
 
     /**
@@ -586,6 +623,10 @@ public final class ClaudeAgentOptions {
         private Integer maxBufferSize;
         @Nullable
         private Integer maxThinkingTokens;
+        @Nullable
+        private ThinkingConfig thinking;
+        @Nullable
+        private String effort;
         @Nullable
         private Integer maxMsgQSize;
         @Nullable
@@ -833,9 +874,34 @@ public final class ClaudeAgentOptions {
          *
          * @param maxThinkingTokens the max thinking tokens
          * @return this builder
+         * @deprecated Use {@link #thinking(ThinkingConfig)} instead
          */
+        @Deprecated
         public Builder maxThinkingTokens(int maxThinkingTokens) {
             this.maxThinkingTokens = maxThinkingTokens;
+            return this;
+        }
+
+        /**
+         * Sets the thinking configuration for extended thinking behavior.
+         * This takes precedence over the deprecated maxThinkingTokens field.
+         *
+         * @param thinking the thinking configuration
+         * @return this builder
+         */
+        public Builder thinking(ThinkingConfig thinking) {
+            this.thinking = thinking;
+            return this;
+        }
+
+        /**
+         * Sets the effort level for thinking depth.
+         *
+         * @param effort the effort level ("low", "medium", "high", or "max")
+         * @return this builder
+         */
+        public Builder effort(String effort) {
+            this.effort = effort;
             return this;
         }
 

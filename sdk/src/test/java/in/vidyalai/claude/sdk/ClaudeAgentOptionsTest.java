@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import in.vidyalai.claude.sdk.types.config.AgentDefinition;
 import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfigEnabled;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
 import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
@@ -46,6 +47,7 @@ class ClaudeAgentOptionsTest {
         assertThat(options.enableFileCheckpointing()).isFalse();
     }
 
+    @SuppressWarnings("deprecation")
     @Test
     void builder_withAllOptions() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -61,6 +63,8 @@ class ClaudeAgentOptionsTest {
                 .maxBudgetUsd(1.0)
                 .maxBufferSize(2048)
                 .maxThinkingTokens(8000)
+                .thinking(new ThinkingConfigEnabled(10_000))
+                .effort("medium")
                 .model("claude-sonnet-4-5")
                 .fallbackModel("claude-haiku-3-5")
                 .betas(List.of(SdkBeta.CONTEXT_1M))
@@ -87,6 +91,8 @@ class ClaudeAgentOptionsTest {
         assertThat(options.maxBudgetUsd()).isEqualTo(1.0);
         assertThat(options.maxBufferSize()).isEqualTo(2048);
         assertThat(options.maxThinkingTokens()).isEqualTo(8000);
+        assertThat(options.thinking()).isInstanceOf(ThinkingConfigEnabled.class);
+        assertThat(options.effort()).isEqualTo("medium");
         assertThat(options.model()).isEqualTo("claude-sonnet-4-5");
         assertThat(options.fallbackModel()).isEqualTo("claude-haiku-3-5");
         assertThat(options.betas()).containsExactly(SdkBeta.CONTEXT_1M);

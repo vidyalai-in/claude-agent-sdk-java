@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-02-08 (Updated)
-**Java SDK Version:** 0.1.3
-**Python SDK Version:** [0.1.33](https://github.com/anthropics/claude-agent-sdk-python/commit/ea81d412923c3e4d6b94ba770ea452cdfba3f51a) (latest)
+**Analysis Date:** 2026-02-16 (Updated)
+**Java SDK Version:** 0.1.4
+**Python SDK Version:** [0.1.36](https://github.com/anthropics/claude-agent-sdk-python/commit/4d747482377cbe681c56adc39849357e8eee5e65) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,10 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.33):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.33. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.36):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.36. These updates include:
+- **v0.1.36** - Added ThinkingConfig types and effort option, CLI update to 2.1.42
+- **v0.1.35** - CLI update to 2.1.39 (CLI version only)
+- **v0.1.34** - CLI update to 2.1.38 (CLI version only)
 - **v0.1.33** - CLI update to 2.1.37 and CI model updated to opus-4-6 (no API changes)
 - **v0.1.32** - CLI update to 2.1.36 (CLI version only)
 - **v0.1.31** - Agent definitions sent via initialize request (fixes ARG_MAX limits), MCP tool annotations support, CLI 2.1.33
@@ -25,7 +28,10 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - **v0.1.23** - `get_mcp_status()` made public, CLI 2.1.20 (already in Java SDK)
 - **v0.1.22** - `tool_use_result` field added to UserMessage, CLI 2.1.19 (already in Java SDK)
 
-✅ **All new features from Python SDK v0.1.33 are now implemented in Java SDK v0.1.3**. This includes:
+✅ **All new features from Python SDK v0.1.36 are now implemented in Java SDK v0.1.4-SNAPSHOT**. This includes:
+- ✅ ThinkingConfig types (ThinkingConfigAdaptive, ThinkingConfigEnabled, ThinkingConfigDisabled)
+- ✅ thinking field in ClaudeAgentOptions (takes precedence over deprecated maxThinkingTokens)
+- ✅ effort option in ClaudeAgentOptions ("low", "medium", "high", "max")
 - ✅ Agent definitions sent via initialize request (commit 8a7c0a7)
 - ✅ MCP tool annotations support (commit 451f2f4)
 - ✅ All hook events and enhanced hook types
@@ -102,6 +108,10 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 | AI models | String literals | `AIModel` enum | ✅ Java enhancement |
 | System prompt preset | TypedDict | `SystemPromptPreset` class | ✅ |
 | Tools preset | TypedDict | `ToolsPreset` class | ✅ |
+| Thinking config (base) | Union type | `ThinkingConfig` sealed interface | ✅ |
+| Thinking config adaptive | `ThinkingConfigAdaptive` TypedDict | `ThinkingConfigAdaptive` record | ✅ |
+| Thinking config enabled | `ThinkingConfigEnabled` TypedDict | `ThinkingConfigEnabled` record | ✅ |
+| Thinking config disabled | `ThinkingConfigDisabled` TypedDict | `ThinkingConfigDisabled` record | ✅ |
 
 ### Permission System (8 types)
 
@@ -173,7 +183,7 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 | JSON decode error | `CLIJSONDecodeError` | `CLIJSONDecodeException` | ✅ |
 | Message parse error | `MessageParseError` | `MessageParseException` | ✅ |
 
-**Total Type Count:** 76+ types with 100% parity
+**Total Type Count:** 80+ types with 100% parity
 
 ---
 
@@ -196,13 +206,14 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 
 ## 4. CONFIGURATION OPTIONS PARITY ✅ 100%
 
-All 35+ configuration options are implemented with 100% parity:
+All 37+ configuration options are implemented with 100% parity:
 
 | Option Category | Python | Java | Status |
 |----------------|--------|------|--------|
 | **Tool configuration** (3 options) | ✅ | ✅ | ✅ |
 | **System prompt** (1 option) | ✅ | ✅ | ✅ |
 | **Model selection** (3 options) | ✅ | ✅ | ✅ |
+| **Thinking configuration** (2 options) | ✅ | ✅ | ✅ |
 | **MCP servers** (1 option) | ✅ | ✅ | ✅ |
 | **Permission control** (3 options) | ✅ | ✅ | ✅ |
 | **Session management** (3 options) | ✅ | ✅ | ✅ |
@@ -215,7 +226,7 @@ All 35+ configuration options are implemented with 100% parity:
 | **Advanced features** (5 options) | ✅ | ✅ | ✅ |
 | **Callbacks** (1 option) | ✅ | ✅ | ✅ |
 
-**Total: 35+ configuration options - 100% parity**
+**Total: 37+ configuration options - 100% parity**
 
 ---
 
@@ -361,7 +372,8 @@ All 35+ configuration options are implemented with 100% parity:
 
 ### ✅ Configuration: 100% Parity
 
-- [x] All 35+ configuration options
+- [x] All 37+ configuration options
+- [x] Thinking configuration (thinking, effort)
 - [x] System prompts (string, preset)
 - [x] Tool configuration (array, preset, filtering)
 - [x] Model selection with fallback
@@ -577,7 +589,7 @@ All previously identified gaps have been closed:
 - ✅ Stderr callback example added
 - ✅ Plugins example added
 
-**Post-Initial Analysis (v0.1.26-0.1.33):**
+**Post-Initial Analysis (v0.1.26-0.1.36):**
 - ✅ All new hook events (Notification, SubagentStart, PermissionRequest) implemented in Java SDK
 - ✅ All enhanced hook input/output fields implemented in Java SDK
 - ✅ AssistantMessage.error field bug fix already implemented in Java SDK
@@ -586,18 +598,20 @@ All previously identified gaps have been closed:
 - ✅ MCP tool annotations (v0.1.31) already in Java SDK
 - ✅ LargeAgentsExample added to demonstrate 260KB+ agents working correctly
 - ✅ v0.1.32 and v0.1.33 are CLI version bumps only (no API changes)
-- ✅ Parity status verified as of 2026-02-08
+- ✅ v0.1.34 and v0.1.35 are CLI version bumps only (no API changes)
+- ✅ v0.1.36 adds ThinkingConfig types and effort option (fully implemented in Java SDK)
+- ✅ Parity status verified as of 2026-02-16
 
 ### Assessment
 
 **Status: COMPLETE & MAINTAINED** ✅
 
-The Java SDK is a high-quality, feature-complete port that maintains full compatibility with the Python SDK's capabilities (v0.1.33) while following Java best practices and idioms. Regular verification ensures continued parity as both SDKs evolve.
+The Java SDK is a high-quality, feature-complete port that maintains full compatibility with the Python SDK's capabilities (v0.1.36) while following Java best practices and idioms. Regular verification ensures continued parity as both SDKs evolve.
 
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-02-08
-**Python SDK Version:** 0.1.33 (commit ea81d41)
-**Java SDK Version:** 0.1.3
+**Latest Verification:** 2026-02-16
+**Python SDK Version:** 0.1.36 (commit 4d74748)
+**Java SDK Version:** 0.1.4
 **Status:** ✅ 100% Feature Parity Maintained
