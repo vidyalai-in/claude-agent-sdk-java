@@ -24,6 +24,7 @@ import in.vidyalai.claude.sdk.types.message.UserMessage;
 
 class MessageParserTest {
 
+    @SuppressWarnings("null")
     @Test
     void parseUserMessage_withStringContent() {
         Map<String, Object> data = Map.of(
@@ -42,6 +43,7 @@ class MessageParserTest {
         assertThat(userMessage.contentAsString()).isEqualTo("Hello, Claude!");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseAssistantMessage_withTextBlock() {
         Map<String, Object> data = Map.of(
@@ -63,6 +65,7 @@ class MessageParserTest {
         assertThat(assistantMessage.getTextContent()).isEqualTo("Hello!");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseAssistantMessage_withToolUseBlock() {
         Map<String, Object> data = Map.of(
@@ -91,6 +94,7 @@ class MessageParserTest {
         assertThat(toolUse.input()).containsEntry("command", "ls -la");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseResultMessage() {
         Map<String, Object> data = Map.of(
@@ -119,6 +123,7 @@ class MessageParserTest {
         assertThat(resultMessage.result()).isEqualTo("Task completed");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseSystemMessage() {
         Map<String, Object> data = Map.of(
@@ -135,6 +140,7 @@ class MessageParserTest {
         assertThat(systemMessage.data()).containsEntry("extra_field", "extra_value");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseStreamEvent() {
         Map<String, Object> data = Map.of(
@@ -153,14 +159,56 @@ class MessageParserTest {
         assertThat(streamEvent.eventType()).isEqualTo("content_block_delta");
     }
 
-    @SuppressWarnings("null")
     @Test
-    void parseMessage_unknownType_throwsException() {
-        Map<String, Object> data = Map.of("type", "unknown");
+    void parseMessage_unknownType_returnsNull() {
+        Map<String, Object> data = Map.of("type", "unknown_type");
 
-        assertThatThrownBy(() -> MessageParser.parse(data))
-                .isInstanceOf(MessageParseException.class)
-                .hasMessageContaining("Unknown message type: unknown");
+        Message result = MessageParser.parse(data);
+        assertThat(result).isNull();
+    }
+
+    @Test
+    void parseMessage_rateLimitEvent_returnsNull() {
+        Map<String, Object> data = Map.of(
+                "type", "rate_limit_event",
+                "rate_limit_info", Map.of(
+                        "status", "allowed_warning",
+                        "resetsAt", 1700000000,
+                        "rateLimitType", "five_hour",
+                        "utilization", 0.85,
+                        "isUsingOverage", false),
+                "uuid", "550e8400-e29b-41d4-a716-446655440000",
+                "session_id", "test-session-id");
+
+        Message result = MessageParser.parse(data);
+        assertThat(result).isNull();
+    }
+
+    @Test
+    void parseMessage_rateLimitEventRejected_returnsNull() {
+        Map<String, Object> data = Map.of(
+                "type", "rate_limit_event",
+                "rate_limit_info", Map.of(
+                        "status", "rejected",
+                        "resetsAt", 1700003600,
+                        "rateLimitType", "seven_day",
+                        "isUsingOverage", false),
+                "uuid", "660e8400-e29b-41d4-a716-446655440001",
+                "session_id", "test-session-id");
+
+        Message result = MessageParser.parse(data);
+        assertThat(result).isNull();
+    }
+
+    @Test
+    void parseMessage_futureSomeEventType_returnsNull() {
+        Map<String, Object> data = Map.of(
+                "type", "some_future_event_type",
+                "uuid", "770e8400-e29b-41d4-a716-446655440002",
+                "session_id", "test-session-id");
+
+        Message result = MessageParser.parse(data);
+        assertThat(result).isNull();
     }
 
     @SuppressWarnings("null")
@@ -311,6 +359,7 @@ class MessageParserTest {
         assertThat(userMessage.contentAsBlocks().get(3)).isInstanceOf(TextBlock.class);
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseUserMessage_insideSubagent() {
         Map<String, Object> data = Map.of(
@@ -330,6 +379,7 @@ class MessageParserTest {
 
     // ==================== Additional Assistant Message Tests ====================
 
+    @SuppressWarnings("null")
     @Test
     void parseAssistantMessage_withThinkingBlock() {
         Map<String, Object> data = Map.of(
@@ -357,6 +407,7 @@ class MessageParserTest {
         assertThat(((TextBlock) assistantMessage.content().get(1)).text()).isEqualTo("Here's my response");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseAssistantMessage_insideSubagent() {
         Map<String, Object> data = Map.of(
@@ -380,6 +431,7 @@ class MessageParserTest {
         assertThat(assistantMessage.parentToolUseId()).isEqualTo("toolu_01Xrwd5Y13sEHtzScxR77So8");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseAssistantMessage_withoutError() {
         Map<String, Object> data = Map.of(
@@ -505,19 +557,20 @@ class MessageParserTest {
     @SuppressWarnings("null")
     @Test
     void parseMessage_exceptionContainsData() {
-        Map<String, Object> data = Map.of("type", "unknown", "some", "data");
+        // Use a malformed known type (missing required fields) to trigger error
+        Map<String, Object> data = Map.of("type", "assistant");
 
         assertThatThrownBy(() -> MessageParser.parse(data))
                 .isInstanceOf(MessageParseException.class)
                 .satisfies(e -> {
                     MessageParseException mpe = (MessageParseException) e;
-                    assertThat(mpe.getData()).containsEntry("type", "unknown");
-                    assertThat(mpe.getData()).containsEntry("some", "data");
+                    assertThat(mpe.getData()).containsEntry("type", "assistant");
                 });
     }
 
     // ==================== Result Message with Usage Tests ====================
 
+    @SuppressWarnings("null")
     @Test
     void parseResultMessage_withUsage() {
         Map<String, Object> data = Map.of(
@@ -542,6 +595,7 @@ class MessageParserTest {
         assertThat(resultMessage.usage()).containsEntry("output_tokens", 50);
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseResultMessage_withStructuredOutput() {
         Map<String, Object> data = Map.of(
@@ -565,6 +619,7 @@ class MessageParserTest {
         assertThat(structuredOutput).containsEntry("key", "value");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseResultMessage_errorMaxBudget() {
         Map<String, Object> data = Map.of(
@@ -588,6 +643,7 @@ class MessageParserTest {
 
     // ==================== Stream Event Tests ====================
 
+    @SuppressWarnings("null")
     @Test
     void parseStreamEvent_withParentToolUseId() {
         Map<String, Object> data = Map.of(
@@ -664,6 +720,7 @@ class MessageParserTest {
         assertThat(structuredPatch.get(0)).containsEntry("newLines", 7);
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseUserMessage_withStringContentAndToolUseResult() {
         Map<String, Object> toolResultData = Map.of(
@@ -686,6 +743,7 @@ class MessageParserTest {
         assertThat(userMessage.toolUseResult()).containsEntry("userModified", true);
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseUserMessage_withoutToolUseResult() {
         Map<String, Object> data = Map.of(

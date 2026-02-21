@@ -52,8 +52,8 @@ import in.vidyalai.claude.sdk.types.control.response.ControlResponseData;
 import in.vidyalai.claude.sdk.types.control.response.SDKControlResponse;
 import in.vidyalai.claude.sdk.types.hook.HookContext;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
-import in.vidyalai.claude.sdk.types.hook.input.HookInput;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
+import in.vidyalai.claude.sdk.types.hook.input.HookInput;
 import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;
@@ -1028,8 +1028,12 @@ public class QueryHandler implements AutoCloseable {
                             throw new ClaudeSDKException((String) message.get("error"));
                         }
 
-                        nextMessage = MessageParser.parse(message);
-                        return true;
+                        Message parsed = MessageParser.parse(message);
+                        if (parsed != null) {
+                            nextMessage = parsed;
+                            return true;
+                        }
+                        // Unknown message type, skip and continue
                     }
                 }
             } catch (InterruptedException e) {

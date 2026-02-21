@@ -3,6 +3,9 @@ package in.vidyalai.claude.sdk.internal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Logger;
+
+import org.jspecify.annotations.Nullable;
 
 import in.vidyalai.claude.sdk.exceptions.MessageParseException;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
@@ -23,6 +26,8 @@ import in.vidyalai.claude.sdk.types.message.UserMessage;
  */
 public final class MessageParser {
 
+    private static final Logger logger = Logger.getLogger(MessageParser.class.getName());
+
     private MessageParser() {
         // Utility class
     }
@@ -30,10 +35,15 @@ public final class MessageParser {
     /**
      * Parses a raw message dictionary into a typed Message object.
      *
+     * <p>
+     * Returns {@code null} for unrecognized message types so that newer CLI
+     * versions don't crash older SDK versions (forward compatibility).
+     *
      * @param data the raw message data
-     * @return the parsed Message
+     * @return the parsed Message, or {@code null} if the message type is unknown
      * @throws MessageParseException if parsing fails
      */
+    @Nullable
     public static Message parse(Map<String, Object> data) throws MessageParseException {
         if (data == null) {
             throw new MessageParseException("Invalid message data type (expected dict, got null)", null);
@@ -51,7 +61,12 @@ public final class MessageParser {
                 case "system" -> parseSystemMessage(data);
                 case "result" -> parseResultMessage(data);
                 case "stream_event" -> parseStreamEvent(data);
-                default -> throw new MessageParseException("Unknown message type: " + messageType, data);
+                default -> {
+                    // Forward-compatible: skip unrecognized message types so newer
+                    // CLI versions don't crash older SDK versions.
+                    logger.fine("Skipping unknown message type: " + messageType);
+                    yield null;
+                }
             };
         } catch (MessageParseException e) {
             throw e;

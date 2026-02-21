@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-02-21
+
+### Fixed
+- **Forward-Compatible Message Parsing**: `MessageParser.parse()` now returns `null` for unknown message types instead of throwing `MessageParseException`, matching Python SDK v0.1.39 behavior. This makes the SDK forward-compatible with newer CLI versions that may emit new message types (e.g., `rate_limit_event` introduced in CLI v2.1.45+). The message iterator in `QueryHandler` silently skips null messages.
+
+### Synced
+- Python SDK v0.1.36 → v0.1.39 (commits 4d74748..146e3d6)
+- v0.1.37: CLI bump to 2.1.44 (no API changes)
+- v0.1.38: CLI bumps to 2.1.45 and 2.1.47 (no API changes)
+- v0.1.39: Fix unknown message types (rate_limit_event, etc.) to return null instead of crashing
+
+[0.1.5]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.5
+
 ## [0.1.4] - 2026-02-16
 
 ### Added

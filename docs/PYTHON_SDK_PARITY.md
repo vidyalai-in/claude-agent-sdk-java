@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-02-16 (Updated)
-**Java SDK Version:** 0.1.4
-**Python SDK Version:** [0.1.36](https://github.com/anthropics/claude-agent-sdk-python/commit/4d747482377cbe681c56adc39849357e8eee5e65) (latest)
+**Analysis Date:** 2026-02-21 (Updated)
+**Java SDK Version:** 0.1.5
+**Python SDK Version:** [0.1.39](https://github.com/anthropics/claude-agent-sdk-python/commit/146e3d61c34cff66542885df4d78c1556853f4d7) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,10 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.36):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.36. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.39):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.39. These updates include:
+- **v0.1.39** - Fix: unknown message types (e.g., rate_limit_event from CLI 2.1.45+) now return null instead of crashing; forward compatibility improvement
+- **v0.1.38** - CLI updates to 2.1.45 and 2.1.47 (no API changes)
+- **v0.1.37** - CLI update to 2.1.44 (no API changes)
 - **v0.1.36** - Added ThinkingConfig types and effort option, CLI update to 2.1.42
 - **v0.1.35** - CLI update to 2.1.39 (CLI version only)
 - **v0.1.34** - CLI update to 2.1.38 (CLI version only)
@@ -28,7 +31,8 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - **v0.1.23** - `get_mcp_status()` made public, CLI 2.1.20 (already in Java SDK)
 - **v0.1.22** - `tool_use_result` field added to UserMessage, CLI 2.1.19 (already in Java SDK)
 
-✅ **All new features from Python SDK v0.1.36 are now implemented in Java SDK v0.1.4-SNAPSHOT**. This includes:
+✅ **All new features from Python SDK v0.1.39 are now implemented in Java SDK v0.1.5**. This includes:
+- ✅ Forward-compatible message parsing: unknown message types return null instead of throwing (v0.1.39)
 - ✅ ThinkingConfig types (ThinkingConfigAdaptive, ThinkingConfigEnabled, ThinkingConfigDisabled)
 - ✅ thinking field in ClaudeAgentOptions (takes precedence over deprecated maxThinkingTokens)
 - ✅ effort option in ClaudeAgentOptions ("low", "medium", "high", "max")
