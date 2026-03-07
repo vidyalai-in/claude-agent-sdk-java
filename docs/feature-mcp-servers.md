@@ -12,6 +12,7 @@ MCP (Model Context Protocol) allows you to create custom tools that Claude can u
 - [Tool Schema](#tool-schema)
 - [Tool Execution](#tool-execution)
 - [External MCP Servers](#external-mcp-servers)
+- [MCP Server Status](#mcp-server-status)
 - [Examples](#examples)
 - [Best Practices](#best-practices)
 
@@ -844,6 +845,98 @@ var options = ClaudeAgentOptions.builder()
 var options = ClaudeAgentOptions.builder()
     .mcpServers(Map.of("calc", calcServer))
     .build();  // All tools allowed!
+```
+
+## MCP Server Status
+
+`ClaudeSDKClient.getMcpStatus()` returns an `McpStatusResponse` with the current connection state of all configured MCP servers.
+
+### McpStatusResponse
+
+```java
+record McpStatusResponse(
+    List<McpServerStatus> mcpServers   // list of server status entries
+)
+```
+
+### McpServerStatus
+
+```java
+record McpServerStatus(
+    String name,                               // server name as configured
+    McpServerConnectionStatus status,          // connection state
+    @Nullable McpServerInfo serverInfo,        // info from MCP handshake (when connected)
+    @Nullable String error,                    // error message (when status = FAILED)
+    @Nullable McpServerStatusConfig config,    // server configuration
+    @Nullable String scope,                    // config scope (project, user, local)
+    @Nullable List<McpToolInfo> tools          // available tools (when connected)
+)
+```
+
+### McpServerConnectionStatus
+
+```java
+enum McpServerConnectionStatus {
+    CONNECTED,    // server is connected and ready
+    FAILED,       // connection attempt failed
+    NEEDS_AUTH,   // server requires authentication
+    PENDING,      // connection in progress
+    DISABLED      // server is disabled
+}
+```
+
+### McpServerInfo
+
+```java
+record McpServerInfo(
+    String name,      // server name from MCP handshake
+    String version    // server version from MCP handshake
+)
+```
+
+### McpToolInfo
+
+```java
+record McpToolInfo(
+    String name,                               // tool name
+    @Nullable String description,              // tool description
+    @Nullable McpToolAnnotations annotations   // behavioral hints
+)
+```
+
+### McpServerStatusConfig (sealed interface)
+
+Represents server configuration in status responses. Polymorphic — use pattern matching:
+
+```java
+switch (server.config()) {
+    case McpStdioServerConfig c -> System.out.println("stdio: " + c.command());
+    case McpSseServerConfig c -> System.out.println("sse: " + c.url());
+    case McpHttpServerConfig c -> System.out.println("http: " + c.url());
+    case McpSdkServerConfigStatus c -> System.out.println("sdk: " + c.name());
+    case McpClaudeAIProxyServerConfig c -> System.out.println("proxy: " + c.url());
+    case null -> {}
+}
+```
+
+### Example: Checking MCP Status
+
+```java
+try (var client = ClaudeSDK.createClient(options)) {
+    client.connect();
+
+    McpStatusResponse status = client.getMcpStatus();
+    for (McpServerStatus server : status.mcpServers()) {
+        System.out.printf("[%s] %s%n", server.status(), server.name());
+        if (server.status() == McpServerConnectionStatus.CONNECTED) {
+            if (server.tools() != null) {
+                server.tools().forEach(t -> System.out.println("  - " + t.name()));
+            }
+        } else if (server.status() == McpServerConnectionStatus.FAILED) {
+            System.err.println("  Error: " + server.error());
+        }
+    }
+}
 ```
 
 ## See Also

@@ -46,6 +46,25 @@ new HookMatcher(
 )
 ```
 
+## Hook Input Fields
+
+All tool-related hook inputs (`PreToolUseHookInput`, `PostToolUseHookInput`, `PostToolUseFailureHookInput`, `PermissionRequestHookInput`) include two optional fields for subagent context:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `agentId` | `@Nullable String` | Sub-agent identifier. Present only inside a task-spawned sub-agent; null on the main thread. |
+| `agentType` | `@Nullable String` | Agent type name (e.g. `"general-purpose"`). Present inside a sub-agent or on the main thread when started with `--agent`. |
+
+```java
+new HookMatcher(null, null, context -> {
+    PreToolUseHookInput input = (PreToolUseHookInput) context.input();
+    if (input.agentId() != null) {
+        System.out.println("Tool used inside sub-agent: " + input.agentId());
+    }
+    return CompletableFuture.completedFuture(HookOutput.empty());
+})
+```
+
 ## HookOutput
 
 ```java

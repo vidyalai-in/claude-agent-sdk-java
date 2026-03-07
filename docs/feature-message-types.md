@@ -9,6 +9,7 @@ Understanding the message type system for processing Claude conversations.
 - [UserMessage](#usermessage)
 - [AssistantMessage](#assistantmessage)
 - [SystemMessage](#systemmessage)
+- [Task Messages](#task-messages)
 - [ResultMessage](#resultmessage)
 - [StreamEvent](#streamevent)
 - [Content Blocks](#content-blocks)
@@ -21,7 +22,8 @@ The SDK uses a sealed interface hierarchy for type-safe message handling. All me
 
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
-    SystemMessage, ResultMessage, StreamEvent {}
+    SystemMessage, TaskStartedMessage, TaskProgressMessage,
+    TaskNotificationMessage, ResultMessage, StreamEvent {}
 ```
 
 ## Forward Compatibility
@@ -49,6 +51,9 @@ Message (sealed interface)
 │       ├── ToolUseBlock - Tool invocation
 │       └── ToolResultBlock - Tool results
 ├── SystemMessage (record) - System notifications
+├── TaskStartedMessage (record) - Task lifecycle: task started
+├── TaskProgressMessage (record) - Task lifecycle: task in progress
+├── TaskNotificationMessage (record) - Task lifecycle: task completed/failed/stopped
 ├── ResultMessage (record) - Final result with cost/usage/timing
 └── StreamEvent (record) - Partial streaming updates
 ```
@@ -199,6 +204,120 @@ record SystemMessage(
 if (msg instanceof SystemMessage system) {
     System.out.println("System event: " + system.subtype());
     System.out.println("Data: " + system.data());
+}
+```
+
+## Task Messages
+
+Task messages are typed subtypes of system messages emitted during subagent task lifecycle events. They implement `Message` directly and have `type()` returning `"system"`. Existing `instanceof SystemMessage` checks do **not** match these — use the specific type.
+
+### TaskStartedMessage
+
+Emitted when a task (subagent) starts.
+
+```java
+record TaskStartedMessage(
+    String subtype,               // always "task_started"
+    Map<String, Object> data,     // raw message data
+    String taskId,                // unique task identifier
+    String description,           // human-readable description
+    String uuid,                  // message UUID
+    String sessionId,             // session identifier
+    @Nullable String toolUseId,   // tool use ID (may be null)
+    @Nullable String taskType     // task type (may be null)
+) implements Message
+```
+
+| Method | Description |
+|--------|-------------|
+| `type()` | Returns `"system"` |
+| `get(String key)` | Gets a value from the raw data map |
+
+### TaskProgressMessage
+
+Emitted periodically while a task is running.
+
+```java
+record TaskProgressMessage(
+    String subtype,                  // always "task_progress"
+    Map<String, Object> data,        // raw message data
+    String taskId,                   // unique task identifier
+    String description,              // human-readable description
+    TaskUsage usage,                 // token/tool usage so far
+    String uuid,                     // message UUID
+    String sessionId,                // session identifier
+    @Nullable String toolUseId,      // tool use ID (may be null)
+    @Nullable String lastToolName    // last tool used (may be null)
+) implements Message
+```
+
+| Method | Description |
+|--------|-------------|
+| `type()` | Returns `"system"` |
+| `get(String key)` | Gets a value from the raw data map |
+
+### TaskNotificationMessage
+
+Emitted when a task completes, fails, or is stopped.
+
+```java
+record TaskNotificationMessage(
+    String subtype,                  // always "task_notification"
+    Map<String, Object> data,        // raw message data
+    String taskId,                   // unique task identifier
+    TaskNotificationStatus status,   // COMPLETED, FAILED, or STOPPED
+    String outputFile,               // path to task output file
+    String summary,                  // human-readable summary
+    String uuid,                     // message UUID
+    String sessionId,                // session identifier
+    @Nullable String toolUseId,      // tool use ID (may be null)
+    @Nullable TaskUsage usage        // final usage statistics (may be null)
+) implements Message
+```
+
+### TaskNotificationStatus
+
+```java
+enum TaskNotificationStatus {
+    COMPLETED("completed"),
+    FAILED("failed"),
+    STOPPED("stopped")
+}
+```
+
+### TaskUsage
+
+Usage statistics for a task:
+
+```java
+record TaskUsage(
+    int totalTokens,   // total tokens used
+    int toolUses,      // number of tool invocations
+    int durationMs     // task duration in milliseconds
+)
+```
+
+### Example: Handling Task Messages
+
+```java
+for (Message msg : client.receiveMessages()) {
+    switch (msg) {
+        case TaskStartedMessage task ->
+            System.out.println("Task started: " + task.taskId() + " - " + task.description());
+        case TaskProgressMessage task -> {
+            TaskUsage usage = task.usage();
+            System.out.printf("Task progress: %s | tokens=%d tools=%d%n",
+                task.taskId(), usage.totalTokens(), usage.toolUses());
+        }
+        case TaskNotificationMessage task -> {
+            System.out.printf("Task %s: %s (%s)%n",
+                task.status(), task.taskId(), task.summary());
+            if (task.usage() != null) {
+                System.out.println("Final tokens: " + task.usage().totalTokens());
+            }
+        }
+        default -> {}
+    }
 }
 ```
 
@@ -372,6 +491,9 @@ String result = switch (message) {
     case UserMessage u -> "User: " + u.contentAsString();
     case AssistantMessage a -> "Claude: " + a.getTextContent();
     case SystemMessage s -> "System: " + s.subtype();
+    case TaskStartedMessage t -> "Task started: " + t.taskId();
+    case TaskProgressMessage t -> "Task progress: " + t.taskId();
+    case TaskNotificationMessage t -> "Task done: " + t.status();
     case ResultMessage r -> "Cost: $" + r.totalCostUsd();
     case StreamEvent e -> "Streaming: " + e.eventType();
 };

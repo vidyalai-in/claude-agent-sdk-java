@@ -161,6 +161,101 @@ Create SDK MCP server from @Tool annotated methods.
 
 **Returns**: `McpSdkServerConfig`
 
+## Session History Methods
+
+### listSessions()
+
+```java
+public static List<SDKSessionInfo> listSessions()
+```
+
+List all sessions across all projects, sorted by most-recently-modified first. Reads from `~/.claude/projects/` without fully parsing JSONL files — only first and last 64 KB per file.
+
+**Returns**: `List<SDKSessionInfo>` sorted by last-modified descending
+
+### listSessions(Path directory)
+
+```java
+public static List<SDKSessionInfo> listSessions(Path directory)
+```
+
+List sessions for a specific project directory.
+
+**Parameters**:
+- `directory` - the project working directory to filter by
+
+**Returns**: `List<SDKSessionInfo>`
+
+### listSessions(Path directory, Integer limit, boolean includeWorktrees)
+
+```java
+public static List<SDKSessionInfo> listSessions(
+    Path directory,
+    Integer limit,
+    boolean includeWorktrees
+)
+```
+
+List sessions with full control.
+
+**Parameters**:
+- `directory` - project directory to filter by (null = all projects)
+- `limit` - maximum sessions to return (null = no limit)
+- `includeWorktrees` - whether to include git worktree directories
+
+**Returns**: `List<SDKSessionInfo>`
+
+### getSessionMessages(String sessionId)
+
+```java
+public static List<SessionMessage> getSessionMessages(String sessionId)
+```
+
+Return the full conversation messages for a session. Searches all project directories.
+
+**Parameters**:
+- `sessionId` - UUID of the session
+
+**Returns**: `List<SessionMessage>` in conversation order
+
+### getSessionMessages(String sessionId, Path directory)
+
+```java
+public static List<SessionMessage> getSessionMessages(
+    String sessionId,
+    Path directory
+)
+```
+
+Return messages for a session in a specific project.
+
+**Parameters**:
+- `sessionId` - UUID of the session
+- `directory` - project working directory to search in
+
+**Returns**: `List<SessionMessage>`
+
+### getSessionMessages(String sessionId, Path directory, Integer limit, int offset)
+
+```java
+public static List<SessionMessage> getSessionMessages(
+    String sessionId,
+    Path directory,
+    Integer limit,
+    int offset
+)
+```
+
+Return messages with full control over filtering.
+
+**Parameters**:
+- `sessionId` - UUID of the session
+- `directory` - project directory to search in (null = all projects)
+- `limit` - maximum messages to return (null = no limit)
+- `offset` - number of messages to skip from the start
+
+**Returns**: `List<SessionMessage>`
+
 ## Version Method
 
 ### getVersion()
@@ -176,3 +271,4 @@ Get SDK version string.
 ## See Also
 - [Simple Queries Guide](./feature-simple-queries.md)
 - [MCP Servers Guide](./feature-mcp-servers.md)
+- [Session History Guide](./feature-session-history.md)
