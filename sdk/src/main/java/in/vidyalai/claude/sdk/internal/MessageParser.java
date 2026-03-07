@@ -15,6 +15,11 @@ import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
+import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
+import in.vidyalai.claude.sdk.types.message.TaskNotificationStatus;
+import in.vidyalai.claude.sdk.types.message.TaskProgressMessage;
+import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
+import in.vidyalai.claude.sdk.types.message.TaskUsage;
 import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
 import in.vidyalai.claude.sdk.types.message.ToolResultBlock;
@@ -171,13 +176,46 @@ public final class MessageParser {
         };
     }
 
-    private static SystemMessage parseSystemMessage(Map<String, Object> data) throws MessageParseException {
+    @SuppressWarnings("unchecked")
+    private static Message parseSystemMessage(Map<String, Object> data) throws MessageParseException {
         try {
             String subtype = (String) data.get("subtype");
             if (subtype == null) {
                 throw new MessageParseException("Missing required field: 'subtype' in system message", data);
             }
-            return new SystemMessage(subtype, data);
+            return switch (subtype) {
+                case "task_started" -> new TaskStartedMessage(
+                        subtype,
+                        data,
+                        getRequired(data, "task_id", String.class),
+                        getRequired(data, "description", String.class),
+                        getRequired(data, "uuid", String.class),
+                        getRequired(data, "session_id", String.class),
+                        (String) data.get("tool_use_id"),
+                        (String) data.get("task_type"));
+                case "task_progress" -> new TaskProgressMessage(
+                        subtype,
+                        data,
+                        getRequired(data, "task_id", String.class),
+                        getRequired(data, "description", String.class),
+                        parseTaskUsage(getRequired(data, "usage", Map.class)),
+                        getRequired(data, "uuid", String.class),
+                        getRequired(data, "session_id", String.class),
+                        (String) data.get("tool_use_id"),
+                        (String) data.get("last_tool_name"));
+                case "task_notification" -> new TaskNotificationMessage(
+                        subtype,
+                        data,
+                        getRequired(data, "task_id", String.class),
+                        TaskNotificationStatus.fromValue(getRequired(data, "status", String.class)),
+                        getRequired(data, "output_file", String.class),
+                        getRequired(data, "summary", String.class),
+                        getRequired(data, "uuid", String.class),
+                        getRequired(data, "session_id", String.class),
+                        (String) data.get("tool_use_id"),
+                        parseTaskUsageOptional((Map<String, Object>) data.get("usage")));
+                default -> new SystemMessage(subtype, data);
+            };
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in system message: " + e.getMessage(), data, e);
         }
@@ -194,6 +232,7 @@ public final class MessageParser {
             String sessionId = getRequired(data, "session_id", String.class);
 
             // Optional fields
+            String stopReason = (String) data.get("stop_reason");
             Double totalCostUsd = null;
             if (data.get("total_cost_usd") instanceof Number n) {
                 totalCostUsd = n.doubleValue();
@@ -205,7 +244,7 @@ public final class MessageParser {
 
             return new ResultMessage(
                     subtype, durationMs, durationApiMs, isError, numTurns,
-                    sessionId, totalCostUsd, usage, result, structuredOutput);
+                    sessionId, stopReason, totalCostUsd, usage, result, structuredOutput);
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in result message: " + e.getMessage(), data, e);
         }
@@ -226,6 +265,18 @@ public final class MessageParser {
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in stream_event message: " + e.getMessage(), data, e);
         }
+    }
+
+    private static TaskUsage parseTaskUsage(Map<String, Object> usage) {
+        int totalTokens = usage.get("total_tokens") instanceof Number n ? n.intValue() : 0;
+        int toolUses = usage.get("tool_uses") instanceof Number n ? n.intValue() : 0;
+        int durationMs = usage.get("duration_ms") instanceof Number n ? n.intValue() : 0;
+        return new TaskUsage(totalTokens, toolUses, durationMs);
+    }
+
+    @Nullable
+    private static TaskUsage parseTaskUsageOptional(@Nullable Map<String, Object> usage) {
+        return usage == null ? null : parseTaskUsage(usage);
     }
 
     private static <T> T getRequired(Map<String, Object> data, String key, Class<T> type) throws MessageParseException {

@@ -18,9 +18,16 @@ import in.vidyalai.claude.sdk.types.config.SettingSource;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.config.ToolsPreset;
 import in.vidyalai.claude.sdk.types.hook.HookContext;
+import in.vidyalai.claude.sdk.types.hook.input.PostToolUseHookInput;
+import in.vidyalai.claude.sdk.types.hook.input.PreToolUseHookInput;
+import in.vidyalai.claude.sdk.types.mcp.McpClaudeAIProxyServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpHttpServerConfig;
+import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfigStatus;
+import in.vidyalai.claude.sdk.types.mcp.McpServerConnectionStatus;
 import in.vidyalai.claude.sdk.types.mcp.McpSseServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpStdioServerConfig;
+import in.vidyalai.claude.sdk.types.message.TaskNotificationStatus;
+import in.vidyalai.claude.sdk.types.message.TaskUsage;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.AssistantMessageError;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
@@ -139,6 +146,7 @@ class AdditionalTypesTest {
                 false,
                 3,
                 "session-xyz",
+                null,
                 0.0035,
                 Map.of("input_tokens", 100, "output_tokens", 50),
                 "Task completed successfully",
@@ -157,8 +165,8 @@ class AdditionalTypesTest {
 
     @Test
     void testResultMessageIsError() {
-        ResultMessage success = new ResultMessage("success", 100, 80, false, 1, "s", 0.001, null, "ok", null);
-        ResultMessage error = new ResultMessage("error", 100, 80, true, 1, "s", 0.001, null, "failed", null);
+        ResultMessage success = new ResultMessage("success", 100, 80, false, 1, "s", null, 0.001, null, "ok", null);
+        ResultMessage error = new ResultMessage("error", 100, 80, true, 1, "s", null, 0.001, null, "failed", null);
 
         assertThat(success.isError()).isFalse();
         assertThat(error.isError()).isTrue();
@@ -538,6 +546,154 @@ class AdditionalTypesTest {
 
         assertThat(context.toolUseId()).isEqualTo("tool-use-123");
         assertThat(context.signal()).isEqualTo(signal);
+    }
+
+    // ==================== Hook Input agentId Tests ====================
+
+    @Test
+    void testPreToolUseHookInputWithAgentId() {
+        // Tool called from inside a sub-agent
+        PreToolUseHookInput hookInput = new PreToolUseHookInput(
+                "sess-1", "/tmp/transcript", "/home/user", null,
+                "Bash", Map.of("command", "echo hello"), "toolu_abc123",
+                "agent-42", "researcher");
+
+        assertThat(hookInput.agentId()).isEqualTo("agent-42");
+        assertThat(hookInput.agentType()).isEqualTo("researcher");
+    }
+
+    @Test
+    void testPreToolUseHookInputWithoutAgentId() {
+        // Tool called on main thread — agentId absent
+        PreToolUseHookInput hookInput = new PreToolUseHookInput(
+                "sess-1", "/tmp/transcript", "/home/user", null,
+                "Bash", Map.of("command", "echo hello"), "toolu_def456",
+                null, null);
+
+        assertThat(hookInput.agentId()).isNull();
+        assertThat(hookInput.agentType()).isNull();
+    }
+
+    @Test
+    void testPostToolUseHookInputWithAgentId() {
+        PostToolUseHookInput hookInput = new PostToolUseHookInput(
+                "sess-1", "/tmp/transcript", "/home/user", null,
+                "Bash", Map.of("command", "echo hello"),
+                Map.of("content", List.of(Map.of("type", "text", "text", "hello"))),
+                "toolu_abc123", "agent-42", null);
+
+        assertThat(hookInput.agentId()).isEqualTo("agent-42");
+    }
+
+    // ==================== TaskUsage Tests ====================
+
+    @Test
+    void testTaskUsageFields() {
+        TaskUsage usage = new TaskUsage(1500, 3, 2000);
+
+        assertThat(usage.totalTokens()).isEqualTo(1500);
+        assertThat(usage.toolUses()).isEqualTo(3);
+        assertThat(usage.durationMs()).isEqualTo(2000);
+    }
+
+    // ==================== TaskNotificationStatus Tests ====================
+
+    @Test
+    void testTaskNotificationStatusValues() {
+        assertThat(TaskNotificationStatus.COMPLETED.getValue()).isEqualTo("completed");
+        assertThat(TaskNotificationStatus.FAILED.getValue()).isEqualTo("failed");
+        assertThat(TaskNotificationStatus.STOPPED.getValue()).isEqualTo("stopped");
+    }
+
+    @Test
+    void testTaskNotificationStatusFromValue() {
+        assertThat(TaskNotificationStatus.fromValue("completed")).isEqualTo(TaskNotificationStatus.COMPLETED);
+        assertThat(TaskNotificationStatus.fromValue("failed")).isEqualTo(TaskNotificationStatus.FAILED);
+        assertThat(TaskNotificationStatus.fromValue("stopped")).isEqualTo(TaskNotificationStatus.STOPPED);
+    }
+
+    @Test
+    void testTaskNotificationStatusToString() {
+        assertThat(TaskNotificationStatus.COMPLETED.toString()).isEqualTo("completed");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testTaskNotificationStatusFromValueUnknown() {
+        assertThatThrownBy(() -> TaskNotificationStatus.fromValue("unknown"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unknown TaskNotificationStatus");
+    }
+
+    // ==================== McpServerConnectionStatus Tests ====================
+
+    @Test
+    void testMcpServerConnectionStatusValues() {
+        assertThat(McpServerConnectionStatus.CONNECTED.getValue()).isEqualTo("connected");
+        assertThat(McpServerConnectionStatus.FAILED.getValue()).isEqualTo("failed");
+        assertThat(McpServerConnectionStatus.NEEDS_AUTH.getValue()).isEqualTo("needs-auth");
+        assertThat(McpServerConnectionStatus.PENDING.getValue()).isEqualTo("pending");
+        assertThat(McpServerConnectionStatus.DISABLED.getValue()).isEqualTo("disabled");
+    }
+
+    @Test
+    void testMcpServerConnectionStatusFromValue() {
+        assertThat(McpServerConnectionStatus.fromValue("connected")).isEqualTo(McpServerConnectionStatus.CONNECTED);
+        assertThat(McpServerConnectionStatus.fromValue("needs-auth")).isEqualTo(McpServerConnectionStatus.NEEDS_AUTH);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testMcpServerConnectionStatusFromValueUnknown() {
+        assertThatThrownBy(() -> McpServerConnectionStatus.fromValue("unknown"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unknown McpServerConnectionStatus");
+    }
+
+    // ==================== McpSdkServerConfigStatus Tests ====================
+
+    @Test
+    void testMcpSdkServerConfigStatus() {
+        McpSdkServerConfigStatus config = new McpSdkServerConfigStatus("my-sdk-server");
+
+        assertThat(config.type()).isEqualTo("sdk");
+        assertThat(config.name()).isEqualTo("my-sdk-server");
+    }
+
+    // ==================== McpClaudeAIProxyServerConfig Tests ====================
+
+    @Test
+    void testMcpClaudeAIProxyServerConfig() {
+        McpClaudeAIProxyServerConfig config = new McpClaudeAIProxyServerConfig(
+                "https://proxy.example.com", "proxy-id-123");
+
+        assertThat(config.type()).isEqualTo("claudeai-proxy");
+        assertThat(config.url()).isEqualTo("https://proxy.example.com");
+        assertThat(config.id()).isEqualTo("proxy-id-123");
+    }
+
+    // ==================== McpServerStatusConfig implementors ====================
+
+    @Test
+    void testStdioConfigImplementsStatusConfig() {
+        McpStdioServerConfig config = new McpStdioServerConfig("node");
+
+        assertThat(config).isInstanceOf(in.vidyalai.claude.sdk.types.mcp.McpServerStatusConfig.class);
+        assertThat(config).isInstanceOf(in.vidyalai.claude.sdk.types.mcp.McpServerConfig.class);
+    }
+
+    @Test
+    void testSseConfigImplementsStatusConfig() {
+        McpSseServerConfig config = new McpSseServerConfig("https://example.com/sse");
+
+        assertThat(config).isInstanceOf(in.vidyalai.claude.sdk.types.mcp.McpServerStatusConfig.class);
+    }
+
+    @Test
+    void testHttpConfigImplementsStatusConfig() {
+        McpHttpServerConfig config = new McpHttpServerConfig("https://example.com/api");
+
+        assertThat(config).isInstanceOf(in.vidyalai.claude.sdk.types.mcp.McpServerStatusConfig.class);
     }
 
 }

@@ -198,7 +198,7 @@ class CallbacksTest {
         };
 
         callback.apply(
-                new PreToolUseHookInput("session", "/path", "/cwd", "default", "Bash", Map.of(), "tool-id"),
+                new PreToolUseHookInput("session", "/path", "/cwd", "default", "Bash", Map.of(), "tool-id", null, null),
                 new HookContext("tool-use-123")).join();
 
         assertThat(hookCalled.get()).isTrue();
@@ -215,7 +215,7 @@ class CallbacksTest {
 
         PreToolUseHookInput input = new PreToolUseHookInput(
                 "session-123", "/transcript", "/cwd", "bypassPermissions",
-                "Bash", Map.of("command", "ls"), "tool-use-id-123");
+                "Bash", Map.of("command", "ls"), "tool-use-id-123", null, null);
         callback.apply(input, new HookContext("tool-123")).join();
 
         assertThat(capturedInput.get()).isInstanceOf(PreToolUseHookInput.class);
@@ -237,7 +237,7 @@ class CallbacksTest {
 
         HookContext context = new HookContext("tool-use-456");
         callback.apply(
-                new PreToolUseHookInput("s", "/t", "/c", "d", "Tool", Map.of(), "tool-id"),
+                new PreToolUseHookInput("s", "/t", "/c", "d", "Tool", Map.of(), "tool-id", null, null),
                 context).join();
 
         assertThat(capturedContext.get().toolUseId()).isEqualTo("tool-use-456");
@@ -383,12 +383,12 @@ class CallbacksTest {
     void testHookInputTypes() {
         // Test all hook input types
         PreToolUseHookInput preToolUse = new PreToolUseHookInput(
-                "s", "/t", "/c", "d", "Tool", Map.of(), "tool-id-123");
+                "s", "/t", "/c", "d", "Tool", Map.of(), "tool-id-123", null, null);
         assertThat(preToolUse.hookEventName()).isEqualTo("PreToolUse");
         assertThat(preToolUse.toolUseId()).isEqualTo("tool-id-123");
 
         PostToolUseHookInput postToolUse = new PostToolUseHookInput(
-                "s", "/t", "/c", "d", "Tool", Map.of(), "result", "tool-id-456");
+                "s", "/t", "/c", "d", "Tool", Map.of(), "result", "tool-id-456", null, null);
         assertThat(postToolUse.hookEventName()).isEqualTo("PostToolUse");
         assertThat(postToolUse.toolResponse()).isEqualTo("result");
         assertThat(postToolUse.toolUseId()).isEqualTo("tool-id-456");
@@ -433,7 +433,7 @@ class CallbacksTest {
         assertThat(subagentStart.agentType()).isEqualTo("plan");
 
         PermissionRequestHookInput permissionRequest = new PermissionRequestHookInput(
-                "s", "/t", "/c", "d", "Bash", Map.of("command", "ls"), List.of());
+                "s", "/t", "/c", "d", "Bash", Map.of("command", "ls"), List.of(), null, null);
         assertThat(permissionRequest.hookEventName()).isEqualTo("PermissionRequest");
         assertThat(permissionRequest.toolName()).isEqualTo("Bash");
         assertThat(permissionRequest.toolInput()).containsEntry("command", "ls");

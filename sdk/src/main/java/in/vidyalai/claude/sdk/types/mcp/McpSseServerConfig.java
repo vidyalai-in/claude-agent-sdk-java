@@ -14,7 +14,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public record McpSseServerConfig(
         @JsonProperty("url") String url,
-        @JsonProperty("headers") @Nullable Map<String, String> headers) implements McpServerConfig {
+        @JsonProperty("headers") @Nullable Map<String, String> headers) implements McpServerConfig, McpServerStatusConfig {
 
     @Override
     public String type() {

@@ -39,12 +39,15 @@ import in.vidyalai.claude.sdk.types.control.request.SDKControlInitializeRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlInterruptRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlMCPStatusRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlMcpMessageRequest;
+import in.vidyalai.claude.sdk.types.control.request.SDKControlMcpReconnectRequest;
+import in.vidyalai.claude.sdk.types.control.request.SDKControlMcpToggleRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlPermissionRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlRequestData;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlRewindFilesRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlSetModelRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlSetPermissionModeRequest;
+import in.vidyalai.claude.sdk.types.control.request.SDKControlStopTaskRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKHookCallbackRequest;
 import in.vidyalai.claude.sdk.types.control.response.ControlErrorResponse;
 import in.vidyalai.claude.sdk.types.control.response.ControlResponse;
@@ -55,6 +58,7 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
 import in.vidyalai.claude.sdk.types.hook.input.HookInput;
 import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
+import in.vidyalai.claude.sdk.types.mcp.McpStatusResponse;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;
 import in.vidyalai.claude.sdk.types.permission.PermissionResult;
@@ -632,6 +636,18 @@ public class QueryHandler implements AutoCloseable {
                     // Rewind files is sent from SDK to CLI, not CLI to SDK
                     throw new ClaudeSDKException("Unexpected rewind_files request from CLI: " + ignored);
                 }
+                case SDKControlMcpReconnectRequest ignored -> {
+                    // MCP reconnect is sent from SDK to CLI, not CLI to SDK
+                    throw new ClaudeSDKException("Unexpected mcp_reconnect request from CLI: " + ignored);
+                }
+                case SDKControlMcpToggleRequest ignored -> {
+                    // MCP toggle is sent from SDK to CLI, not CLI to SDK
+                    throw new ClaudeSDKException("Unexpected mcp_toggle request from CLI: " + ignored);
+                }
+                case SDKControlStopTaskRequest ignored -> {
+                    // Stop task is sent from SDK to CLI, not CLI to SDK
+                    throw new ClaudeSDKException("Unexpected stop_task request from CLI: " + ignored);
+                }
             }
 
             // Send success response
@@ -728,15 +744,16 @@ public class QueryHandler implements AutoCloseable {
     }
 
     /**
-     * Sends an get current MCP server connection status control request.
+     * Sends a get current MCP server connection status control request.
      *
-     * @return MCP server connection status map
+     * @return typed MCP server status response
      * @throws ClaudeSDKException if the mcp status request fails
      */
-    public Map<String, Object> getMcpStatus() {
+    public McpStatusResponse getMcpStatus() {
         SDKControlMCPStatusRequest request = new SDKControlMCPStatusRequest();
         SDKControlResponse response = sendControlRequest(request, Duration.ofSeconds(RESULT_WAIT_SECS));
-        return ((ControlResponse) response.response()).response();
+        Map<String, Object> rawResponse = ((ControlResponse) response.response()).response();
+        return MAPPER.convertValue(rawResponse, McpStatusResponse.class);
     }
 
     /**
@@ -781,6 +798,44 @@ public class QueryHandler implements AutoCloseable {
      */
     public void rewindFiles(String userMessageId) {
         SDKControlRewindFilesRequest request = new SDKControlRewindFilesRequest(userMessageId);
+        sendControlRequest(request, Duration.ofSeconds(RESULT_WAIT_SECS));
+    }
+
+    /**
+     * Reconnects a disconnected or failed MCP server.
+     *
+     * @param serverName the name of the MCP server to reconnect
+     * @throws ClaudeSDKException if the reconnect request fails
+     */
+    public void reconnectMcpServer(String serverName) {
+        SDKControlMcpReconnectRequest request = new SDKControlMcpReconnectRequest(serverName);
+        sendControlRequest(request, Duration.ofSeconds(RESULT_WAIT_SECS));
+    }
+
+    /**
+     * Enables or disables an MCP server.
+     *
+     * @param serverName the name of the MCP server to toggle
+     * @param enabled    true to enable the server, false to disable it
+     * @throws ClaudeSDKException if the toggle request fails
+     */
+    public void toggleMcpServer(String serverName, boolean enabled) {
+        SDKControlMcpToggleRequest request = new SDKControlMcpToggleRequest(serverName, enabled);
+        sendControlRequest(request, Duration.ofSeconds(RESULT_WAIT_SECS));
+    }
+
+    /**
+     * Stops a running task.
+     *
+     * <p>
+     * After this resolves, a {@code task_notification} system message with
+     * status {@code "stopped"} will be emitted by the CLI in the message stream.
+     *
+     * @param taskId the task ID from task_notification events
+     * @throws ClaudeSDKException if the stop request fails
+     */
+    public void stopTask(String taskId) {
+        SDKControlStopTaskRequest request = new SDKControlStopTaskRequest(taskId);
         sendControlRequest(request, Duration.ofSeconds(RESULT_WAIT_SECS));
     }
 

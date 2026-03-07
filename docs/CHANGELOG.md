@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-03-07
+
+### Added
+- **Typed MCP Status Response**: `getMcpStatus()` on `ClaudeSDKClient` now returns typed `McpStatusResponse` instead of raw `Map<String, Object>`. New types added: `McpStatusResponse`, `McpServerStatus`, `McpServerInfo`, `McpToolInfo`, `McpToolAnnotations` (matching Python SDK v0.1.45)
+- **MCP Control Methods**: Three new methods on `ClaudeSDKClient`:
+  - `reconnectMcpServer(String serverName)` — reconnect a disconnected or failed MCP server
+  - `toggleMcpServer(String serverName, boolean enabled)` — enable or disable an MCP server
+  - `stopTask(String taskId)` — stop a running task (emits `task_notification` with status `"stopped"`)
+- **Typed Task System Messages**: `parseSystemMessage` now dispatches to typed subclasses (matching Python SDK v0.1.45):
+  - `TaskStartedMessage` — emitted when a task starts (fields: `taskId`, `description`, `uuid`, `sessionId`, `toolUseId`, `taskType`)
+  - `TaskProgressMessage` — emitted while a task is in progress (adds `usage`, `lastToolName`)
+  - `TaskNotificationMessage` — emitted when a task completes/fails/stops (adds `status`, `outputFile`, `summary`, `usage`)
+  - All three implement `Message` and are sealed variants of the interface
+- **`stop_reason` on `ResultMessage`**: New optional `stopReason` field on `ResultMessage` (matching Python SDK v0.1.45)
+- **`agent_id`/`agent_type` on tool-lifecycle hook inputs**: Added optional `agentId` and `agentType` fields to `PreToolUseHookInput`, `PostToolUseHookInput`, `PostToolUseFailureHookInput`, and `PermissionRequestHookInput` for sub-agent attribution (matching Python SDK v0.1.45)
+- **Session listing APIs**: Full implementation of `ClaudeSDK.listSessions()` and `ClaudeSDK.getSessionMessages()` (matching Python SDK v0.1.45):
+  - `listSessions()` — list all sessions across all projects from `~/.claude/projects/`
+  - `listSessions(Path directory)` — list sessions for a specific project directory
+  - `listSessions(Path directory, Integer limit, boolean includeWorktrees)` — full control
+  - `getSessionMessages(String sessionId)` — retrieve full conversation history for a session
+  - `getSessionMessages(String sessionId, Path directory)` — search within a specific project
+  - `getSessionMessages(String sessionId, Path directory, Integer limit, int offset)` — full control
+  - Sessions are read directly from JSONL files using lightweight head/tail reads (64 KB each) for listing and full reads for messages
+  - Internal `Sessions` class mirrors Python SDK's `_internal/sessions.py` including path sanitization, hash algorithm, sidechain filtering, and conversation chain reconstruction
+- **Session listing types**: Added `SDKSessionInfo` and `SessionMessage` record types (matching Python SDK v0.1.45)
+- **New control protocol request types**: `SDKControlMcpReconnectRequest`, `SDKControlMcpToggleRequest`, `SDKControlStopTaskRequest`
+
+### Fixed
+- **Fine-grained tool streaming**: When `includePartialMessages` option is `true`, the env var `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=1` is now set automatically so tool input parameters stream eagerly rather than being buffered (matching Python SDK v0.1.48)
+
+### Synced
+- Python SDK v0.1.39 → v0.1.48 (commits 146e3d6..d6f0352)
+- v0.1.40-v0.1.44: CLI bumps to 2.1.51-2.1.59 (no API changes)
+- v0.1.45: Major API additions (task messages, MCP control, session types, stop_reason, typed MCP status)
+- v0.1.46: Fix string prompt stdin closing (already correct in Java SDK); CLI 2.1.68-2.1.69
+- v0.1.47: CLI bump to 2.1.70 (no API changes)
+- v0.1.48: Fine-grained tool streaming for partial messages; CLI 2.1.71
+
+[0.1.6]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.6
+
 ## [0.1.5] - 2026-02-21
 
 ### Fixed

@@ -24,6 +24,10 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
  * @param toolName              name of the tool requiring permission
  * @param toolInput             input parameters for the tool
  * @param permissionSuggestions optional list of permission suggestions
+ * @param agentId               sub-agent identifier (present only inside a task-spawned
+ *                              sub-agent; absent on main thread)
+ * @param agentType             agent type name (e.g. "general-purpose"); present inside
+ *                              a sub-agent or on main thread when started with --agent
  */
 public record PermissionRequestHookInput(
         @JsonProperty("session_id") String sessionId,
@@ -32,7 +36,9 @@ public record PermissionRequestHookInput(
         @JsonProperty("permission_mode") @Nullable String permissionMode,
         @JsonProperty("tool_name") String toolName,
         @JsonProperty("tool_input") Map<String, Object> toolInput,
-        @JsonProperty("permission_suggestions") @Nullable List<Object> permissionSuggestions) implements HookInput {
+        @JsonProperty("permission_suggestions") @Nullable List<Object> permissionSuggestions,
+        @JsonProperty("agent_id") @Nullable String agentId,
+        @JsonProperty("agent_type") @Nullable String agentType) implements HookInput {
 
     @JsonProperty("hook_event_name")
     @Override

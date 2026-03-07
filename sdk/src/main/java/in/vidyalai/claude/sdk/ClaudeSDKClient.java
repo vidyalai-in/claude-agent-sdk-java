@@ -23,6 +23,7 @@ import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
+import in.vidyalai.claude.sdk.types.mcp.McpStatusResponse;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;
@@ -490,20 +491,69 @@ public class ClaudeSDKClient implements AutoCloseable {
      * Get current MCP server connection status (only works with streaming mode).
      * Queries the Claude Code CLI for the live connection status of all configured
      * MCP servers.
-     * 
-     * @return Map with MCP server status information. Contains a 'mcpServers' key
-     *         with a list of server status objects, each having:
-     *         - 'name': Server name (str)
-     *         - 'status': Connection status ('connected', 'pending', 'failed',
-     *         'needs-auth', 'disabled')
-     * 
+     *
+     * @return typed MCP status response with a {@code mcpServers} list. Each entry includes:
+     *         name, status ('connected', 'pending', 'failed', 'needs-auth', 'disabled'),
+     *         serverInfo (when connected), error (when failed), config, scope, and tools.
      * @throws CLIConnectionException if not connected
      * @throws IllegalStateException  if client is closed
      */
     @SuppressWarnings("null")
-    public Map<String, Object> getMcpStatus() throws CLIConnectionException {
+    public McpStatusResponse getMcpStatus() throws CLIConnectionException {
         ensureConnected();
         return query.getMcpStatus();
+    }
+
+    /**
+     * Reconnects a disconnected or failed MCP server (only works with streaming mode).
+     *
+     * <p>
+     * Use this to retry connecting to an MCP server that failed to connect or was
+     * disconnected.
+     *
+     * @param serverName the name of the MCP server to reconnect
+     * @throws CLIConnectionException if not connected
+     * @throws IllegalStateException  if client is closed
+     */
+    @SuppressWarnings("null")
+    public void reconnectMcpServer(String serverName) throws CLIConnectionException {
+        ensureConnected();
+        query.reconnectMcpServer(serverName);
+    }
+
+    /**
+     * Enables or disables an MCP server (only works with streaming mode).
+     *
+     * <p>
+     * Disabling a server disconnects it and removes its tools from the available tool
+     * set. Enabling a server reconnects it and makes its tools available again.
+     *
+     * @param serverName the name of the MCP server to toggle
+     * @param enabled    true to enable the server, false to disable it
+     * @throws CLIConnectionException if not connected
+     * @throws IllegalStateException  if client is closed
+     */
+    @SuppressWarnings("null")
+    public void toggleMcpServer(String serverName, boolean enabled) throws CLIConnectionException {
+        ensureConnected();
+        query.toggleMcpServer(serverName, enabled);
+    }
+
+    /**
+     * Stops a running task (only works with streaming mode).
+     *
+     * <p>
+     * After this resolves, a {@code task_notification} system message with status
+     * {@code "stopped"} will be emitted by the CLI in the message stream.
+     *
+     * @param taskId the task ID from task_notification events
+     * @throws CLIConnectionException if not connected
+     * @throws IllegalStateException  if client is closed
+     */
+    @SuppressWarnings("null")
+    public void stopTask(String taskId) throws CLIConnectionException {
+        ensureConnected();
+        query.stopTask(taskId);
     }
 
     /**

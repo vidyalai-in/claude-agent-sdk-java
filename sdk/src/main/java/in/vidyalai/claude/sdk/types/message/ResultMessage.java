@@ -24,6 +24,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param isError          whether the result is an error
  * @param numTurns         number of conversation turns
  * @param sessionId        the session identifier
+ * @param stopReason       reason the session stopped (may be null)
  * @param totalCostUsd     total cost in USD (may be null)
  * @param usage            token usage breakdown (may be null)
  * @param result           the result text (may be null)
@@ -37,6 +38,7 @@ public record ResultMessage(
         @JsonProperty("is_error") boolean isError,
         @JsonProperty("num_turns") int numTurns,
         @JsonProperty("session_id") String sessionId,
+        @JsonProperty("stop_reason") @Nullable String stopReason,
         @JsonProperty("total_cost_usd") @Nullable Double totalCostUsd,
         @JsonProperty("usage") @Nullable Map<String, Object> usage,
         @JsonProperty("result") @Nullable String result,

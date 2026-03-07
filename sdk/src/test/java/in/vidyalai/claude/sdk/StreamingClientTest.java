@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.transport.Transport;
+import in.vidyalai.claude.sdk.types.mcp.McpStatusResponse;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
@@ -395,6 +396,146 @@ class StreamingClientTest {
         client.close();
     }
 
+    // ==================== MCP Control Tests ====================
+
+    @Test
+    void testReconnectMcpServer() {
+        MockTransport mockTransport = createMockTransport();
+
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport);
+        client.connect();
+
+        // Should not throw
+        client.reconnectMcpServer("my-server");
+
+        // Verify control request was sent with correct subtype and serverName
+        boolean found = mockTransport.getWrittenData().stream().anyMatch(
+                d -> d.contains("\"subtype\":\"mcp_reconnect\"") && d.contains("\"serverName\":\"my-server\""));
+        assertThat(found).isTrue();
+
+        client.close();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testReconnectMcpServerNotConnected() {
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), createMockTransport());
+
+        assertThatThrownBy(() -> client.reconnectMcpServer("my-server"))
+                .isInstanceOf(CLIConnectionException.class)
+                .hasMessageContaining("Not connected");
+
+        client.close();
+    }
+
+    @Test
+    void testToggleMcpServer_disabled() {
+        MockTransport mockTransport = createMockTransport();
+
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport);
+        client.connect();
+
+        client.toggleMcpServer("my-server", false);
+
+        boolean found = mockTransport.getWrittenData().stream().anyMatch(d -> d.contains("\"subtype\":\"mcp_toggle\"")
+                && d.contains("\"serverName\":\"my-server\"")
+                && d.contains("\"enabled\":false"));
+        assertThat(found).isTrue();
+
+        client.close();
+    }
+
+    @Test
+    void testToggleMcpServer_enabled() {
+        MockTransport mockTransport = createMockTransport();
+
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport);
+        client.connect();
+
+        client.toggleMcpServer("other-server", true);
+
+        boolean found = mockTransport.getWrittenData().stream().anyMatch(d -> d.contains("\"subtype\":\"mcp_toggle\"")
+                && d.contains("\"serverName\":\"other-server\"")
+                && d.contains("\"enabled\":true"));
+        assertThat(found).isTrue();
+
+        client.close();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testToggleMcpServerNotConnected() {
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), createMockTransport());
+
+        assertThatThrownBy(() -> client.toggleMcpServer("my-server", true))
+                .isInstanceOf(CLIConnectionException.class)
+                .hasMessageContaining("Not connected");
+
+        client.close();
+    }
+
+    @Test
+    void testStopTask() {
+        MockTransport mockTransport = createMockTransport();
+
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport);
+        client.connect();
+
+        client.stopTask("task-abc123");
+
+        boolean found = mockTransport.getWrittenData().stream()
+                .anyMatch(d -> d.contains("\"subtype\":\"stop_task\"") && d.contains("\"task_id\":\"task-abc123\""));
+        assertThat(found).isTrue();
+
+        client.close();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testStopTaskNotConnected() {
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), createMockTransport());
+
+        assertThatThrownBy(() -> client.stopTask("task-abc123"))
+                .isInstanceOf(CLIConnectionException.class)
+                .hasMessageContaining("Not connected");
+
+        client.close();
+    }
+
+    @Test
+    void testGetMcpStatus() {
+        MockTransport mockTransport = createMockTransport();
+        mockTransport.setMcpStatusResponseData(Map.of(
+                "mcpServers", List.of(
+                        Map.of("name", "my-server", "status", "connected"),
+                        Map.of("name", "failed-server", "status", "failed", "error", "Connection refused"))));
+
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport);
+        client.connect();
+
+        McpStatusResponse status = client.getMcpStatus();
+
+        assertThat(status).isNotNull();
+        assertThat(status.mcpServers()).hasSize(2);
+        assertThat(status.mcpServers().get(0).name()).isEqualTo("my-server");
+        assertThat(status.mcpServers().get(1).name()).isEqualTo("failed-server");
+        assertThat(status.mcpServers().get(1).error()).isEqualTo("Connection refused");
+
+        client.close();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetMcpStatusNotConnected() {
+        var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), createMockTransport());
+
+        assertThatThrownBy(client::getMcpStatus)
+                .isInstanceOf(CLIConnectionException.class)
+                .hasMessageContaining("Not connected");
+
+        client.close();
+    }
+
     // ==================== Streaming Input Tests ====================
 
     @Test
@@ -431,7 +572,8 @@ class StreamingClientTest {
 
         assertThat(client.isConnected()).isTrue();
 
-        // Verify query() accepted the iterator (implementation detail: messages are queued asynchronously)
+        // Verify query() accepted the iterator (implementation detail: messages are
+        // queued asynchronously)
         // The key test is that query(Iterator) method exists and doesn't throw
         assertThat(mockTransport.getWrittenData()).isNotEmpty();
 
@@ -552,6 +694,11 @@ class StreamingClientTest {
         private boolean interruptSupported = false;
         private final ObjectMapper objectMapper = new ObjectMapper();
         private final AtomicBoolean endSent = new AtomicBoolean(false);
+        private volatile Map<String, Object> mcpStatusResponseData = null;
+
+        void setMcpStatusResponseData(Map<String, Object> data) {
+            this.mcpStatusResponseData = data;
+        }
 
         void addControlResponse(String requestId, String subtype) {
             Map<String, Object> response = new HashMap<>();
@@ -562,6 +709,8 @@ class StreamingClientTest {
             if ("initialize".equals(subtype)) {
                 inner.put("commands", List.of());
                 inner.put("output_style", "default");
+            } else if ("mcp_status".equals(subtype) && mcpStatusResponseData != null) {
+                inner.put("response", mcpStatusResponseData);
             }
             response.put("response", inner);
             messagesToReturn.offer(response);

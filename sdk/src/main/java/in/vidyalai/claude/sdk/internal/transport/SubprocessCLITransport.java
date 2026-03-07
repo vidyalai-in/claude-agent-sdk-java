@@ -356,6 +356,33 @@ public class SubprocessCLITransport implements Transport {
     record McpConfigPayload(Map<String, McpServerConfig> mcpServers) {
     }
 
+    /**
+     * Applies SDK-managed environment variable defaults to the given environment map.
+     *
+     * <p>
+     * Package-private for testing.
+     *
+     * @param options the agent options
+     * @param env     the environment map to mutate
+     */
+    static void applyEnvDefaults(ClaudeAgentOptions options, Map<String, String> env) {
+        env.putAll(options.env());
+        env.put("CLAUDE_CODE_ENTRYPOINT", "sdk-java");
+        env.put("CLAUDE_AGENT_SDK_VERSION", SdkVersion.VERSION);
+
+        if (options.enableFileCheckpointing()) {
+            env.put("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");
+        }
+
+        // Enable fine-grained tool streaming when partial messages are requested.
+        // --include-partial-messages emits stream_event messages, but tool input
+        // parameters are still buffered by the API unless eager_input_streaming is
+        // also enabled at the per-tool level via this env var.
+        if (options.includePartialMessages()) {
+            env.putIfAbsent("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING", "1");
+        }
+    }
+
     @SuppressWarnings({ "unchecked", "null" })
     private List<String> buildCommand() {
         List<String> cmd = new ArrayList<>();
@@ -591,13 +618,7 @@ public class SubprocessCLITransport implements Transport {
 
             // Set environment
             Map<String, String> env = pb.environment();
-            env.putAll(options.env());
-            env.put("CLAUDE_CODE_ENTRYPOINT", "sdk-java");
-            env.put("CLAUDE_AGENT_SDK_VERSION", SdkVersion.VERSION);
-
-            if (options.enableFileCheckpointing()) {
-                env.put("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");
-            }
+            applyEnvDefaults(options, env);
 
             if (cwd != null) {
                 pb.directory(cwd.toFile());

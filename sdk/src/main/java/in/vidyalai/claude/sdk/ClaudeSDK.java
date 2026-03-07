@@ -1,5 +1,6 @@
 package in.vidyalai.claude.sdk;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -12,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 
 import in.vidyalai.claude.sdk.internal.QueryHandler;
 import in.vidyalai.claude.sdk.internal.SdkVersion;
+import in.vidyalai.claude.sdk.internal.Sessions;
 import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.mcp.SdkMcpTool;
@@ -20,6 +22,8 @@ import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
+import in.vidyalai.claude.sdk.types.message.SDKSessionInfo;
+import in.vidyalai.claude.sdk.types.message.SessionMessage;
 
 /**
  * Main facade for the Claude Agent SDK.
@@ -502,6 +506,90 @@ public final class ClaudeSDK {
     public static McpSdkServerConfig createSdkMcpServer(String name, Object instance) {
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods(name, instance);
         return server.toConfig();
+    }
+
+    /**
+     * Lists all sessions across all projects, sorted by most-recently-modified
+     * first.
+     *
+     * <p>
+     * Reads session metadata from {@code ~/.claude/projects/} without fully
+     * parsing JSONL files — only the first and last 64 KB are read per file.
+     *
+     * @return session list sorted by last-modified descending
+     */
+    public static List<SDKSessionInfo> listSessions() {
+        return Sessions.listSessions(null, null, false);
+    }
+
+    /**
+     * Lists sessions for a specific project directory.
+     *
+     * @param directory the project working directory to filter by
+     * @return session list sorted by last-modified descending
+     */
+    public static List<SDKSessionInfo> listSessions(Path directory) {
+        return Sessions.listSessions(directory.toString(), null, false);
+    }
+
+    /**
+     * Lists sessions with full control over filtering and limits.
+     *
+     * @param directory        project working directory to filter by (null = all
+     *                         projects)
+     * @param limit            maximum sessions to return (null = no limit)
+     * @param includeWorktrees whether to include git worktree directories
+     * @return session list sorted by last-modified descending
+     */
+    public static List<SDKSessionInfo> listSessions(
+            Path directory, Integer limit, boolean includeWorktrees) {
+        return Sessions.listSessions(
+                directory != null ? directory.toString() : null,
+                limit,
+                includeWorktrees);
+    }
+
+    /**
+     * Returns the full conversation messages for a session.
+     *
+     * <p>
+     * Searches all project directories under {@code ~/.claude/projects/}.
+     *
+     * @param sessionId UUID of the session
+     * @return ordered list of visible conversation messages
+     */
+    public static List<SessionMessage> getSessionMessages(String sessionId) {
+        return Sessions.getSessionMessages(sessionId, null, null, 0);
+    }
+
+    /**
+     * Returns the conversation messages for a session in a specific project.
+     *
+     * @param sessionId UUID of the session
+     * @param directory project working directory to search in
+     * @return ordered list of visible conversation messages
+     */
+    public static List<SessionMessage> getSessionMessages(String sessionId, Path directory) {
+        return Sessions.getSessionMessages(
+                sessionId, directory != null ? directory.toString() : null, null, 0);
+    }
+
+    /**
+     * Returns conversation messages with full control over filtering.
+     *
+     * @param sessionId UUID of the session
+     * @param directory project working directory to search in (null = all projects)
+     * @param limit     maximum messages to return (null = no limit)
+     * @param offset    number of messages to skip from the start
+     * @return ordered list of visible conversation messages
+     */
+    public static List<SessionMessage> getSessionMessages(
+            String sessionId, Path directory, Integer limit, int offset) {
+        return Sessions.getSessionMessages(
+                sessionId,
+                directory != null ? directory.toString() : null,
+                limit,
+                offset);
     }
 
     /**

@@ -13,6 +13,9 @@ import in.vidyalai.claude.sdk.types.control.request.SDKControlInitializeRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlInterruptRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlMCPStatusRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlMcpMessageRequest;
+import in.vidyalai.claude.sdk.types.control.request.SDKControlMcpReconnectRequest;
+import in.vidyalai.claude.sdk.types.control.request.SDKControlMcpToggleRequest;
+import in.vidyalai.claude.sdk.types.control.request.SDKControlStopTaskRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlPermissionRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlRequestData;
@@ -203,6 +206,9 @@ public class ControlProtocolIntegrationTest {
             case SDKHookCallbackRequest r -> "hook";
             case SDKControlMcpMessageRequest r -> "mcp";
             case SDKControlRewindFilesRequest r -> "rewind";
+            case SDKControlMcpReconnectRequest r -> "mcp_reconnect";
+            case SDKControlMcpToggleRequest r -> "mcp_toggle";
+            case SDKControlStopTaskRequest r -> "stop_task";
         };
 
         assertThat(result).isEqualTo("set_model:claude-sonnet-4-5");

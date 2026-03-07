@@ -16,6 +16,11 @@ import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
+import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
+import in.vidyalai.claude.sdk.types.message.TaskNotificationStatus;
+import in.vidyalai.claude.sdk.types.message.TaskProgressMessage;
+import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
+import in.vidyalai.claude.sdk.types.message.TaskUsage;
 import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
 import in.vidyalai.claude.sdk.types.message.ToolResultBlock;
@@ -758,6 +763,216 @@ class MessageParserTest {
         assertThat(message).isInstanceOf(UserMessage.class);
         UserMessage userMessage = (UserMessage) message;
         assertThat(userMessage.toolUseResult()).isNull();
+    }
+
+    // ==================== Task Message Tests ====================
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskStartedMessage() {
+        Map<String, Object> data = new java.util.HashMap<>(Map.of(
+                "type", "system",
+                "subtype", "task_started",
+                "task_id", "task-abc",
+                "tool_use_id", "toolu_01",
+                "description", "Reticulating splines",
+                "task_type", "background",
+                "uuid", "uuid-1",
+                "session_id", "session-1"));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskStartedMessage.class);
+        TaskStartedMessage started = (TaskStartedMessage) message;
+        assertThat(started.taskId()).isEqualTo("task-abc");
+        assertThat(started.description()).isEqualTo("Reticulating splines");
+        assertThat(started.uuid()).isEqualTo("uuid-1");
+        assertThat(started.sessionId()).isEqualTo("session-1");
+        assertThat(started.toolUseId()).isEqualTo("toolu_01");
+        assertThat(started.taskType()).isEqualTo("background");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskStartedMessage_optionalFieldsAbsent() {
+        Map<String, Object> data = Map.of(
+                "type", "system",
+                "subtype", "task_started",
+                "task_id", "task-abc",
+                "description", "Working",
+                "uuid", "uuid-1",
+                "session_id", "session-1");
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskStartedMessage.class);
+        TaskStartedMessage started = (TaskStartedMessage) message;
+        assertThat(started.toolUseId()).isNull();
+        assertThat(started.taskType()).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskProgressMessage() {
+        Map<String, Object> data = new java.util.HashMap<>(Map.of(
+                "type", "system",
+                "subtype", "task_progress",
+                "task_id", "task-abc",
+                "tool_use_id", "toolu_01",
+                "description", "Halfway there",
+                "usage", Map.of("total_tokens", 1234, "tool_uses", 5, "duration_ms", 9876),
+                "last_tool_name", "Read",
+                "uuid", "uuid-2",
+                "session_id", "session-1"));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskProgressMessage.class);
+        TaskProgressMessage progress = (TaskProgressMessage) message;
+        assertThat(progress.taskId()).isEqualTo("task-abc");
+        assertThat(progress.description()).isEqualTo("Halfway there");
+        assertThat(progress.lastToolName()).isEqualTo("Read");
+        assertThat(progress.toolUseId()).isEqualTo("toolu_01");
+        assertThat(progress.uuid()).isEqualTo("uuid-2");
+        assertThat(progress.sessionId()).isEqualTo("session-1");
+        TaskUsage usage = progress.usage();
+        assertThat(usage.totalTokens()).isEqualTo(1234);
+        assertThat(usage.toolUses()).isEqualTo(5);
+        assertThat(usage.durationMs()).isEqualTo(9876);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskNotificationMessage() {
+        Map<String, Object> data = new java.util.HashMap<>(Map.of(
+                "type", "system",
+                "subtype", "task_notification",
+                "task_id", "task-abc",
+                "tool_use_id", "toolu_01",
+                "status", "completed",
+                "output_file", "/tmp/out.md",
+                "summary", "All done",
+                "uuid", "uuid-3",
+                "session_id", "session-1"));
+        data.put("usage", Map.of("total_tokens", 2000, "tool_uses", 7, "duration_ms", 12345));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskNotificationMessage.class);
+        TaskNotificationMessage notif = (TaskNotificationMessage) message;
+        assertThat(notif.taskId()).isEqualTo("task-abc");
+        assertThat(notif.status()).isEqualTo(TaskNotificationStatus.COMPLETED);
+        assertThat(notif.outputFile()).isEqualTo("/tmp/out.md");
+        assertThat(notif.summary()).isEqualTo("All done");
+        assertThat(notif.toolUseId()).isEqualTo("toolu_01");
+        assertThat(notif.uuid()).isEqualTo("uuid-3");
+        assertThat(notif.sessionId()).isEqualTo("session-1");
+        assertThat(notif.usage()).isNotNull();
+        assertThat(notif.usage().totalTokens()).isEqualTo(2000);
+        assertThat(notif.usage().toolUses()).isEqualTo(7);
+        assertThat(notif.usage().durationMs()).isEqualTo(12345);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskNotificationMessage_optionalFieldsAbsent() {
+        Map<String, Object> data = Map.of(
+                "type", "system",
+                "subtype", "task_notification",
+                "task_id", "task-abc",
+                "status", "failed",
+                "output_file", "/tmp/out.md",
+                "summary", "Boom",
+                "uuid", "uuid-3",
+                "session_id", "session-1");
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskNotificationMessage.class);
+        TaskNotificationMessage notif = (TaskNotificationMessage) message;
+        assertThat(notif.status()).isEqualTo(TaskNotificationStatus.FAILED);
+        assertThat(notif.usage()).isNull();
+        assertThat(notif.toolUseId()).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void taskMessageBaseFields_arePopulated() {
+        Map<String, Object> data = new java.util.HashMap<>(Map.of(
+                "type", "system",
+                "subtype", "task_started",
+                "task_id", "t1",
+                "description", "desc",
+                "uuid", "u1",
+                "session_id", "s1"));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskStartedMessage.class);
+        TaskStartedMessage started = (TaskStartedMessage) message;
+        // Base fields (backward compat: subtype and data are populated)
+        assertThat(started.subtype()).isEqualTo("task_started");
+        assertThat(started.data()).containsEntry("task_id", "t1");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void unknownSystemSubtype_yieldsGenericSystemMessage() {
+        Map<String, Object> data = Map.of("type", "system", "subtype", "some_future_subtype", "foo", "bar");
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(SystemMessage.class);
+        assertThat(message).isNotInstanceOf(TaskStartedMessage.class);
+        assertThat(message).isNotInstanceOf(TaskProgressMessage.class);
+        assertThat(message).isNotInstanceOf(TaskNotificationMessage.class);
+        assertThat(message.getClass()).isEqualTo(SystemMessage.class);
+        SystemMessage sys = (SystemMessage) message;
+        assertThat(sys.subtype()).isEqualTo("some_future_subtype");
+    }
+
+    // ==================== ResultMessage stop_reason Tests ====================
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_withStopReason() {
+        Map<String, Object> data = Map.of(
+                "type", "result",
+                "subtype", "success",
+                "duration_ms", 1000,
+                "duration_api_ms", 500,
+                "is_error", false,
+                "num_turns", 2,
+                "session_id", "session_123",
+                "stop_reason", "end_turn",
+                "result", "Done");
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(ResultMessage.class);
+        ResultMessage result = (ResultMessage) message;
+        assertThat(result.stopReason()).isEqualTo("end_turn");
+        assertThat(result.result()).isEqualTo("Done");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_withNullStopReason() {
+        Map<String, Object> data = new java.util.HashMap<>(Map.of(
+                "type", "result",
+                "subtype", "error_max_turns",
+                "duration_ms", 1000,
+                "duration_api_ms", 500,
+                "is_error", true,
+                "num_turns", 10,
+                "session_id", "session_123"));
+        data.put("stop_reason", null);
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(ResultMessage.class);
+        ResultMessage result = (ResultMessage) message;
+        assertThat(result.stopReason()).isNull();
     }
 
 }

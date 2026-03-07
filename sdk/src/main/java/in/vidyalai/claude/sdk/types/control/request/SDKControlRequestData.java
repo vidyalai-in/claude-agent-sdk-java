@@ -22,6 +22,9 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  * <li>{@link SDKHookCallbackRequest} - invoke hook callback</li>
  * <li>{@link SDKControlMcpMessageRequest} - route MCP message</li>
  * <li>{@link SDKControlRewindFilesRequest} - rewind files to checkpoint</li>
+ * <li>{@link SDKControlMcpReconnectRequest} - reconnect a disconnected MCP server</li>
+ * <li>{@link SDKControlMcpToggleRequest} - enable or disable an MCP server</li>
+ * <li>{@link SDKControlStopTaskRequest} - stop a running task</li>
  * </ul>
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "subtype")
@@ -34,7 +37,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = SDKControlSetModelRequest.class, name = "set_model"),
         @JsonSubTypes.Type(value = SDKHookCallbackRequest.class, name = "hook_callback"),
         @JsonSubTypes.Type(value = SDKControlMcpMessageRequest.class, name = "mcp_message"),
-        @JsonSubTypes.Type(value = SDKControlRewindFilesRequest.class, name = "rewind_files")
+        @JsonSubTypes.Type(value = SDKControlRewindFilesRequest.class, name = "rewind_files"),
+        @JsonSubTypes.Type(value = SDKControlMcpReconnectRequest.class, name = "mcp_reconnect"),
+        @JsonSubTypes.Type(value = SDKControlMcpToggleRequest.class, name = "mcp_toggle"),
+        @JsonSubTypes.Type(value = SDKControlStopTaskRequest.class, name = "stop_task")
 })
 public sealed interface SDKControlRequestData permits
         SDKControlMCPStatusRequest,
@@ -45,7 +51,10 @@ public sealed interface SDKControlRequestData permits
         SDKControlSetModelRequest,
         SDKHookCallbackRequest,
         SDKControlMcpMessageRequest,
-        SDKControlRewindFilesRequest {
+        SDKControlRewindFilesRequest,
+        SDKControlMcpReconnectRequest,
+        SDKControlMcpToggleRequest,
+        SDKControlStopTaskRequest {
 
     /**
      * Gets the request subtype.

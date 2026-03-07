@@ -23,6 +23,10 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
  * @param toolName       name of the tool being invoked
  * @param toolInput      input parameters for the tool
  * @param toolUseId      unique identifier for this tool use
+ * @param agentId        sub-agent identifier (present only inside a task-spawned
+ *                       sub-agent; absent on main thread)
+ * @param agentType      agent type name (e.g. "general-purpose"); present inside
+ *                       a sub-agent or on main thread when started with --agent
  */
 public record PreToolUseHookInput(
         @JsonProperty("session_id") String sessionId,
@@ -31,7 +35,9 @@ public record PreToolUseHookInput(
         @JsonProperty("permission_mode") @Nullable String permissionMode,
         @JsonProperty("tool_name") String toolName,
         @JsonProperty("tool_input") Map<String, Object> toolInput,
-        @JsonProperty("tool_use_id") String toolUseId) implements HookInput {
+        @JsonProperty("tool_use_id") String toolUseId,
+        @JsonProperty("agent_id") @Nullable String agentId,
+        @JsonProperty("agent_type") @Nullable String agentType) implements HookInput {
 
     @JsonProperty("hook_event_name")
     @Override

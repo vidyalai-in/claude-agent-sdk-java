@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-02-21 (Updated)
-**Java SDK Version:** 0.1.5
-**Python SDK Version:** [0.1.39](https://github.com/anthropics/claude-agent-sdk-python/commit/146e3d61c34cff66542885df4d78c1556853f4d7) (latest)
+**Analysis Date:** 2026-03-07 (Updated)
+**Java SDK Version:** 0.1.6
+**Python SDK Version:** [0.1.48](https://github.com/anthropics/claude-agent-sdk-python/commit/d6f035259f2d7ac0ec284fc1aa1211ac2cd7ca8b) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,17 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.39):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.39. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.48):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.48. These updates include:
+- **v0.1.48** - Fix: enable fine-grained tool streaming when `include_partial_messages=True`, CLI 2.1.71
+- **v0.1.47** - CLI update to 2.1.70 (no API changes)
+- **v0.1.46** - Fix: string prompt no longer closes stdin before MCP server init completes; CLI 2.1.68-2.1.69
+- **v0.1.45** - CLI updates to 2.1.61-2.1.63 (no API changes)
+- **v0.1.44** - CLI updates to 2.1.58-2.1.59 (no API changes)
+- **v0.1.43** - CLI update to 2.1.56 (no API changes)
+- **v0.1.42** - CLI update to 2.1.55 (no API changes)
+- **v0.1.41** - CLI update to 2.1.52 (no API changes)
+- **v0.1.40** - CLI update to 2.1.51 (no API changes)
+- **v0.1.45 (features)** - Added `stop_reason` to `ResultMessage`; typed `McpServerStatus`/`McpStatusResponse`; MCP control methods (`reconnect_mcp_server`, `toggle_mcp_server`, `stop_task`); typed task system messages (`TaskStartedMessage`, `TaskProgressMessage`, `TaskNotificationMessage`); session listing APIs (`list_sessions`, `get_session_messages`); `agent_id`/`agent_type` fields on tool-lifecycle hook inputs; CLI 2.1.63
 - **v0.1.39** - Fix: unknown message types (e.g., rate_limit_event from CLI 2.1.45+) now return null instead of crashing; forward compatibility improvement
 - **v0.1.38** - CLI updates to 2.1.45 and 2.1.47 (no API changes)
 - **v0.1.37** - CLI update to 2.1.44 (no API changes)
@@ -31,7 +41,20 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - **v0.1.23** - `get_mcp_status()` made public, CLI 2.1.20 (already in Java SDK)
 - **v0.1.22** - `tool_use_result` field added to UserMessage, CLI 2.1.19 (already in Java SDK)
 
-✅ **All new features from Python SDK v0.1.39 are now implemented in Java SDK v0.1.5**. This includes:
+✅ **All new features from Python SDK v0.1.48 are now implemented in Java SDK v0.1.6**. This includes:
+- ✅ `stop_reason` field added to `ResultMessage` (v0.1.45)
+- ✅ Typed `McpServerStatus`, `McpServerInfo`, `McpToolInfo`, `McpToolAnnotations`, `McpStatusResponse` types (v0.1.45)
+- ✅ `getMcpStatus()` now returns typed `McpStatusResponse` instead of raw Map (v0.1.45)
+- ✅ `reconnectMcpServer(serverName)` method on `ClaudeSDKClient` (v0.1.45)
+- ✅ `toggleMcpServer(serverName, enabled)` method on `ClaudeSDKClient` (v0.1.45)
+- ✅ `stopTask(taskId)` method on `ClaudeSDKClient` (v0.1.45)
+- ✅ Typed `TaskStartedMessage`, `TaskProgressMessage`, `TaskNotificationMessage` system message subclasses (v0.1.45)
+- ✅ Session listing APIs: `listSessions()`, `getSessionMessages()` with full filesystem implementation (v0.1.45)
+- ✅ Session listing types: `SDKSessionInfo`, `SessionMessage` (v0.1.45)
+- ✅ `agent_id`/`agent_type` fields on `PreToolUseHookInput`, `PostToolUseHookInput`, `PostToolUseFailureHookInput`, `PermissionRequestHookInput` (v0.1.45)
+- ✅ New control protocol types: `SDKControlMcpReconnectRequest`, `SDKControlMcpToggleRequest`, `SDKControlStopTaskRequest` (v0.1.45)
+- ✅ Fine-grained tool streaming env var set when `includePartialMessages=true` (v0.1.48)
+- ✅ Bug fix: string prompt stdin closed only after first result (already correct in Java SDK) (v0.1.46)
 - ✅ Forward-compatible message parsing: unknown message types return null instead of throwing (v0.1.39)
 - ✅ ThinkingConfig types (ThinkingConfigAdaptive, ThinkingConfigEnabled, ThinkingConfigDisabled)
 - ✅ thinking field in ClaudeAgentOptions (takes precedence over deprecated maxThinkingTokens)
@@ -52,6 +75,8 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 | One-shot queries | `query()` function | `ClaudeSDK.query()` | ✅ Full parity |
 | Interactive client | `ClaudeSDKClient` class | `ClaudeSDKClient` class | ✅ Full parity |
 | Client creation | `ClaudeSDKClient(options)` | `ClaudeSDK.createClient(options)` | ✅ Full parity |
+| List sessions | `list_sessions()` | `ClaudeSDK.listSessions()` (3 overloads) | ✅ Full parity |
+| Get session messages | `get_session_messages()` | `ClaudeSDK.getSessionMessages()` (3 overloads) | ✅ Full parity |
 | Convenience methods | N/A | `queryForText()`, `queryForResult()` | ✅ Java enhancement |
 
 ### ClaudeSDKClient Methods
@@ -66,7 +91,10 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 | Change model | `set_model(model)` | `setModel(model)` | ✅ |
 | Change permissions | `set_permission_mode(mode)` | `setPermissionMode(mode)` | ✅ |
 | Rewind files | `rewind_files(id)` | `rewindFiles(id)` | ✅ |
-| Get MCP status | `get_mcp_status()` | `getMcpStatus()` | ✅ |
+| Get MCP status | `get_mcp_status()` | `getMcpStatus()` (returns `McpStatusResponse`) | ✅ |
+| Reconnect MCP server | `reconnect_mcp_server(name)` | `reconnectMcpServer(name)` | ✅ |
+| Toggle MCP server | `toggle_mcp_server(name, enabled)` | `toggleMcpServer(name, enabled)` | ✅ |
+| Stop task | `stop_task(task_id)` | `stopTask(taskId)` | ✅ |
 | Get server info | `get_server_info()` | `getServerInfo()` | ✅ |
 | Disconnect | `disconnect()` | `disconnect()` / `close()` | ✅ |
 | Context manager | `async with` | `try-with-resources` | ✅ |
@@ -84,7 +112,10 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 | User message | `UserMessage` dataclass (with `tool_use_result`) | `UserMessage` record (with `tool_use_result`) | ✅ |
 | Assistant message | `AssistantMessage` dataclass | `AssistantMessage` record | ✅ |
 | System message | `SystemMessage` dataclass | `SystemMessage` record | ✅ |
-| Result message | `ResultMessage` dataclass | `ResultMessage` record | ✅ |
+| Task started message | `TaskStartedMessage` dataclass | `TaskStartedMessage` record | ✅ |
+| Task progress message | `TaskProgressMessage` dataclass | `TaskProgressMessage` record | ✅ |
+| Task notification message | `TaskNotificationMessage` dataclass | `TaskNotificationMessage` record | ✅ |
+| Result message | `ResultMessage` dataclass (with `stop_reason`) | `ResultMessage` record (with `stopReason`) | ✅ |
 | Stream event | `StreamEvent` dataclass | `StreamEvent` record | ✅ |
 
 **Java Enhancements:**
@@ -615,7 +646,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-02-16
-**Python SDK Version:** 0.1.36 (commit 4d74748)
-**Java SDK Version:** 0.1.4
+**Latest Verification:** 2026-03-07
+**Python SDK Version:** 0.1.48 (commit d6f0352)
+**Java SDK Version:** 0.1.6
 **Status:** ✅ 100% Feature Parity Maintained

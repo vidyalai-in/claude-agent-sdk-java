@@ -27,8 +27,11 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
  * @param toolInput      input parameters that were passed to the tool
  * @param toolUseId      unique identifier for this tool use
  * @param error          error message describing the failure
- * @param isInterrupt    whether the failure was due to an interrupt (can be
- *                       null)
+ * @param isInterrupt    whether the failure was due to an interrupt (can be null)
+ * @param agentId        sub-agent identifier (present only inside a task-spawned
+ *                       sub-agent; absent on main thread)
+ * @param agentType      agent type name (e.g. "general-purpose"); present inside
+ *                       a sub-agent or on main thread when started with --agent
  */
 public record PostToolUseFailureHookInput(
         @JsonProperty("session_id") String sessionId,
@@ -39,7 +42,9 @@ public record PostToolUseFailureHookInput(
         @JsonProperty("tool_input") Map<String, Object> toolInput,
         @JsonProperty("tool_use_id") String toolUseId,
         @JsonProperty("error") String error,
-        @JsonProperty("is_interrupt") @Nullable Boolean isInterrupt) implements HookInput {
+        @JsonProperty("is_interrupt") @Nullable Boolean isInterrupt,
+        @JsonProperty("agent_id") @Nullable String agentId,
+        @JsonProperty("agent_type") @Nullable String agentType) implements HookInput {
 
     @JsonProperty("hook_event_name")
     @Override

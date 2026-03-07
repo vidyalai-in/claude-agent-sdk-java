@@ -608,6 +608,46 @@ class SubprocessCLITransportTest {
         assertThat(options.extraArgs()).containsEntry("another-flag", "value");
     }
 
+    // ==================== FGTS Environment Variable Tests ====================
+
+    @Test
+    void testIncludePartialMessages_enablesFGTS() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .includePartialMessages(true)
+                .build();
+
+        Map<String, String> env = new java.util.HashMap<>();
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env).containsEntry("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING", "1");
+    }
+
+    @Test
+    void testIncludePartialMessages_false_doesNotSetFGTS() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .includePartialMessages(false)
+                .build();
+
+        Map<String, String> env = new java.util.HashMap<>();
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env).doesNotContainKey("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING");
+    }
+
+    @Test
+    void testUserCanOverrideFGTSEnvVar() {
+        // User explicitly sets FGTS to "0" — putIfAbsent means their value wins
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .includePartialMessages(true)
+                .env(Map.of("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING", "0"))
+                .build();
+
+        Map<String, String> env = new java.util.HashMap<>();
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env).containsEntry("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING", "0");
+    }
+
     // ==================== Environment Variables Tests ====================
 
     @Test

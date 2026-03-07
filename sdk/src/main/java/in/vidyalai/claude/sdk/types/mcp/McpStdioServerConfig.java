@@ -17,7 +17,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record McpStdioServerConfig(
         @JsonProperty("command") String command,
         @JsonProperty("args") @Nullable List<String> args,
-        @JsonProperty("env") @Nullable Map<String, String> env) implements McpServerConfig {
+        @JsonProperty("env") @Nullable Map<String, String> env) implements McpServerConfig, McpServerStatusConfig {
 
     @Override
     public String type() {

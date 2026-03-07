@@ -97,6 +97,7 @@ mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation" -pl examples
 mvn exec:java -Dexec.mainClass="examples.PermissionCallbacks" -pl examples
 mvn exec:java -Dexec.mainClass="examples.PluginsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
+mvn exec:java -Dexec.mainClass="examples.SessionListingExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SettingSourcesExample" -Dexec.args="all" -pl examples
 mvn exec:java -Dexec.mainClass="examples.StderrCallbackExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.StreamingEvents" -pl examples

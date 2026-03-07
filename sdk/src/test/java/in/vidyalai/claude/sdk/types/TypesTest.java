@@ -28,6 +28,9 @@ import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
+import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
+import in.vidyalai.claude.sdk.types.message.TaskProgressMessage;
+import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
 import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
 import in.vidyalai.claude.sdk.types.message.ToolResultBlock;
@@ -246,6 +249,9 @@ class TypesTest {
             case UserMessage u -> "user: " + u.content();
             case AssistantMessage a -> "assistant: " + a.getTextContent();
             case SystemMessage s -> "system: " + s.subtype();
+            case TaskStartedMessage t -> "task_started: " + t.taskId();
+            case TaskProgressMessage t -> "task_progress: " + t.taskId();
+            case TaskNotificationMessage t -> "task_notification: " + t.status();
             case ResultMessage r -> "result: " + r.result();
             case StreamEvent e -> "event: " + e.eventType();
         };
@@ -371,6 +377,7 @@ class TypesTest {
                 false,
                 1,
                 "session-123",
+                null,
                 0.01,
                 null,
                 "Task completed",
@@ -393,7 +400,7 @@ class TypesTest {
                 "input_tokens", 100,
                 "output_tokens", 50);
         ResultMessage msg = new ResultMessage(
-                "success", 1500, 1200, false, 1, "session-123", 0.01, usage, null, null);
+                "success", 1500, 1200, false, 1, "session-123", null, 0.01, usage, null, null);
 
         assertThat(msg.usage()).isNotNull();
         assertThat(msg.usage()).containsEntry("input_tokens", 100);
@@ -404,7 +411,7 @@ class TypesTest {
     void resultMessage_withStructuredOutput() {
         Map<String, Object> structuredOutput = Map.of("key", "value");
         ResultMessage msg = new ResultMessage(
-                "success", 1500, 1200, false, 1, "session-123", 0.01, null, null, structuredOutput);
+                "success", 1500, 1200, false, 1, "session-123", null, 0.01, null, null, structuredOutput);
 
         assertThat(msg.structuredOutput()).isNotNull();
         @SuppressWarnings("unchecked")
