@@ -609,9 +609,12 @@ class SubprocessCLITransportTest {
     }
 
     // ==================== FGTS Environment Variable Tests ====================
+    // Note: CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING was reverted in Python
+    // SDK v0.1.49 — the SDK no longer sets this env var automatically.
 
     @Test
-    void testIncludePartialMessages_enablesFGTS() {
+    void testIncludePartialMessages_doesNotSetFGTS() {
+        // Fine-grained tool streaming is no longer auto-enabled (reverted upstream)
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .includePartialMessages(true)
                 .build();
@@ -619,7 +622,7 @@ class SubprocessCLITransportTest {
         Map<String, String> env = new java.util.HashMap<>();
         SubprocessCLITransport.applyEnvDefaults(options, env);
 
-        assertThat(env).containsEntry("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING", "1");
+        assertThat(env).doesNotContainKey("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING");
     }
 
     @Test
@@ -632,20 +635,6 @@ class SubprocessCLITransportTest {
         SubprocessCLITransport.applyEnvDefaults(options, env);
 
         assertThat(env).doesNotContainKey("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING");
-    }
-
-    @Test
-    void testUserCanOverrideFGTSEnvVar() {
-        // User explicitly sets FGTS to "0" — putIfAbsent means their value wins
-        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
-                .includePartialMessages(true)
-                .env(Map.of("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING", "0"))
-                .build();
-
-        Map<String, String> env = new java.util.HashMap<>();
-        SubprocessCLITransport.applyEnvDefaults(options, env);
-
-        assertThat(env).containsEntry("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING", "0");
     }
 
     // ==================== Environment Variables Tests ====================

@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-03-07 (Updated)
-**Java SDK Version:** 0.1.6
-**Python SDK Version:** [0.1.48](https://github.com/anthropics/claude-agent-sdk-python/commit/d6f035259f2d7ac0ec284fc1aa1211ac2cd7ca8b) (latest)
+**Analysis Date:** 2026-03-15 (Updated)
+**Java SDK Version:** 0.1.7
+**Python SDK Version:** [0.1.49](https://github.com/anthropics/claude-agent-sdk-python/commit/302ceb6788633d934cbe7ad6142448477234da68) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,8 +11,9 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.48):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.48. These updates include:
-- **v0.1.48** - Fix: enable fine-grained tool streaming when `include_partial_messages=True`, CLI 2.1.71
+**Recent Python SDK Updates (v0.1.22-0.1.49):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.49. These updates include:
+- **v0.1.49** - Typed `RateLimitEvent` message; `rename_session`/`tag_session` APIs; CLI 2.1.72-2.1.76; revert FGTS env var
+- **v0.1.48** - Fix: enable fine-grained tool streaming when `include_partial_messages=True`, CLI 2.1.71 *(reverted in v0.1.49)*
 - **v0.1.47** - CLI update to 2.1.70 (no API changes)
 - **v0.1.46** - Fix: string prompt no longer closes stdin before MCP server init completes; CLI 2.1.68-2.1.69
 - **v0.1.45** - CLI updates to 2.1.61-2.1.63 (no API changes)
@@ -41,7 +42,7 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - **v0.1.23** - `get_mcp_status()` made public, CLI 2.1.20 (already in Java SDK)
 - **v0.1.22** - `tool_use_result` field added to UserMessage, CLI 2.1.19 (already in Java SDK)
 
-✅ **All new features from Python SDK v0.1.48 are now implemented in Java SDK v0.1.6**. This includes:
+✅ **All new features from Python SDK v0.1.49 are now implemented in Java SDK v0.1.7**. This includes:
 - ✅ `stop_reason` field added to `ResultMessage` (v0.1.45)
 - ✅ Typed `McpServerStatus`, `McpServerInfo`, `McpToolInfo`, `McpToolAnnotations`, `McpStatusResponse` types (v0.1.45)
 - ✅ `getMcpStatus()` now returns typed `McpStatusResponse` instead of raw Map (v0.1.45)
@@ -53,7 +54,9 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - ✅ Session listing types: `SDKSessionInfo`, `SessionMessage` (v0.1.45)
 - ✅ `agent_id`/`agent_type` fields on `PreToolUseHookInput`, `PostToolUseHookInput`, `PostToolUseFailureHookInput`, `PermissionRequestHookInput` (v0.1.45)
 - ✅ New control protocol types: `SDKControlMcpReconnectRequest`, `SDKControlMcpToggleRequest`, `SDKControlStopTaskRequest` (v0.1.45)
-- ✅ Fine-grained tool streaming env var set when `includePartialMessages=true` (v0.1.48)
+- ✅ Typed `RateLimitEvent` and `RateLimitInfo` types; `rate_limit_event` messages parsed into typed records (v0.1.49)
+- ✅ `renameSession(sessionId, title)` and `tagSession(sessionId, tag)` session mutation APIs (v0.1.49)
+- ✅ Reverted FGTS: removed auto-set of `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING` env var (v0.1.49)
 - ✅ Bug fix: string prompt stdin closed only after first result (already correct in Java SDK) (v0.1.46)
 - ✅ Forward-compatible message parsing: unknown message types return null instead of throwing (v0.1.39)
 - ✅ ThinkingConfig types (ThinkingConfigAdaptive, ThinkingConfigEnabled, ThinkingConfigDisabled)
@@ -77,6 +80,8 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 | Client creation | `ClaudeSDKClient(options)` | `ClaudeSDK.createClient(options)` | ✅ Full parity |
 | List sessions | `list_sessions()` | `ClaudeSDK.listSessions()` (3 overloads) | ✅ Full parity |
 | Get session messages | `get_session_messages()` | `ClaudeSDK.getSessionMessages()` (3 overloads) | ✅ Full parity |
+| Rename session | `rename_session()` | `ClaudeSDK.renameSession()` (2 overloads) | ✅ Full parity |
+| Tag session | `tag_session()` | `ClaudeSDK.tagSession()` (2 overloads) | ✅ Full parity |
 | Convenience methods | N/A | `queryForText()`, `queryForResult()` | ✅ Java enhancement |
 
 ### ClaudeSDKClient Methods
@@ -117,6 +122,8 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 | Task notification message | `TaskNotificationMessage` dataclass | `TaskNotificationMessage` record | ✅ |
 | Result message | `ResultMessage` dataclass (with `stop_reason`) | `ResultMessage` record (with `stopReason`) | ✅ |
 | Stream event | `StreamEvent` dataclass | `StreamEvent` record | ✅ |
+| Rate limit event | `RateLimitEvent` dataclass | `RateLimitEvent` record | ✅ |
+| Rate limit info | `RateLimitInfo` dataclass | `RateLimitInfo` record | ✅ |
 
 **Java Enhancements:**
 - `AssistantMessage.getTextContent()` - Convenience method
@@ -646,7 +653,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-03-07
-**Python SDK Version:** 0.1.48 (commit d6f0352)
-**Java SDK Version:** 0.1.6
+**Latest Verification:** 2026-03-15
+**Python SDK Version:** 0.1.49 (commit 302ceb6788633d934cbe7ad6142448477234da68)
+**Java SDK Version:** 0.1.7
 **Status:** ✅ 100% Feature Parity Maintained

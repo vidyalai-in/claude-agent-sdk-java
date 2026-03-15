@@ -24,6 +24,8 @@ import in.vidyalai.claude.sdk.types.mcp.McpClaudeAIProxyServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpHttpServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfigStatus;
 import in.vidyalai.claude.sdk.types.mcp.McpServerConnectionStatus;
+import in.vidyalai.claude.sdk.types.mcp.McpServerConfig;
+import in.vidyalai.claude.sdk.types.mcp.McpServerStatusConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpSseServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpStdioServerConfig;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationStatus;
@@ -678,22 +680,22 @@ class AdditionalTypesTest {
     void testStdioConfigImplementsStatusConfig() {
         McpStdioServerConfig config = new McpStdioServerConfig("node");
 
-        assertThat(config).isInstanceOf(in.vidyalai.claude.sdk.types.mcp.McpServerStatusConfig.class);
-        assertThat(config).isInstanceOf(in.vidyalai.claude.sdk.types.mcp.McpServerConfig.class);
+        assertThat(config).isInstanceOf(McpServerStatusConfig.class);
+        assertThat(config).isInstanceOf(McpServerConfig.class);
     }
 
     @Test
     void testSseConfigImplementsStatusConfig() {
         McpSseServerConfig config = new McpSseServerConfig("https://example.com/sse");
 
-        assertThat(config).isInstanceOf(in.vidyalai.claude.sdk.types.mcp.McpServerStatusConfig.class);
+        assertThat(config).isInstanceOf(McpServerStatusConfig.class);
     }
 
     @Test
     void testHttpConfigImplementsStatusConfig() {
         McpHttpServerConfig config = new McpHttpServerConfig("https://example.com/api");
 
-        assertThat(config).isInstanceOf(in.vidyalai.claude.sdk.types.mcp.McpServerStatusConfig.class);
+        assertThat(config).isInstanceOf(McpServerStatusConfig.class);
     }
 
 }

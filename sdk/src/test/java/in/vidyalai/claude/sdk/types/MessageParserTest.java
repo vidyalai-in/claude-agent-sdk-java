@@ -13,6 +13,9 @@ import in.vidyalai.claude.sdk.internal.MessageParser;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
 import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
+import in.vidyalai.claude.sdk.types.message.RateLimitStatus;
+import in.vidyalai.claude.sdk.types.message.RateLimitType;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
@@ -172,8 +175,9 @@ class MessageParserTest {
         assertThat(result).isNull();
     }
 
+    @SuppressWarnings("null")
     @Test
-    void parseMessage_rateLimitEvent_returnsNull() {
+    void parseMessage_rateLimitEvent_returnsTypedEvent() {
         Map<String, Object> data = Map.of(
                 "type", "rate_limit_event",
                 "rate_limit_info", Map.of(
@@ -186,11 +190,19 @@ class MessageParserTest {
                 "session_id", "test-session-id");
 
         Message result = MessageParser.parse(data);
-        assertThat(result).isNull();
+        assertThat(result).isInstanceOf(RateLimitEvent.class);
+        RateLimitEvent event = (RateLimitEvent) result;
+        assertThat(event.uuid()).isEqualTo("550e8400-e29b-41d4-a716-446655440000");
+        assertThat(event.sessionId()).isEqualTo("test-session-id");
+        assertThat(event.rateLimitInfo().status()).isEqualTo(RateLimitStatus.ALLOWED_WARNING);
+        assertThat(event.rateLimitInfo().resetsAt()).isEqualTo(1700000000L);
+        assertThat(event.rateLimitInfo().rateLimitType()).isEqualTo(RateLimitType.FIVE_HOUR);
+        assertThat(event.rateLimitInfo().utilization()).isEqualTo(0.85);
     }
 
+    @SuppressWarnings("null")
     @Test
-    void parseMessage_rateLimitEventRejected_returnsNull() {
+    void parseMessage_rateLimitEventRejected_returnsTypedEvent() {
         Map<String, Object> data = Map.of(
                 "type", "rate_limit_event",
                 "rate_limit_info", Map.of(
@@ -202,7 +214,9 @@ class MessageParserTest {
                 "session_id", "test-session-id");
 
         Message result = MessageParser.parse(data);
-        assertThat(result).isNull();
+        assertThat(result).isInstanceOf(RateLimitEvent.class);
+        RateLimitEvent event = (RateLimitEvent) result;
+        assertThat(event.rateLimitInfo().status()).isEqualTo(RateLimitStatus.REJECTED);
     }
 
     @Test

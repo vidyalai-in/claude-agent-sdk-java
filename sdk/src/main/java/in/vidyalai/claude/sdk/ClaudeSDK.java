@@ -11,8 +11,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import org.jspecify.annotations.Nullable;
+
 import in.vidyalai.claude.sdk.internal.QueryHandler;
 import in.vidyalai.claude.sdk.internal.SdkVersion;
+import in.vidyalai.claude.sdk.internal.SessionMutations;
 import in.vidyalai.claude.sdk.internal.Sessions;
 import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
@@ -590,6 +593,79 @@ public final class ClaudeSDK {
                 directory != null ? directory.toString() : null,
                 limit,
                 offset);
+    }
+
+    /**
+     * Rename a session by appending a custom-title entry to its JSONL file.
+     *
+     * <p>
+     * {@code listSessions} reads the LAST custom-title from the file tail, so
+     * repeated calls are safe — the most recent wins.
+     *
+     * @param sessionId the UUID of the session to rename
+     * @param title     new session title. Leading/trailing whitespace is stripped.
+     *                  Must be non-empty after stripping.
+     * @throws IllegalArgumentException      if {@code sessionId} is not a valid
+     *                                       UUID or
+     *                                       title is empty.
+     * @throws java.io.FileNotFoundException if the session file cannot be found.
+     * @throws java.io.IOException           if the write fails.
+     */
+    public static void renameSession(String sessionId, String title) throws java.io.IOException {
+        SessionMutations.renameSession(sessionId, title, null);
+    }
+
+    /**
+     * Rename a session within a specific project directory.
+     *
+     * @param sessionId the UUID of the session to rename
+     * @param title     new session title. Must be non-empty after stripping.
+     * @param directory project directory path (same semantics as
+     *                  {@link #listSessions(Path)})
+     * @throws IllegalArgumentException      if {@code sessionId} is invalid or
+     *                                       title is empty.
+     * @throws java.io.FileNotFoundException if the session file cannot be found.
+     * @throws java.io.IOException           if the write fails.
+     */
+    public static void renameSession(String sessionId, String title, Path directory) throws java.io.IOException {
+        SessionMutations.renameSession(sessionId, title, directory.toString());
+    }
+
+    /**
+     * Tag a session. Pass {@code null} to clear the tag.
+     *
+     * <p>
+     * Tags are Unicode-sanitized before storing for CLI filter compatibility.
+     * Passing {@code null} clears the tag.
+     *
+     * @param sessionId the UUID of the session to tag
+     * @param tag       tag string, or {@code null} to clear. Must be non-empty
+     *                  after
+     *                  sanitization (unless {@code null}).
+     * @throws IllegalArgumentException      if {@code sessionId} is invalid or tag
+     *                                       is
+     *                                       empty after sanitization.
+     * @throws java.io.FileNotFoundException if the session file cannot be found.
+     * @throws java.io.IOException           if the write fails.
+     */
+    public static void tagSession(String sessionId, @Nullable String tag) throws java.io.IOException {
+        SessionMutations.tagSession(sessionId, tag, null);
+    }
+
+    /**
+     * Tag a session within a specific project directory. Pass {@code null} to
+     * clear.
+     *
+     * @param sessionId the UUID of the session to tag
+     * @param tag       tag string, or {@code null} to clear
+     * @param directory project directory path
+     * @throws IllegalArgumentException      if {@code sessionId} is invalid or tag
+     *                                       is empty.
+     * @throws java.io.FileNotFoundException if the session file cannot be found.
+     * @throws java.io.IOException           if the write fails.
+     */
+    public static void tagSession(String sessionId, @Nullable String tag, Path directory) throws java.io.IOException {
+        SessionMutations.tagSession(sessionId, tag, directory.toString());
     }
 
     /**

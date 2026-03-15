@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-03-15
+
+### Added
+- **Typed `RateLimitEvent` message**: `rate_limit_event` messages from the CLI are now parsed into a typed `RateLimitEvent` record (matching Python SDK v0.1.49). Previously returned `null` (forward-compat). New types:
+  - `RateLimitEvent` — implements `Message`, includes `rateLimitInfo`, `uuid`, `sessionId`
+  - `RateLimitInfo` — fields: `status` (`"allowed"`, `"allowed_warning"`, `"rejected"`), `resetsAt`, `rateLimitType`, `utilization`, `overageStatus`, `overageResetsAt`, `overageDisabledReason`, `raw`
+- **Session mutation APIs**: Two new static methods on `ClaudeSDK` (matching Python SDK v0.1.49):
+  - `renameSession(String sessionId, String title)` — rename a session by appending a `custom-title` entry to its JSONL file
+  - `renameSession(String sessionId, String title, Path directory)` — rename within a specific project directory
+  - `tagSession(String sessionId, String tag)` — tag a session (pass `null` to clear)
+  - `tagSession(String sessionId, String tag, Path directory)` — tag within a specific project directory
+  - Tags are Unicode-sanitized (removes zero-width chars, directional marks, private-use chars) for CLI filter compatibility
+  - Internal `SessionMutations` class mirrors Python SDK's `_internal/session_mutations.py`
+
+### Fixed
+- **Reverted fine-grained tool streaming**: Removed automatic `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=1` env var when `includePartialMessages=true` (matching Python SDK revert in v0.1.49, commit 21560e3)
+
+### Synced
+- Python SDK v0.1.48 → v0.1.49 (commits d6f0352..302ceb6)
+- v0.1.49: Typed `RateLimitEvent`, `rename_session`, `tag_session` APIs; CLI bumps to 2.1.72-2.1.76; revert FGTS
+
+[0.1.7]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.7
+
 ## [0.1.6] - 2026-03-07
 
 ### Added

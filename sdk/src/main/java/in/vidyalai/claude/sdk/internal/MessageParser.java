@@ -12,6 +12,10 @@ import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.AssistantMessageError;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
 import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
+import in.vidyalai.claude.sdk.types.message.RateLimitInfo;
+import in.vidyalai.claude.sdk.types.message.RateLimitStatus;
+import in.vidyalai.claude.sdk.types.message.RateLimitType;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
@@ -66,6 +70,7 @@ public final class MessageParser {
                 case "system" -> parseSystemMessage(data);
                 case "result" -> parseResultMessage(data);
                 case "stream_event" -> parseStreamEvent(data);
+                case "rate_limit_event" -> parseRateLimitEvent(data);
                 default -> {
                     // Forward-compatible: skip unrecognized message types so newer
                     // CLI versions don't crash older SDK versions.
@@ -251,6 +256,32 @@ public final class MessageParser {
     }
 
     @SuppressWarnings("unchecked")
+    private static RateLimitEvent parseRateLimitEvent(Map<String, Object> data) throws MessageParseException {
+        try {
+            String uuid = getRequired(data, "uuid", String.class);
+            String sessionId = getRequired(data, "session_id", String.class);
+            Map<String, Object> info = getRequired(data, "rate_limit_info", Map.class);
+            RateLimitStatus status = parseRateLimitStatus(getRequired(info, "status", String.class));
+            Long resetsAt = (info.get("resetsAt") instanceof Number n) ? n.longValue() : null;
+            RateLimitType rateLimitType = info.get("rateLimitType") instanceof String s
+                    ? parseRateLimitType(s) : null;
+            Double utilization = (info.get("utilization") instanceof Number n) ? n.doubleValue() : null;
+            RateLimitStatus overageStatus = info.get("overageStatus") instanceof String s
+                    ? parseRateLimitStatus(s) : null;
+            Long overageResetsAt = (info.get("overageResetsAt") instanceof Number n) ? n.longValue() : null;
+            String overageDisabledReason = (String) info.get("overageDisabledReason");
+            RateLimitInfo rateLimitInfo = new RateLimitInfo(
+                    status, resetsAt, rateLimitType, utilization,
+                    overageStatus, overageResetsAt, overageDisabledReason, info);
+            return new RateLimitEvent(rateLimitInfo, uuid, sessionId);
+        } catch (ClassCastException e) {
+            throw new MessageParseException("Invalid field type in rate_limit_event message: " + e.getMessage(), data, e);
+        } catch (MessageParseException e) {
+            throw new MessageParseException("Missing required field in rate_limit_event message: " + e.getMessage(), data, e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
     private static StreamEvent parseStreamEvent(Map<String, Object> data) throws MessageParseException {
         try {
             String uuid = getRequired(data, "uuid", String.class);
@@ -277,6 +308,24 @@ public final class MessageParser {
     @Nullable
     private static TaskUsage parseTaskUsageOptional(@Nullable Map<String, Object> usage) {
         return usage == null ? null : parseTaskUsage(usage);
+    }
+
+    private static RateLimitStatus parseRateLimitStatus(String value) {
+        try {
+            return RateLimitStatus.fromValue(value);
+        } catch (IllegalArgumentException e) {
+            logger.fine("Unknown RateLimitStatus value: " + value);
+            return null;
+        }
+    }
+
+    private static RateLimitType parseRateLimitType(String value) {
+        try {
+            return RateLimitType.fromValue(value);
+        } catch (IllegalArgumentException e) {
+            logger.fine("Unknown RateLimitType value: " + value);
+            return null;
+        }
     }
 
     private static <T> T getRequired(Map<String, Object> data, String key, Class<T> type) throws MessageParseException {

@@ -373,14 +373,6 @@ public class SubprocessCLITransport implements Transport {
         if (options.enableFileCheckpointing()) {
             env.put("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");
         }
-
-        // Enable fine-grained tool streaming when partial messages are requested.
-        // --include-partial-messages emits stream_event messages, but tool input
-        // parameters are still buffered by the API unless eager_input_streaming is
-        // also enabled at the per-tool level via this env var.
-        if (options.includePartialMessages()) {
-            env.putIfAbsent("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING", "1");
-        }
     }
 
     @SuppressWarnings({ "unchecked", "null" })

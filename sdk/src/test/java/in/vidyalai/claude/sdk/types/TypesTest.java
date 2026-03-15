@@ -35,6 +35,7 @@ import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
 import in.vidyalai.claude.sdk.types.message.ToolResultBlock;
 import in.vidyalai.claude.sdk.types.message.ToolUseBlock;
+import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
 import in.vidyalai.claude.sdk.types.message.UserMessage;
 import in.vidyalai.claude.sdk.types.permission.PermissionBehavior;
 import in.vidyalai.claude.sdk.types.permission.PermissionDecision;
@@ -254,6 +255,7 @@ class TypesTest {
             case TaskNotificationMessage t -> "task_notification: " + t.status();
             case ResultMessage r -> "result: " + r.result();
             case StreamEvent e -> "event: " + e.eventType();
+            case RateLimitEvent rle -> "rate_limit: " + rle.rateLimitInfo().status();
         };
 
         assertThat(result).isEqualTo("assistant: Hello");

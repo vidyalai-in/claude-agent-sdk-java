@@ -395,7 +395,7 @@ public class Sessions {
                                 lite.head().contains("\"isSidechain\": true"))
                             return;
 
-                        String customTitle = extractLastJsonStringField(lite.tail(), "title");
+                        String customTitle = extractLastJsonStringField(lite.tail(), "customTitle");
                         String gitBranch = extractLastJsonStringField(lite.tail(), "gitBranch");
                         String summary = extractLastJsonStringField(lite.tail(), "summary");
                         String cwd = extractLastJsonStringField(lite.tail(), "cwd");
