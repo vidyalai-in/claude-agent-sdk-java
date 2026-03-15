@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.7] - 2026-03-15
+## [0.1.8] - 2026-03-15
 
 ### Added
 - **Typed `RateLimitEvent` message**: `rate_limit_event` messages from the CLI are now parsed into a typed `RateLimitEvent` record (matching Python SDK v0.1.49). Previously returned `null` (forward-compat). New types:
@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python SDK v0.1.48 → v0.1.49 (commits d6f0352..302ceb6)
 - v0.1.49: Typed `RateLimitEvent`, `rename_session`, `tag_session` APIs; CLI bumps to 2.1.72-2.1.76; revert FGTS
 
-[0.1.7]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.7
+[0.1.8]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.8
 
 ## [0.1.6] - 2026-03-07
 

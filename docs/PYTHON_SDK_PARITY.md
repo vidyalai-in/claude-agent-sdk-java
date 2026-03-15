@@ -1,7 +1,7 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
 **Analysis Date:** 2026-03-15 (Updated)
-**Java SDK Version:** 0.1.7
+**Java SDK Version:** 0.1.8
 **Python SDK Version:** [0.1.49](https://github.com/anthropics/claude-agent-sdk-python/commit/302ceb6788633d934cbe7ad6142448477234da68) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
@@ -42,7 +42,7 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - **v0.1.23** - `get_mcp_status()` made public, CLI 2.1.20 (already in Java SDK)
 - **v0.1.22** - `tool_use_result` field added to UserMessage, CLI 2.1.19 (already in Java SDK)
 
-✅ **All new features from Python SDK v0.1.49 are now implemented in Java SDK v0.1.7**. This includes:
+✅ **All new features from Python SDK v0.1.49 are now implemented in Java SDK v0.1.8**. This includes:
 - ✅ `stop_reason` field added to `ResultMessage` (v0.1.45)
 - ✅ Typed `McpServerStatus`, `McpServerInfo`, `McpToolInfo`, `McpToolAnnotations`, `McpStatusResponse` types (v0.1.45)
 - ✅ `getMcpStatus()` now returns typed `McpStatusResponse` instead of raw Map (v0.1.45)
@@ -655,5 +655,5 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 **Initial Analysis:** 2026-01-22
 **Latest Verification:** 2026-03-15
 **Python SDK Version:** 0.1.49 (commit 302ceb6788633d934cbe7ad6142448477234da68)
-**Java SDK Version:** 0.1.7
+**Java SDK Version:** 0.1.8
 **Status:** ✅ 100% Feature Parity Maintained
