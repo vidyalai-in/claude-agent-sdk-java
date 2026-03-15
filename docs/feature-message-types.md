@@ -12,6 +12,7 @@ Understanding the message type system for processing Claude conversations.
 - [Task Messages](#task-messages)
 - [ResultMessage](#resultmessage)
 - [StreamEvent](#streamevent)
+- [RateLimitEvent](#ratelimitevent)
 - [Content Blocks](#content-blocks)
 - [Pattern Matching](#pattern-matching)
 - [Examples](#examples)
@@ -23,7 +24,7 @@ The SDK uses a sealed interface hierarchy for type-safe message handling. All me
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
-    TaskNotificationMessage, ResultMessage, StreamEvent {}
+    TaskNotificationMessage, ResultMessage, StreamEvent, RateLimitEvent {}
 ```
 
 ## Forward Compatibility
@@ -55,7 +56,8 @@ Message (sealed interface)
 ├── TaskProgressMessage (record) - Task lifecycle: task in progress
 ├── TaskNotificationMessage (record) - Task lifecycle: task completed/failed/stopped
 ├── ResultMessage (record) - Final result with cost/usage/timing
-└── StreamEvent (record) - Partial streaming updates
+├── StreamEvent (record) - Partial streaming updates
+└── RateLimitEvent (record) - Rate limit status change notifications
 ```
 
 ## UserMessage
@@ -424,6 +426,81 @@ if (msg instanceof StreamEvent event) {
 }
 ```
 
+## RateLimitEvent
+
+Emitted by the CLI whenever the rate limit status transitions. Use this to warn users before they hit a hard limit or to gracefully back off when the limit is exceeded.
+
+### Fields
+
+```java
+record RateLimitEvent(
+    RateLimitInfo rateLimitInfo,  // Detailed rate limit status information
+    String uuid,                  // Unique identifier for this event
+    String sessionId              // Session identifier
+) implements Message
+```
+
+### RateLimitInfo
+
+```java
+record RateLimitInfo(
+    RateLimitStatus status,                      // Current rate limit status
+    @Nullable Long resetsAt,                     // Unix timestamp when the rate limit window resets
+    @Nullable RateLimitType rateLimitType,       // Which rate limit window applies
+    @Nullable Double utilization,               // Fraction of the rate limit consumed (0.0–1.0)
+    @Nullable RateLimitStatus overageStatus,    // Status of overage/pay-as-you-go usage
+    @Nullable Long overageResetsAt,             // Unix timestamp when overage window resets
+    @Nullable String overageDisabledReason,     // Why overage is unavailable if rejected
+    @Nullable Map<String, Object> raw           // Full raw map including any unmodeled fields
+)
+```
+
+### RateLimitStatus
+
+| Enum Constant | String Value | Description |
+|---------------|-------------|-------------|
+| `ALLOWED` | `"allowed"` | Within rate limits, no action needed |
+| `ALLOWED_WARNING` | `"allowed_warning"` | Approaching the rate limit — warn the user |
+| `REJECTED` | `"rejected"` | Rate limit has been hit — requests will be rejected |
+
+### RateLimitType
+
+| Enum Constant | String Value | Description |
+|---------------|-------------|-------------|
+| `FIVE_HOUR` | `"five_hour"` | 5-hour rolling window |
+| `SEVEN_DAY` | `"seven_day"` | 7-day rolling window |
+| `SEVEN_DAY_OPUS` | `"seven_day_opus"` | 7-day rolling window for Opus models |
+| `SEVEN_DAY_SONNET` | `"seven_day_sonnet"` | 7-day rolling window for Sonnet models |
+| `OVERAGE` | `"overage"` | Overage / pay-as-you-go limit |
+
+### Example
+
+```java
+for (Message msg : ClaudeSDK.query(prompt, options)) {
+    if (msg instanceof RateLimitEvent rle) {
+        RateLimitInfo info = rle.rateLimitInfo();
+        switch (info.status()) {
+            case ALLOWED -> {
+                // No action needed
+            }
+            case ALLOWED_WARNING -> {
+                System.out.printf("Rate limit warning: %.0f%% used%n",
+                    info.utilization() != null ? info.utilization() * 100 : 0);
+                if (info.resetsAt() != null) {
+                    System.out.println("Resets at: " + Instant.ofEpochSecond(info.resetsAt()));
+                }
+            }
+            case REJECTED -> {
+                System.err.println("Rate limit exceeded! Limit type: " + info.rateLimitType());
+                if (info.resetsAt() != null) {
+                    System.err.println("Resets at: " + Instant.ofEpochSecond(info.resetsAt()));
+                }
+            }
+        }
+    }
+}
+```
+
 ## Content Blocks
 
 Assistant messages (and structured user messages) contain content blocks.
@@ -496,6 +573,7 @@ String result = switch (message) {
     case TaskNotificationMessage t -> "Task done: " + t.status();
     case ResultMessage r -> "Cost: $" + r.totalCostUsd();
     case StreamEvent e -> "Streaming: " + e.eventType();
+    case RateLimitEvent rle -> "Rate limit: " + rle.rateLimitInfo().status();
 };
 ```
 
@@ -571,6 +649,9 @@ for (Message msg : ClaudeSDK.query(prompt, options)) {
 
         case StreamEvent event ->
             log("Stream", event.eventType());
+
+        case RateLimitEvent rle ->
+            log("RateLimit", rle.rateLimitInfo().status().getValue());
     }
 }
 ```

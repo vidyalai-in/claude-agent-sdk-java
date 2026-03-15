@@ -8,6 +8,8 @@ Read and browse historical Claude Code conversation sessions without running the
 - [Session Messages](#session-messages)
 - [Listing Sessions](#listing-sessions)
 - [Reading Session Messages](#reading-session-messages)
+- [Renaming Sessions](#renaming-sessions)
+- [Tagging Sessions](#tagging-sessions)
 - [Examples](#examples)
 - [Best Practices](#best-practices)
 
@@ -139,6 +141,58 @@ List<SessionMessage> page = ClaudeSDK.getSessionMessages(
 );
 ```
 
+## Renaming Sessions
+
+Rename a session by appending a custom-title entry to its JSONL file. The most recent rename always wins — safe to call multiple times.
+
+```java
+// Rename by session ID (searches all projects)
+ClaudeSDK.renameSession("550e8400-e29b-41d4-a716-446655440000", "My Feature Branch Session");
+
+// Rename scoped to a specific project directory
+ClaudeSDK.renameSession(
+    "550e8400-e29b-41d4-a716-446655440000",
+    "My Feature Branch Session",
+    Path.of("/my/project")
+);
+```
+
+**Constraints:**
+- `sessionId` must be a valid UUID (lowercase hex with hyphens).
+- `title` must be non-empty after stripping leading/trailing whitespace.
+- Throws `FileNotFoundException` if the session JSONL file is not found.
+- Throws `IOException` if the file write fails.
+
+After renaming, `listSessions()` returns the new title in the `summary` and `customTitle` fields of `SDKSessionInfo`.
+
+## Tagging Sessions
+
+Tag a session for organizational filtering. Pass `null` to clear an existing tag. Tags are Unicode-sanitized before storage for CLI filter compatibility.
+
+```java
+// Tag a session (searches all projects)
+ClaudeSDK.tagSession("550e8400-e29b-41d4-a716-446655440000", "production");
+
+// Clear a tag
+ClaudeSDK.tagSession("550e8400-e29b-41d4-a716-446655440000", null);
+
+// Tag scoped to a specific project directory
+ClaudeSDK.tagSession(
+    "550e8400-e29b-41d4-a716-446655440000",
+    "staging",
+    Path.of("/my/project")
+);
+```
+
+**Constraints:**
+- `sessionId` must be a valid UUID.
+- `tag` must be non-empty after Unicode sanitization and whitespace stripping (or `null` to clear).
+- Tags with dangerous Unicode characters (zero-width chars, directional marks, private-use chars) are automatically sanitized.
+- Throws `FileNotFoundException` if the session JSONL file is not found.
+- Throws `IOException` if the file write fails.
+
+**Concurrent safety:** If the session is currently open in the CLI process, the CLI absorbs SDK-written entries into its cache on next metadata re-append. The most recent write wins.
+
 ## Examples
 
 ### Example 1: List recent sessions
@@ -216,6 +270,42 @@ List<SDKSessionInfo> matching = all.stream()
     .toList();
 
 System.out.println("Found " + matching.size() + " sessions about refactoring");
+```
+
+### Example 5: Rename the most recent session
+
+```java
+List<SDKSessionInfo> sessions = ClaudeSDK.listSessions(null, 1, false);
+if (!sessions.isEmpty()) {
+    String sessionId = sessions.get(0).sessionId();
+    ClaudeSDK.renameSession(sessionId, "Important: Production Bug Fix");
+    System.out.println("Renamed session " + sessionId);
+}
+```
+
+### Example 6: Tag sessions by project phase
+
+```java
+// Tag a session after a query completes, using the result's session ID
+List<Message> messages = ClaudeSDK.query(prompt, options);
+for (Message msg : messages) {
+    if (msg instanceof ResultMessage result) {
+        ClaudeSDK.tagSession(result.sessionId(), "sprint-42");
+        break;
+    }
+}
+```
+
+### Example 7: Clear a tag
+
+```java
+// Retrieve a session and clear its tag
+List<SDKSessionInfo> sessions = ClaudeSDK.listSessions();
+for (SDKSessionInfo session : sessions) {
+    if ("old-tag".equals(session.customTitle())) {
+        ClaudeSDK.tagSession(session.sessionId(), null);
+    }
+}
 ```
 
 ## Best Practices

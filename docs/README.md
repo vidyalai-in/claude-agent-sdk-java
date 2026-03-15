@@ -50,7 +50,8 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Complete examples for common patterns
 
 - **[Message Types](./feature-message-types.md)** - Understanding the message type system
-  - UserMessage, AssistantMessage, SystemMessage, ResultMessage, StreamEvent
+  - UserMessage, AssistantMessage, SystemMessage, ResultMessage, StreamEvent, RateLimitEvent
+  - Task lifecycle messages (TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage)
   - Content blocks (Text, Thinking, ToolUse, ToolResult)
   - Pattern matching
   - Examples and best practices
@@ -70,9 +71,11 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Large agent support (260KB+ via stdin)
   - AgentDefinition API
 
-- **[Session History](./feature-session-history.md)** - Read historical Claude Code conversation sessions from disk
+- **[Session History](./feature-session-history.md)** - Read and manage historical Claude Code conversation sessions from disk
   - Listing sessions across all projects or filtered by directory
   - Reading full conversation transcripts
+  - Renaming sessions (`renameSession`)
+  - Tagging sessions for organization (`tagSession`)
   - SDKSessionInfo and SessionMessage types
   - Pagination and worktree support
 

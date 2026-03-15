@@ -256,6 +256,82 @@ Return messages with full control over filtering.
 
 **Returns**: `List<SessionMessage>`
 
+## Session Mutation Methods
+
+### renameSession(String sessionId, String title)
+
+```java
+public static void renameSession(
+    String sessionId,
+    String title
+) throws IOException
+```
+
+Rename a session by appending a custom-title entry. Most recent rename wins. Searches all project directories.
+
+**Parameters**:
+- `sessionId` - UUID of the session to rename
+- `title` - New session title (stripped of leading/trailing whitespace)
+
+**Throws**:
+- `IllegalArgumentException` - If `sessionId` is not a valid UUID or `title` is empty
+- `FileNotFoundException` - If the session file cannot be found
+- `IOException` - If the write fails
+
+### renameSession(String sessionId, String title, Path directory)
+
+```java
+public static void renameSession(
+    String sessionId,
+    String title,
+    Path directory
+) throws IOException
+```
+
+Rename a session scoped to a specific project directory.
+
+**Parameters**:
+- `sessionId` - UUID of the session to rename
+- `title` - New session title
+- `directory` - Project working directory to search in
+
+### tagSession(String sessionId, String tag)
+
+```java
+public static void tagSession(
+    String sessionId,
+    @Nullable String tag
+) throws IOException
+```
+
+Tag a session. Pass `null` to clear an existing tag. Tags are Unicode-sanitized before storage. Searches all project directories.
+
+**Parameters**:
+- `sessionId` - UUID of the session to tag
+- `tag` - Tag string, or `null` to clear. Must be non-empty after sanitization (unless `null`).
+
+**Throws**:
+- `IllegalArgumentException` - If `sessionId` is invalid or `tag` is empty after sanitization
+- `FileNotFoundException` - If the session file cannot be found
+- `IOException` - If the write fails
+
+### tagSession(String sessionId, String tag, Path directory)
+
+```java
+public static void tagSession(
+    String sessionId,
+    @Nullable String tag,
+    Path directory
+) throws IOException
+```
+
+Tag a session scoped to a specific project directory.
+
+**Parameters**:
+- `sessionId` - UUID of the session to tag
+- `tag` - Tag string, or `null` to clear
+- `directory` - Project working directory to search in
+
 ## Version Method
 
 ### getVersion()

@@ -20,7 +20,8 @@ Unknown message types return `null` instead of throwing an exception, allowing t
 
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
-    SystemMessage, ResultMessage, StreamEvent {
+    SystemMessage, TaskStartedMessage, TaskProgressMessage,
+    TaskNotificationMessage, ResultMessage, StreamEvent, RateLimitEvent {
     String type();
 }
 ```
@@ -157,6 +158,140 @@ record ToolResultBlock(
     @Nullable Object content,  // Result content
     @Nullable Boolean isError  // Whether this is an error result
 ) implements ContentBlock
+```
+
+## RateLimitEvent
+
+```java
+record RateLimitEvent(
+    RateLimitInfo rateLimitInfo,  // Detailed rate limit status information
+    String uuid,                  // Unique identifier for this event
+    String sessionId              // Session identifier
+) implements Message {
+    String type();  // Returns "rate_limit_event"
+}
+```
+
+## RateLimitInfo
+
+```java
+record RateLimitInfo(
+    RateLimitStatus status,                      // Current rate limit status
+    @Nullable Long resetsAt,                     // Unix timestamp when the rate limit window resets
+    @Nullable RateLimitType rateLimitType,       // Which rate limit window applies
+    @Nullable Double utilization,               // Fraction of the rate limit consumed (0.0–1.0)
+    @Nullable RateLimitStatus overageStatus,    // Status of overage/pay-as-you-go usage
+    @Nullable Long overageResetsAt,             // Unix timestamp when overage window resets
+    @Nullable String overageDisabledReason,     // Why overage is unavailable if rejected
+    @Nullable Map<String, Object> raw           // Full raw map from the CLI
+)
+```
+
+## RateLimitStatus
+
+```java
+enum RateLimitStatus {
+    ALLOWED,           // "allowed" — within rate limits
+    ALLOWED_WARNING,   // "allowed_warning" — approaching the rate limit
+    REJECTED;          // "rejected" — rate limit has been hit
+
+    String getValue();                           // Returns the JSON string value
+    static RateLimitStatus fromValue(String);    // Parse from string
+}
+```
+
+## RateLimitType
+
+```java
+enum RateLimitType {
+    FIVE_HOUR,         // "five_hour" — 5-hour rolling window
+    SEVEN_DAY,         // "seven_day" — 7-day rolling window
+    SEVEN_DAY_OPUS,    // "seven_day_opus" — 7-day Opus-specific window
+    SEVEN_DAY_SONNET,  // "seven_day_sonnet" — 7-day Sonnet-specific window
+    OVERAGE;           // "overage" — overage/pay-as-you-go limit
+
+    String getValue();                        // Returns the JSON string value
+    static RateLimitType fromValue(String);   // Parse from string
+}
+```
+
+## Task Message Types
+
+### TaskStartedMessage
+
+```java
+record TaskStartedMessage(
+    String subtype,               // always "task_started"
+    Map<String, Object> data,     // raw message data
+    String taskId,                // unique task identifier
+    String description,           // human-readable description
+    String uuid,                  // message UUID
+    String sessionId,             // session identifier
+    @Nullable String toolUseId,   // tool use ID (may be null)
+    @Nullable String taskType     // task type (may be null)
+) implements Message {
+    String type();  // Returns "system"
+}
+```
+
+### TaskProgressMessage
+
+```java
+record TaskProgressMessage(
+    String subtype,                  // always "task_progress"
+    Map<String, Object> data,        // raw message data
+    String taskId,                   // unique task identifier
+    String description,              // human-readable description
+    TaskUsage usage,                 // token/tool usage so far
+    String uuid,                     // message UUID
+    String sessionId,                // session identifier
+    @Nullable String toolUseId,      // tool use ID (may be null)
+    @Nullable String lastToolName    // last tool used (may be null)
+) implements Message {
+    String type();  // Returns "system"
+}
+```
+
+### TaskNotificationMessage
+
+```java
+record TaskNotificationMessage(
+    String subtype,                  // always "task_notification"
+    Map<String, Object> data,        // raw message data
+    String taskId,                   // unique task identifier
+    TaskNotificationStatus status,   // COMPLETED, FAILED, or STOPPED
+    String outputFile,               // path to task output file
+    String summary,                  // human-readable summary
+    String uuid,                     // message UUID
+    String sessionId,                // session identifier
+    @Nullable String toolUseId,      // tool use ID (may be null)
+    @Nullable TaskUsage usage        // final usage statistics (may be null)
+) implements Message {
+    String type();  // Returns "system"
+}
+```
+
+### TaskNotificationStatus
+
+```java
+enum TaskNotificationStatus {
+    COMPLETED,  // "completed"
+    FAILED,     // "failed"
+    STOPPED;    // "stopped"
+
+    String getValue();
+    static TaskNotificationStatus fromValue(String);
+}
+```
+
+### TaskUsage
+
+```java
+record TaskUsage(
+    int totalTokens,  // total tokens used
+    int toolUses,     // number of tool invocations
+    int durationMs    // task duration in milliseconds
+)
 ```
 
 ## See Also
