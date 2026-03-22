@@ -989,4 +989,45 @@ class MessageParserTest {
         assertThat(result.stopReason()).isNull();
     }
 
+    // ==================== AssistantMessage usage field ====================
+
+    @SuppressWarnings("null")
+    @Test
+    void parseAssistantMessage_withUsage() {
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "content", List.of(Map.of("type", "text", "text", "hi")),
+                        "model", "claude-opus-4-5",
+                        "usage", Map.of(
+                                "input_tokens", 100,
+                                "output_tokens", 50,
+                                "cache_read_input_tokens", 2000,
+                                "cache_creation_input_tokens", 500)));
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(AssistantMessage.class);
+        AssistantMessage am = (AssistantMessage) message;
+        assertThat(am.usage()).isNotNull();
+        assertThat(am.usage()).containsEntry("input_tokens", 100);
+        assertThat(am.usage()).containsEntry("output_tokens", 50);
+        assertThat(am.usage()).containsEntry("cache_read_input_tokens", 2000);
+        assertThat(am.usage()).containsEntry("cache_creation_input_tokens", 500);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseAssistantMessage_withoutUsage() {
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "content", List.of(Map.of("type", "text", "text", "hi")),
+                        "model", "claude-opus-4-5"));
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(AssistantMessage.class);
+        AssistantMessage am = (AssistantMessage) message;
+        assertThat(am.usage()).isNull();
+    }
+
 }

@@ -151,7 +151,10 @@ public final class MessageParser {
                     ? AssistantMessageError.fromValue(errorStr)
                     : null);
 
-            return new AssistantMessage(blocks, model, parentToolUseId, error);
+            // Per-turn usage from the API (input_tokens, output_tokens, cache tokens, etc.)
+            Map<String, Object> usage = (Map<String, Object>) message.get("usage");
+
+            return new AssistantMessage(blocks, model, parentToolUseId, error, usage);
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in assistant message: " + e.getMessage(), data, e);
         }

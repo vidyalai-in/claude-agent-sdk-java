@@ -206,9 +206,6 @@ public final class ClaudeSDK {
 
     private static List<Message> queryInternal(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options,
             Transport transport, boolean promptStream) {
-        // Set entrypoint for analytics (matches Python SDK)
-        System.setProperty("CLAUDE_CODE_ENTRYPOINT", "sdk-java");
-
         // Validate and configure options
         ClaudeAgentOptions effectiveOptions = validateAndConfigureOptions(options, promptStream);
 
@@ -550,6 +547,34 @@ public final class ClaudeSDK {
                 directory != null ? directory.toString() : null,
                 limit,
                 includeWorktrees);
+    }
+
+    /**
+     * Reads metadata for a single session by ID.
+     *
+     * <p>
+     * Searches all project directories under {@code ~/.claude/projects/}.
+     * No O(n) directory scan per project — reads only the target session file.
+     *
+     * @param sessionId UUID of the session to look up
+     * @return {@code SDKSessionInfo} for the session, or null if not found
+     */
+    @Nullable
+    public static SDKSessionInfo getSessionInfo(String sessionId) {
+        return Sessions.getSessionInfo(sessionId, null);
+    }
+
+    /**
+     * Reads metadata for a single session by ID within a specific project.
+     *
+     * @param sessionId UUID of the session to look up
+     * @param directory project working directory to search in
+     * @return {@code SDKSessionInfo} for the session, or null if not found
+     */
+    @Nullable
+    public static SDKSessionInfo getSessionInfo(String sessionId, Path directory) {
+        return Sessions.getSessionInfo(
+                sessionId, directory != null ? directory.toString() : null);
     }
 
     /**

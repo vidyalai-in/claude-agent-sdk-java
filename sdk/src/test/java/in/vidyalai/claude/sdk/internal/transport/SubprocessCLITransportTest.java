@@ -637,6 +637,34 @@ class SubprocessCLITransportTest {
         assertThat(env).doesNotContainKey("CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING");
     }
 
+    @Test
+    void testCallerCanOverrideEntrypoint() {
+        // Caller-supplied CLAUDE_CODE_ENTRYPOINT should survive the env merge
+        Map<String, String> customEnv = Map.of("CLAUDE_CODE_ENTRYPOINT", "custom-caller");
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .env(customEnv)
+                .build();
+
+        Map<String, String> env = new java.util.HashMap<>();
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        // Caller's entrypoint must win over the sdk-java default
+        assertThat(env.get("CLAUDE_CODE_ENTRYPOINT")).isEqualTo("custom-caller");
+        // SDK version is still always set
+        assertThat(env).containsKey("CLAUDE_AGENT_SDK_VERSION");
+    }
+
+    @Test
+    void testDefaultEntrypointApplied() {
+        // Without custom env, default entrypoint is sdk-java
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder().build();
+
+        Map<String, String> env = new java.util.HashMap<>();
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env.get("CLAUDE_CODE_ENTRYPOINT")).isEqualTo("sdk-java");
+    }
+
     // ==================== Environment Variables Tests ====================
 
     @Test

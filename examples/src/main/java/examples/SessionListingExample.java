@@ -95,8 +95,10 @@ public class SessionListingExample {
         System.out.printf("Found %d session(s) for: %s%n", sessions.size(), cwd);
         for (SDKSessionInfo session : sessions) {
             String time = FORMATTER.format(Instant.ofEpochMilli(session.lastModified()));
-            System.out.printf("  [%s] %s (%.1f KB)%n",
-                    time, session.summary(), session.fileSize() / 1024.0);
+            String sizeStr = (session.fileSize() != null)
+                    ? String.format("%.1f KB", session.fileSize() / 1024.0) : "N/A";
+            System.out.printf("  [%s] %s (%s)%n",
+                    time, session.summary(), sizeStr);
         }
         System.out.println();
     }

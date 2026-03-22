@@ -171,9 +171,6 @@ public class ClaudeSDKClient implements AutoCloseable {
     public ClaudeSDKClient(ClaudeAgentOptions options, @Nullable Transport transport) {
         this.options = options;
         this.customTransport = transport;
-
-        // Set entrypoint for tracking (matches Python SDK)
-        System.setProperty("CLAUDE_CODE_ENTRYPOINT", "sdk-java-client");
     }
 
     /**

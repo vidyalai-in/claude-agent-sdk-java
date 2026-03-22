@@ -12,6 +12,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.text.Normalizer;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -367,6 +369,137 @@ public class Sessions {
     }
 
     // -------------------------------------------------------------------------
+    // Field extraction — shared by listSessions and getSessionInfo
+    // -------------------------------------------------------------------------
+
+    /**
+     * Parses SDKSessionInfo fields from a lite session read (head/tail/stat).
+     *
+     * <p>
+     * Returns null for sidechain sessions or metadata-only sessions with no
+     * extractable summary.
+     *
+     * <p>
+     * Shared by {@code readSessionsFromDir} and {@code getSessionInfo}.
+     */
+    static @Nullable SDKSessionInfo parseSessionInfoFromLite(
+            String sessionId, LiteSessionFile lite, @Nullable String projectPath) {
+        String head = lite.head();
+        String tail = lite.tail();
+
+        // Check first line for sidechain sessions
+        int firstNewline = head.indexOf('\n');
+        String firstLine = (firstNewline >= 0) ? head.substring(0, firstNewline) : head;
+        if (firstLine.contains("\"isSidechain\":true") || firstLine.contains("\"isSidechain\": true")) {
+            return null;
+        }
+
+        // User-set title (customTitle) wins over AI-generated title (aiTitle).
+        // Head fallback covers short sessions where the title entry may not be in tail.
+        String customTitle = extractLastJsonStringField(tail, "customTitle");
+        if (customTitle == null) {
+            customTitle = extractLastJsonStringField(head, "customTitle");
+        }
+        if (customTitle == null) {
+            customTitle = extractLastJsonStringField(tail, "aiTitle");
+            if (customTitle == null) {
+                customTitle = extractLastJsonStringField(head, "aiTitle");
+            }
+        }
+
+        String firstPrompt = extractFirstPromptFromHead(head);
+        if (firstPrompt != null && firstPrompt.isEmpty()) {
+            firstPrompt = null;
+        }
+
+        // Summary priority: custom title > lastPrompt > summary > first prompt
+        String displaySummary = customTitle;
+        if (displaySummary == null || displaySummary.isBlank()) {
+            displaySummary = extractLastJsonStringField(tail, "lastPrompt");
+        }
+        if (displaySummary == null || displaySummary.isBlank()) {
+            displaySummary = extractLastJsonStringField(tail, "summary");
+        }
+        if (displaySummary == null || displaySummary.isBlank()) {
+            displaySummary = firstPrompt;
+        }
+
+        // Skip metadata-only sessions (no title, no summary, no prompt)
+        if (displaySummary == null || displaySummary.isBlank()) {
+            return null;
+        }
+
+        String gitBranch = extractLastJsonStringField(tail, "gitBranch");
+        if (gitBranch == null) {
+            gitBranch = extractJsonStringField(head, "gitBranch");
+        }
+        String cwd = extractJsonStringField(head, "cwd");
+        if (cwd == null) {
+            cwd = projectPath;
+        }
+
+        // Tag extraction scoped to {"type":"tag"} lines to avoid matching
+        // tool_use inputs (git tag, Docker tags, etc.)
+        String tag = extractTagFromTail(tail);
+
+        // created_at from first entry's ISO timestamp (epoch ms)
+        Long createdAt = extractCreatedAtFromFirstLine(firstLine);
+
+        return new SDKSessionInfo(
+                sessionId,
+                displaySummary,
+                lite.mtime(),
+                lite.size(),
+                customTitle,
+                firstPrompt,
+                gitBranch,
+                cwd,
+                tag,
+                createdAt);
+    }
+
+    /**
+     * Extracts tag from tail by finding lines starting with {@code {"type":"tag"}
+     * and extracting the last "tag" field value.
+     */
+    static @Nullable String extractTagFromTail(String tail) {
+        String lastTagLine = null;
+        String[] lines = tail.split("\n");
+        for (int i = lines.length - 1; i >= 0; i--) {
+            if (lines[i].startsWith("{\"type\":\"tag\"")) {
+                lastTagLine = lines[i];
+                break;
+            }
+        }
+        if (lastTagLine == null) {
+            return null;
+        }
+        String tagValue = extractLastJsonStringField(lastTagLine, "tag");
+        // Empty string tag (clear marker) resolves to null
+        return (tagValue != null && !tagValue.isEmpty()) ? tagValue : null;
+    }
+
+    /**
+     * Extracts created_at timestamp from the first line's ISO timestamp field.
+     */
+    static @Nullable Long extractCreatedAtFromFirstLine(String firstLine) {
+        String timestamp = extractJsonStringField(firstLine, "timestamp");
+        if (timestamp == null) {
+            return null;
+        }
+        try {
+            // Handle trailing 'Z' by converting to +00:00 offset format
+            String ts = timestamp.endsWith("Z")
+                    ? timestamp.substring(0, timestamp.length() - 1) + "+00:00"
+                    : timestamp;
+            OffsetDateTime odt = OffsetDateTime.parse(ts);
+            return odt.toInstant().toEpochMilli();
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Session directory scanning
     // -------------------------------------------------------------------------
 
@@ -390,43 +523,10 @@ public class Sessions {
                         if (lite == null)
                             return;
 
-                        // Skip sidechain sessions
-                        if (lite.head().contains("\"isSidechain\":true") ||
-                                lite.head().contains("\"isSidechain\": true"))
-                            return;
-
-                        String customTitle = extractLastJsonStringField(lite.tail(), "customTitle");
-                        String gitBranch = extractLastJsonStringField(lite.tail(), "gitBranch");
-                        String summary = extractLastJsonStringField(lite.tail(), "summary");
-                        String cwd = extractLastJsonStringField(lite.tail(), "cwd");
-                        if (cwd == null)
-                            cwd = projectPath;
-
-                        String firstPrompt = extractFirstPromptFromHead(lite.head());
-                        if (firstPrompt.isEmpty())
-                            firstPrompt = null;
-
-                        // Summary priority: custom title > auto summary > first prompt
-                        String displaySummary;
-                        if (customTitle != null && !customTitle.isBlank()) {
-                            displaySummary = customTitle;
-                        } else if (summary != null && !summary.isBlank()) {
-                            displaySummary = summary;
-                        } else if (firstPrompt != null) {
-                            displaySummary = firstPrompt;
-                        } else {
-                            return; // skip sessions with no displayable info
+                        SDKSessionInfo info = parseSessionInfoFromLite(sessionId, lite, projectPath);
+                        if (info != null) {
+                            sessions.add(info);
                         }
-
-                        sessions.add(new SDKSessionInfo(
-                                sessionId,
-                                displaySummary,
-                                lite.mtime(),
-                                lite.size(),
-                                customTitle,
-                                firstPrompt,
-                                gitBranch,
-                                cwd));
                     });
         } catch (IOException e) {
             // Return what we have
@@ -550,6 +650,81 @@ public class Sessions {
 
         List<SDKSessionInfo> deduped = deduplicateBySessionId(allSessions);
         return applySortAndLimit(new ArrayList<>(deduped), limit);
+    }
+
+    /**
+     * Reads metadata for a single session by ID.
+     *
+     * <p>
+     * No O(n) directory scan — reads only the target session file.
+     * Directory resolution matches {@code getSessionMessages}: {@code directory}
+     * is the project path; when omitted, all project directories are searched.
+     *
+     * @param sessionId UUID of the session to look up
+     * @param directory project directory path (same semantics as
+     *                  {@code listSessions}). When null, all project directories
+     *                  are searched.
+     * @return {@code SDKSessionInfo} for the session, or null if not found,
+     *         is a sidechain session, or has no extractable summary
+     */
+    public static @Nullable SDKSessionInfo getSessionInfo(
+            String sessionId, @Nullable String directory) {
+
+        if (!UUID_RE.matcher(sessionId).matches()) {
+            return null;
+        }
+
+        String filename = sessionId + ".jsonl";
+
+        if (directory != null) {
+            Path projectDir = findProjectDir(directory);
+            if (projectDir != null) {
+                LiteSessionFile lite = readSessionLite(projectDir.resolve(filename));
+                if (lite != null) {
+                    return parseSessionInfoFromLite(sessionId, lite, directory);
+                }
+            }
+
+            // Worktree fallback — matches getSessionMessages semantics
+            List<String> worktreePaths;
+            try {
+                worktreePaths = getWorktreePaths(directory);
+            } catch (Exception e) {
+                worktreePaths = List.of();
+            }
+            for (String wt : worktreePaths) {
+                if (wt.equals(directory)) {
+                    continue;
+                }
+                Path wtProjectDir = findProjectDir(wt);
+                if (wtProjectDir != null) {
+                    LiteSessionFile lite = readSessionLite(wtProjectDir.resolve(filename));
+                    if (lite != null) {
+                        return parseSessionInfoFromLite(sessionId, lite, wt);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        // No directory — search all project directories
+        Path projectsDir = getProjectsDir();
+        if (!Files.exists(projectsDir)) {
+            return null;
+        }
+        try (Stream<Path> dirs = Files.list(projectsDir)) {
+            List<Path> dirents = dirs.filter(Files::isDirectory).toList();
+            for (Path entry : dirents) {
+                LiteSessionFile lite = readSessionLite(entry.resolve(filename));
+                if (lite != null) {
+                    return parseSessionInfoFromLite(sessionId, lite, null);
+                }
+            }
+        } catch (IOException e) {
+            return null;
+        }
+        return null;
     }
 
     /**

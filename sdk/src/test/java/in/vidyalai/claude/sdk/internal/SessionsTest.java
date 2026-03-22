@@ -455,4 +455,268 @@ class SessionsTest {
             System.setProperty("user.home", original);
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Tag extraction
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testExtractTagFromTail_present() {
+        String tail = "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n"
+                + "{\"type\":\"tag\",\"tag\":\"my-tag\",\"sessionId\":\"abc\"}\n";
+        assertThat(Sessions.extractTagFromTail(tail)).isEqualTo("my-tag");
+    }
+
+    @Test
+    void testExtractTagFromTail_lastWins() {
+        String tail = "{\"type\":\"tag\",\"tag\":\"first\",\"sessionId\":\"abc\"}\n"
+                + "{\"type\":\"tag\",\"tag\":\"second\",\"sessionId\":\"abc\"}\n";
+        assertThat(Sessions.extractTagFromTail(tail)).isEqualTo("second");
+    }
+
+    @Test
+    void testExtractTagFromTail_emptyStringIsNull() {
+        String tail = "{\"type\":\"tag\",\"tag\":\"\",\"sessionId\":\"abc\"}\n";
+        assertThat(Sessions.extractTagFromTail(tail)).isNull();
+    }
+
+    @Test
+    void testExtractTagFromTail_absent() {
+        String tail = "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n";
+        assertThat(Sessions.extractTagFromTail(tail)).isNull();
+    }
+
+    @Test
+    void testExtractTagFromTail_ignoresToolUseInputs() {
+        // A tool_use entry with a "tag" key in its input — must NOT match
+        String tail = "{\"type\":\"tag\",\"tag\":\"real-tag\",\"sessionId\":\"abc\"}\n"
+                + "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\","
+                + "\"name\":\"mcp__docker__build\",\"input\":{\"tag\":\"myapp:v2\"}}]}}\n";
+        assertThat(Sessions.extractTagFromTail(tail)).isEqualTo("real-tag");
+    }
+
+    @Test
+    void testExtractTagFromTail_noTagWhenOnlyToolUseTag() {
+        String tail = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\","
+                + "\"input\":{\"tag\":\"prod\"}}]}}\n";
+        assertThat(Sessions.extractTagFromTail(tail)).isNull();
+    }
+
+    // -------------------------------------------------------------------------
+    // createdAt extraction
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testExtractCreatedAtFromFirstLine_withZSuffix() {
+        String line = "{\"type\":\"user\",\"message\":{\"content\":\"hello\"},"
+                + "\"timestamp\":\"2026-01-15T10:30:00.000Z\"}";
+        Long createdAt = Sessions.extractCreatedAtFromFirstLine(line);
+        assertThat(createdAt).isNotNull();
+        // 2026-01-15T10:30:00Z = 1768473000000 ms
+        assertThat(createdAt).isEqualTo(1768473000000L);
+    }
+
+    @Test
+    void testExtractCreatedAtFromFirstLine_withOffset() {
+        String line = "{\"type\":\"user\",\"message\":{\"content\":\"hello\"},"
+                + "\"timestamp\":\"2026-01-15T10:30:00+00:00\"}";
+        Long createdAt = Sessions.extractCreatedAtFromFirstLine(line);
+        assertThat(createdAt).isNotNull();
+        assertThat(createdAt).isEqualTo(1768473000000L);
+    }
+
+    @Test
+    void testExtractCreatedAtFromFirstLine_missingTimestamp() {
+        String line = "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}";
+        assertThat(Sessions.extractCreatedAtFromFirstLine(line)).isNull();
+    }
+
+    @Test
+    void testExtractCreatedAtFromFirstLine_invalidFormat() {
+        String line = "{\"type\":\"user\",\"message\":{\"content\":\"hello\"},"
+                + "\"timestamp\":\"not-a-valid-iso-date\"}";
+        assertThat(Sessions.extractCreatedAtFromFirstLine(line)).isNull();
+    }
+
+    // -------------------------------------------------------------------------
+    // parseSessionInfoFromLite
+    // -------------------------------------------------------------------------
+
+    @SuppressWarnings("null")
+    @Test
+    void testParseSessionInfoFromLite_withTagAndCreatedAt() {
+        String head = "{\"type\":\"user\",\"message\":{\"content\":\"test prompt\"},"
+                + "\"cwd\":\"/workspace\","
+                + "\"timestamp\":\"2026-01-15T10:30:00.000Z\"}\n";
+        String tail = head + "{\"type\":\"tag\",\"tag\":\"experiment\",\"sessionId\":\"abc\"}\n";
+
+        Sessions.LiteSessionFile lite = new Sessions.LiteSessionFile(
+                System.currentTimeMillis(), 100L, head, tail);
+
+        SDKSessionInfo info = Sessions.parseSessionInfoFromLite("abc", lite, "/fallback");
+        assertThat(info).isNotNull();
+        assertThat(info.sessionId()).isEqualTo("abc");
+        assertThat(info.summary()).isEqualTo("test prompt");
+        assertThat(info.tag()).isEqualTo("experiment");
+        assertThat(info.cwd()).isEqualTo("/workspace"); // head cwd wins over fallback
+        assertThat(info.createdAt()).isEqualTo(1768473000000L);
+    }
+
+    @Test
+    void testParseSessionInfoFromLite_sidechain() {
+        String head = "{\"type\":\"user\",\"isSidechain\":true,\"message\":{\"content\":\"hi\"}}\n";
+        Sessions.LiteSessionFile lite = new Sessions.LiteSessionFile(
+                System.currentTimeMillis(), 50L, head, head);
+
+        assertThat(Sessions.parseSessionInfoFromLite("abc", lite, null)).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testParseSessionInfoFromLite_aiTitleFallback() {
+        // No customTitle, but has aiTitle → should use aiTitle
+        String data = "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n"
+                + "{\"aiTitle\":\"AI Generated Title\"}\n";
+        Sessions.LiteSessionFile lite = new Sessions.LiteSessionFile(
+                System.currentTimeMillis(), 80L, data, data);
+
+        SDKSessionInfo info = Sessions.parseSessionInfoFromLite("abc", lite, null);
+        assertThat(info).isNotNull();
+        assertThat(info.customTitle()).isEqualTo("AI Generated Title");
+        assertThat(info.summary()).isEqualTo("AI Generated Title");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testParseSessionInfoFromLite_lastPromptInSummary() {
+        // No custom/ai title, but lastPrompt should win over summary
+        String data = "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n"
+                + "{\"lastPrompt\":\"recent query\",\"summary\":\"old summary\"}\n";
+        Sessions.LiteSessionFile lite = new Sessions.LiteSessionFile(
+                System.currentTimeMillis(), 80L, data, data);
+
+        SDKSessionInfo info = Sessions.parseSessionInfoFromLite("abc", lite, null);
+        assertThat(info).isNotNull();
+        assertThat(info.summary()).isEqualTo("recent query");
+    }
+
+    // -------------------------------------------------------------------------
+    // SDKSessionInfo new fields defaults
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testSDKSessionInfoNewFieldsDefaults() {
+        SDKSessionInfo info = new SDKSessionInfo("abc", "test", 1000L, 42L, null, null, null, null);
+        assertThat(info.tag()).isNull();
+        assertThat(info.createdAt()).isNull();
+    }
+
+    @Test
+    void testSDKSessionInfoWithAllFields() {
+        SDKSessionInfo info = new SDKSessionInfo(
+                "abc", "test", 1000L, 42L,
+                "title", "prompt", "main", "/cwd",
+                "my-tag", 1768473000000L);
+        assertThat(info.tag()).isEqualTo("my-tag");
+        assertThat(info.createdAt()).isEqualTo(1768473000000L);
+    }
+
+    // -------------------------------------------------------------------------
+    // getSessionInfo
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testGetSessionInfo_invalidSessionId() {
+        assertThat(Sessions.getSessionInfo("not-a-uuid", null)).isNull();
+        assertThat(Sessions.getSessionInfo("", null)).isNull();
+    }
+
+    @Test
+    void testGetSessionInfo_nonexistent(@TempDir Path tempDir) {
+        withClaudeHome(tempDir, () -> {
+            String uuid = "12345678-1234-1234-1234-123456789abc";
+            assertThat(Sessions.getSessionInfo(uuid, null)).isNull();
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSessionInfo_foundWithDirectory(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        String projectPath = tempDir.resolve("myproject").toString();
+        Files.createDirectories(Path.of(projectPath));
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects")
+                .resolve(Sessions.sanitizePath(projectPath));
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        String jsonl = makeUserLine(sessionId, "msg-1", null, "Hello from test") + "\n";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"), jsonl);
+
+        withClaudeHome(claudeHome, () -> {
+            SDKSessionInfo info = Sessions.getSessionInfo(sessionId, projectPath);
+            assertThat(info).isNotNull();
+            assertThat(info.sessionId()).isEqualTo(sessionId);
+            assertThat(info.summary()).contains("Hello from test");
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSessionInfo_foundWithoutDirectory(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("some-project");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        String jsonl = makeUserLine(sessionId, "msg-1", null, "search all") + "\n";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"), jsonl);
+
+        withClaudeHome(claudeHome, () -> {
+            SDKSessionInfo info = Sessions.getSessionInfo(sessionId, null);
+            assertThat(info).isNotNull();
+            assertThat(info.summary()).contains("search all");
+        });
+    }
+
+    @Test
+    void testGetSessionInfo_returnsNullForSidechain(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects")
+                .resolve(Sessions.sanitizePath(projectPath));
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        String jsonl = "{\"type\":\"user\",\"uuid\":\"m1\",\"sessionId\":\"" + sessionId
+                + "\",\"isSidechain\":true,"
+                + "\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"), jsonl);
+
+        withClaudeHome(claudeHome, () -> {
+            assertThat(Sessions.getSessionInfo(sessionId, projectPath)).isNull();
+        });
+    }
+
+    @Test
+    void testListSessions_includesTagAndCreatedAt(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        String jsonl = "{\"type\":\"user\",\"message\":{\"content\":\"hello\"},"
+                + "\"timestamp\":\"2026-01-15T10:30:00.000Z\"}\n"
+                + "{\"type\":\"tag\",\"tag\":\"my-tag\",\"sessionId\":\"" + sessionId + "\"}\n";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"), jsonl);
+
+        withClaudeHome(claudeHome, () -> {
+            List<SDKSessionInfo> sessions = Sessions.listSessions(null, null, false);
+            assertThat(sessions).hasSize(1);
+            assertThat(sessions.get(0).tag()).isEqualTo("my-tag");
+            assertThat(sessions.get(0).createdAt()).isEqualTo(1768473000000L);
+        });
+    }
+
 }

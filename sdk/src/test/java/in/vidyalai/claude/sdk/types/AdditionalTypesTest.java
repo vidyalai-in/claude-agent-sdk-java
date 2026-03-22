@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import in.vidyalai.claude.sdk.types.config.AIModel;
 import in.vidyalai.claude.sdk.types.config.AgentDefinition;
+import in.vidyalai.claude.sdk.types.config.MemoryScope;
 import in.vidyalai.claude.sdk.types.config.SandboxIgnoreViolations;
 import in.vidyalai.claude.sdk.types.config.SandboxNetworkConfig;
 import in.vidyalai.claude.sdk.types.config.SandboxSettings;
@@ -309,6 +310,38 @@ class AdditionalTypesTest {
 
         assertThat(agent.tools()).containsExactly("Bash", "Read", "Write");
         assertThat(agent.model()).isEqualTo(AIModel.OPUS);
+    }
+
+    @Test
+    void testAgentDefinitionMinimalOmitsNewFields() {
+        AgentDefinition agent = new AgentDefinition("test", "You are a test");
+        assertThat(agent.skills()).isNull();
+        assertThat(agent.memory()).isNull();
+        assertThat(agent.mcpServers()).isNull();
+    }
+
+    @Test
+    void testAgentDefinitionWithSkillsAndMemory() {
+        AgentDefinition agent = new AgentDefinition(
+                "test", "p",
+                List.of("Bash"), AIModel.SONNET,
+                List.of("skill-a", "skill-b"), MemoryScope.PROJECT, null);
+
+        assertThat(agent.skills()).containsExactly("skill-a", "skill-b");
+        assertThat(agent.memory()).isEqualTo(MemoryScope.PROJECT);
+        assertThat(agent.mcpServers()).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testAgentDefinitionWithMcpServers() {
+        AgentDefinition agent = new AgentDefinition(
+                "test", "p", null, null, null, null,
+                List.of("slack", Map.of("local", Map.of("command", "python", "args", List.of("server.py")))));
+
+        assertThat(agent.mcpServers()).hasSize(2);
+        assertThat(agent.mcpServers().get(0)).isEqualTo("slack");
+        assertThat(agent.mcpServers().get(1)).isInstanceOf(Map.class);
     }
 
     // ==================== SandboxSettings Tests ====================

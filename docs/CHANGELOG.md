@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-03-22
+
+### Added
+- **Per-turn `usage` on `AssistantMessage`**: New optional `usage` field (Map) preserving the API's full usage dict (input_tokens, output_tokens, cache token breakdown) on every assistant message (matching Python SDK v0.1.50)
+- **`AgentDefinition` new fields**: Added `skills` (List<String>), `memory` (String: "user"/"project"/"local"), and `mcpServers` (List<Object>) to agent definitions for richer agent configuration (matching Python SDK v0.1.50)
+- **`SDKSessionInfo` new fields**: Added `tag` (user-set session tag) and `createdAt` (creation time from first entry timestamp) fields; `fileSize` changed from `long` to nullable `Long` for remote storage compatibility (matching Python SDK v0.1.50)
+- **`getSessionInfo()` single-session lookup**: New `ClaudeSDK.getSessionInfo(sessionId)` and `getSessionInfo(sessionId, directory)` methods for O(1) session metadata retrieval without directory scan (matching Python SDK v0.1.50)
+- **Enhanced session summary resolution**: Session summary now considers `aiTitle` (AI-generated title) and `lastPrompt` in addition to `customTitle` and `summary`, matching the updated Python SDK priority order (matching Python SDK v0.1.50)
+
+### Changed
+- **ENTRYPOINT default-if-absent**: `CLAUDE_CODE_ENTRYPOINT` is now set as a default before merging user env vars, allowing callers to override it via `ClaudeAgentOptions.env()` (matching Python SDK v0.1.50)
+- **Graceful subprocess shutdown**: Transport close now waits up to 5 seconds for the subprocess to exit after stdin EOF before sending SIGTERM, preventing session file corruption (matching Python SDK v0.1.50)
+- **Removed `System.setProperty` calls**: Removed `CLAUDE_CODE_ENTRYPOINT` system property setting from `ClaudeSDK` and `ClaudeSDKClient` constructors; entrypoint is now only set via process environment (matching Python SDK v0.1.50)
+
+### Synced
+- Python SDK v0.1.49 → v0.1.50 (commits 302ceb6..a7fd631)
+- v0.1.50: Per-turn usage, AgentDefinition skills/memory/mcpServers, SDKSessionInfo tag/created_at, get_session_info(), aiTitle/lastPrompt summary, ENTRYPOINT override, graceful shutdown; CLI 2.1.77-2.1.81
+
+[0.1.9]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.9
+
 ## [0.1.8] - 2026-03-15
 
 ### Added

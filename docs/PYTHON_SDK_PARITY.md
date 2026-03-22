@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-03-15 (Updated)
-**Java SDK Version:** 0.1.8
-**Python SDK Version:** [0.1.49](https://github.com/anthropics/claude-agent-sdk-python/commit/302ceb6788633d934cbe7ad6142448477234da68) (latest)
+**Analysis Date:** 2026-03-22 (Updated)
+**Java SDK Version:** 0.1.9
+**Python SDK Version:** [0.1.50](https://github.com/anthropics/claude-agent-sdk-python/commit/a7fd631911c9f5269a01e7a5eea5c67d6aa7bce6) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,8 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.49):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.49. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.50):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.50. These updates include:
+- **v0.1.50** - Per-turn `usage` on `AssistantMessage`; `skills`/`memory`/`mcpServers` fields on `AgentDefinition`; `tag`/`created_at` on `SDKSessionInfo` (file_size now optional); `get_session_info()` single-session lookup; `aiTitle`/`lastPrompt` in summary resolution; ENTRYPOINT default-if-absent (caller can override); graceful subprocess shutdown (wait before SIGTERM); CLI 2.1.77-2.1.81
 - **v0.1.49** - Typed `RateLimitEvent` message; `rename_session`/`tag_session` APIs; CLI 2.1.72-2.1.76; revert FGTS env var
 - **v0.1.48** - Fix: enable fine-grained tool streaming when `include_partial_messages=True`, CLI 2.1.71 *(reverted in v0.1.49)*
 - **v0.1.47** - CLI update to 2.1.70 (no API changes)
@@ -42,7 +43,17 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - **v0.1.23** - `get_mcp_status()` made public, CLI 2.1.20 (already in Java SDK)
 - **v0.1.22** - `tool_use_result` field added to UserMessage, CLI 2.1.19 (already in Java SDK)
 
-✅ **All new features from Python SDK v0.1.49 are now implemented in Java SDK v0.1.8**. This includes:
+✅ **All new features from Python SDK v0.1.50 are now implemented in Java SDK v0.1.9**. This includes:
+- ✅ Per-turn `usage` field on `AssistantMessage` (v0.1.50)
+- ✅ `skills`, `memory`, `mcpServers` fields on `AgentDefinition` (v0.1.50)
+- ✅ `tag`, `createdAt` fields on `SDKSessionInfo`; `fileSize` now nullable `Long` (v0.1.50)
+- ✅ `getSessionInfo()` single-session metadata lookup (v0.1.50)
+- ✅ `aiTitle` and `lastPrompt` support in session summary resolution (v0.1.50)
+- ✅ ENTRYPOINT default-if-absent: `CLAUDE_CODE_ENTRYPOINT` can be overridden via `env` option (v0.1.50)
+- ✅ Graceful subprocess shutdown: wait for process to exit before SIGTERM (v0.1.50)
+- ✅ Removed System.setProperty calls for ENTRYPOINT from ClaudeSDK/ClaudeSDKClient (v0.1.50)
+
+All features from Python SDK v0.1.49 and earlier were already implemented. This includes:
 - ✅ `stop_reason` field added to `ResultMessage` (v0.1.45)
 - ✅ Typed `McpServerStatus`, `McpServerInfo`, `McpToolInfo`, `McpToolAnnotations`, `McpStatusResponse` types (v0.1.45)
 - ✅ `getMcpStatus()` now returns typed `McpStatusResponse` instead of raw Map (v0.1.45)
@@ -653,7 +664,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-03-15
-**Python SDK Version:** 0.1.49 (commit 302ceb6788633d934cbe7ad6142448477234da68)
-**Java SDK Version:** 0.1.8
+**Latest Verification:** 2026-03-22
+**Python SDK Version:** 0.1.50 (commit a7fd631911c9f5269a01e7a5eea5c67d6aa7bce6)
+**Java SDK Version:** 0.1.9
 **Status:** ✅ 100% Feature Parity Maintained

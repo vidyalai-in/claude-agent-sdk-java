@@ -366,8 +366,10 @@ public class SubprocessCLITransport implements Transport {
      * @param env     the environment map to mutate
      */
     static void applyEnvDefaults(ClaudeAgentOptions options, Map<String, String> env) {
-        env.putAll(options.env());
+        // CLAUDE_CODE_ENTRYPOINT defaults to sdk-java; options.env can override it.
+        // CLAUDE_AGENT_SDK_VERSION is always set by the SDK.
         env.put("CLAUDE_CODE_ENTRYPOINT", "sdk-java");
+        env.putAll(options.env());
         env.put("CLAUDE_AGENT_SDK_VERSION", SdkVersion.VERSION);
 
         if (options.enableFileCheckpointing()) {
@@ -847,16 +849,23 @@ public class SubprocessCLITransport implements Transport {
         // Shutdown executor services (interrupts running tasks)
         shutdownExecutors();
 
-        // Terminate process
+        // Wait for graceful shutdown after stdin EOF, then terminate if needed.
+        // The subprocess needs time to flush its session file after receiving
+        // EOF on stdin. Without this grace period, SIGTERM can interrupt the
+        // write and cause the last assistant message to be lost.
         if ((process != null) && process.isAlive()) {
-            process.destroy();
             try {
-                boolean terminated = process.waitFor(5, TimeUnit.SECONDS);
-                if ((!terminated) && process.isAlive()) {
-                    logger.warning("Process did not terminate gracefully, forcing kill");
-                    process.destroyForcibly();
-                    // Wait a bit for forced termination
-                    process.waitFor(2, TimeUnit.SECONDS);
+                boolean exited = process.waitFor(5, TimeUnit.SECONDS);
+                if (!exited && process.isAlive()) {
+                    // Graceful shutdown timed out — force terminate
+                    logger.warning("Process did not exit within grace period, sending SIGTERM");
+                    process.destroy();
+                    boolean terminated = process.waitFor(5, TimeUnit.SECONDS);
+                    if (!terminated && process.isAlive()) {
+                        logger.warning("Process did not terminate after SIGTERM, forcing kill");
+                        process.destroyForcibly();
+                        process.waitFor(2, TimeUnit.SECONDS);
+                    }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

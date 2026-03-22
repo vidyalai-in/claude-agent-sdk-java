@@ -1,6 +1,7 @@
 package in.vidyalai.claude.sdk.types.message;
 
 import java.util.List;
+import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
@@ -19,12 +20,23 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param parentToolUseId if this message is within a tool use context, the tool
  *                        use ID
  * @param error           error information if the response contains an error
+ * @param usage           per-turn token usage breakdown (input_tokens,
+ *                        output_tokens, cache tokens, etc.) or null if absent
  */
 public record AssistantMessage(
         @JsonProperty("content") List<ContentBlock> content,
         @JsonProperty("model") String model,
         @JsonProperty("parent_tool_use_id") @Nullable String parentToolUseId,
-        @JsonProperty("error") @Nullable AssistantMessageError error) implements Message {
+        @JsonProperty("error") @Nullable AssistantMessageError error,
+        @JsonProperty("usage") @Nullable Map<String, Object> usage) implements Message {
+
+    /**
+     * Backwards-compatible constructor without usage field.
+     */
+    public AssistantMessage(List<ContentBlock> content, String model,
+            @Nullable String parentToolUseId, @Nullable AssistantMessageError error) {
+        this(content, model, parentToolUseId, error, null);
+    }
 
     @Override
     public String type() {
