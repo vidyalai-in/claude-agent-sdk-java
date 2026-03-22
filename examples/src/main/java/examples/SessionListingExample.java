@@ -81,6 +81,7 @@ public class SessionListingExample {
         }
     }
 
+    @SuppressWarnings("null")
     static void listCurrentProjectSessions() {
         System.out.println("--- Sessions for Current Directory ---");
 
