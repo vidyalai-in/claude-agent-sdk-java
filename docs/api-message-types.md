@@ -48,12 +48,19 @@ record AssistantMessage(
     List<ContentBlock> content,                   // List of content blocks
     String model,                                 // Model that generated the response
     @Nullable String parentToolUseId,             // Set when inside a subagent tool use
-    @Nullable AssistantMessageError error         // Error information, if any
+    @Nullable AssistantMessageError error,        // Error information, if any
+    @Nullable Map<String, Object> usage           // Per-turn token usage (input_tokens, output_tokens, cache tokens, etc.)
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
     boolean hasToolUse();       // True if message contains at least one ToolUseBlock
 }
+```
+
+A backwards-compatible constructor without the `usage` field is also available:
+
+```java
+new AssistantMessage(content, model, parentToolUseId, error)  // usage defaults to null
 ```
 
 ### AssistantMessageError

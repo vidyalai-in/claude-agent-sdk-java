@@ -127,9 +127,12 @@ record AssistantMessage(
     List<ContentBlock> content,              // List of content blocks
     String model,                            // Model that generated this response
     @Nullable String parentToolUseId,        // Set when inside a subagent tool use
-    @Nullable AssistantMessageError error    // Error if the response contains an error
+    @Nullable AssistantMessageError error,   // Error if the response contains an error
+    @Nullable Map<String, Object> usage      // Per-turn token usage (input_tokens, output_tokens, cache tokens, etc.)
 ) implements Message
 ```
+
+The `usage` map contains per-turn API token consumption data when available, including keys like `input_tokens`, `output_tokens`, and cache-related fields. A backwards-compatible constructor without the `usage` field is also available.
 
 ### Methods
 

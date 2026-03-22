@@ -7,6 +7,7 @@ Read and browse historical Claude Code conversation sessions without running the
 - [Session Metadata](#session-metadata)
 - [Session Messages](#session-messages)
 - [Listing Sessions](#listing-sessions)
+- [Looking Up a Single Session](#looking-up-a-single-session)
 - [Reading Session Messages](#reading-session-messages)
 - [Renaming Sessions](#renaming-sessions)
 - [Tagging Sessions](#tagging-sessions)
@@ -30,18 +31,22 @@ All reading is done directly from disk, independent of the CLI. No process is sp
 
 ```java
 record SDKSessionInfo(
-    String sessionId,          // UUID identifying the session
-    String summary,            // display title (custom title, auto-summary, or first prompt)
-    long lastModified,         // last-modified time in milliseconds since epoch
-    long fileSize,             // session file size in bytes
-    @Nullable String customTitle,  // user-set title (may be null)
+    String sessionId,              // UUID identifying the session
+    String summary,                // display title (custom title, AI title, lastPrompt, summary, or first prompt)
+    long lastModified,             // last-modified time in milliseconds since epoch
+    @Nullable Long fileSize,       // session file size in bytes (null for remote storage backends)
+    @Nullable String customTitle,  // user-set custom title or AI-generated title (may be null)
     @Nullable String firstPrompt,  // first meaningful user prompt (may be null)
     @Nullable String gitBranch,    // git branch at end of session (may be null)
-    @Nullable String cwd           // working directory for the session (may be null)
+    @Nullable String cwd,          // working directory for the session (may be null)
+    @Nullable String tag,          // user-set session tag (may be null)
+    @Nullable Long createdAt       // creation time in ms since epoch from first entry's ISO timestamp (may be null)
 )
 ```
 
-The `summary` field is resolved in priority order: custom title > auto-generated summary > first prompt.
+The `summary` field is resolved in priority order: custom title > AI title > lastPrompt > auto-generated summary > first prompt.
+
+A backwards-compatible constructor without `tag` and `createdAt` is also available.
 
 ## Session Messages
 
@@ -109,6 +114,39 @@ List<SDKSessionInfo> recent = ClaudeSDK.listSessions(
 ```
 
 `includeWorktrees = true` runs `git worktree list` and includes sessions from all worktrees of the repository.
+
+## Looking Up a Single Session
+
+Use `getSessionInfo` to look up a single session by ID without scanning all session files. This is more efficient than `listSessions` when you already know the session UUID.
+
+### By session ID (searches all projects)
+
+```java
+SDKSessionInfo info = ClaudeSDK.getSessionInfo("550e8400-e29b-41d4-a716-446655440000");
+if (info != null) {
+    System.out.println("Session: " + info.summary());
+    if (info.tag() != null) {
+        System.out.println("Tag: " + info.tag());
+    }
+    if (info.createdAt() != null) {
+        String created = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+                .withZone(ZoneId.systemDefault())
+                .format(Instant.ofEpochMilli(info.createdAt()));
+        System.out.println("Created: " + created);
+    }
+}
+```
+
+### Scoped to a project directory
+
+```java
+SDKSessionInfo info = ClaudeSDK.getSessionInfo(
+    "550e8400-e29b-41d4-a716-446655440000",
+    Path.of("/my/project")
+);
+```
+
+Returns `null` if the session is not found, is a sidechain session, or has no extractable summary.
 
 ## Reading Session Messages
 
@@ -224,8 +262,9 @@ List<SDKSessionInfo> sessions = ClaudeSDK.listSessions(cwd);
 
 System.out.printf("Found %d session(s) for: %s%n", sessions.size(), cwd);
 for (SDKSessionInfo session : sessions) {
-    System.out.printf("  %s (%.1f KB)%n",
-        session.summary(), session.fileSize() / 1024.0);
+    String sizeStr = (session.fileSize() != null)
+            ? String.format("%.1f KB", session.fileSize() / 1024.0) : "N/A";
+    System.out.printf("  %s (%s)%n", session.summary(), sizeStr);
 }
 ```
 

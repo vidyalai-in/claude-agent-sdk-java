@@ -39,6 +39,8 @@ Transport transport = new SubprocessCLITransport(
 - Buffered reading
 - Stderr callback support
 - Automatic cleanup
+- Graceful shutdown with grace period (waits for subprocess to flush session file after stdin EOF before sending SIGTERM)
+- Sets `CLAUDE_CODE_ENTRYPOINT=sdk-java` by default (overridable via `ClaudeAgentOptions.env()`)
 
 ## Custom Transport
 

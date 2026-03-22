@@ -18,6 +18,9 @@ Agents are named subagents that Claude can use during a conversation. Each agent
 - A **system prompt** — behavioral instructions for the agent
 - **Tools** — the list of tools the agent is allowed to use (null inherits from parent)
 - A **model** — the Claude model variant the agent runs on (null inherits from parent)
+- **Skills** — the list of skill names available to the agent (null inherits from parent)
+- **Memory** — the memory scope for the agent (null inherits from parent)
+- **MCP Servers** — MCP server references the agent can use (null inherits from parent)
 
 Agents are registered via `ClaudeAgentOptions.agents()` as a `Map<String, AgentDefinition>`, where the key is the agent's name.
 
@@ -26,19 +29,31 @@ Agents are registered via `ClaudeAgentOptions.agents()` as a `Map<String, AgentD
 ```java
 import in.vidyalai.claude.sdk.types.config.AgentDefinition;
 import in.vidyalai.claude.sdk.types.config.AIModel;
+import in.vidyalai.claude.sdk.types.config.MemoryScope;
 
 // Full constructor
 AgentDefinition agent = new AgentDefinition(
     "Reviews code for quality and bugs",   // description
     "You are a code review expert...",     // system prompt
     List.of("Read", "Grep"),               // tools (null = inherit)
-    AIModel.SONNET                         // model (null = inherit)
+    AIModel.SONNET,                        // model (null = inherit)
+    List.of("commit", "review"),           // skills (null = inherit)
+    MemoryScope.PROJECT,                   // memory scope (null = inherit)
+    List.of("my-mcp-server")              // MCP servers (null = inherit)
 );
 
-// Shorthand: description + prompt only (tools and model inherit from parent)
+// Shorthand: description + prompt only (all other fields inherit from parent)
 AgentDefinition simple = new AgentDefinition(
     "Summarizes text",
     "You are a concise summarizer."
+);
+
+// Backwards-compatible: description, prompt, tools, model
+AgentDefinition compat = new AgentDefinition(
+    "Reviews code",
+    "You are a code reviewer.",
+    List.of("Read", "Grep"),
+    AIModel.SONNET
 );
 ```
 
@@ -50,8 +65,23 @@ AgentDefinition simple = new AgentDefinition(
 | `prompt` | `String` | System prompt defining the agent's behavior |
 | `tools` | `List<String>` (nullable) | Allowed tool names; null inherits parent's tools |
 | `model` | `AIModel` (nullable) | Model to use; null inherits parent's model |
+| `skills` | `List<String>` (nullable) | Skill names available to the agent; null inherits |
+| `memory` | `MemoryScope` (nullable) | Memory scope; null inherits from parent |
+| `mcpServers` | `List<Object>` (nullable) | MCP server references (names or inline configs); null inherits |
 
 **`AIModel` values:** `SONNET`, `OPUS`, `HAIKU`, or use the string values `"sonnet"`, `"opus"`, `"haiku"`, `"inherit"`.
+
+### MemoryScope Enum
+
+Controls which memory scope an agent operates in:
+
+```java
+import in.vidyalai.claude.sdk.types.config.MemoryScope;
+
+MemoryScope.USER     // "user" — user-level memory
+MemoryScope.PROJECT  // "project" — project-scoped memory
+MemoryScope.LOCAL    // "local" — local/session-scoped memory
+```
 
 ## Inline Agent Definitions
 

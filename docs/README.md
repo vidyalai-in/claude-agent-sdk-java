@@ -69,14 +69,15 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Inline agent definitions
   - Filesystem-based agents
   - Large agent support (260KB+ via stdin)
-  - AgentDefinition API
+  - AgentDefinition API (with skills, memory scope, and MCP server fields)
 
 - **[Session History](./feature-session-history.md)** - Read and manage historical Claude Code conversation sessions from disk
   - Listing sessions across all projects or filtered by directory
+  - Looking up a single session by ID (`getSessionInfo`)
   - Reading full conversation transcripts
   - Renaming sessions (`renameSession`)
   - Tagging sessions for organization (`tagSession`)
-  - SDKSessionInfo and SessionMessage types
+  - SDKSessionInfo (with tag, createdAt, nullable fileSize) and SessionMessage types
   - Pagination and worktree support
 
 ### Advanced Features

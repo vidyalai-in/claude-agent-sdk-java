@@ -205,6 +205,38 @@ List sessions with full control.
 
 **Returns**: `List<SDKSessionInfo>`
 
+### getSessionInfo(String sessionId)
+
+```java
+@Nullable
+public static SDKSessionInfo getSessionInfo(String sessionId)
+```
+
+Look up a single session by ID. Searches all project directories under `~/.claude/projects/`. No O(n) directory scan — reads only the target session file.
+
+**Parameters**:
+- `sessionId` - UUID of the session to look up
+
+**Returns**: `SDKSessionInfo` for the session, or `null` if not found, is a sidechain session, or has no extractable summary
+
+### getSessionInfo(String sessionId, Path directory)
+
+```java
+@Nullable
+public static SDKSessionInfo getSessionInfo(
+    String sessionId,
+    Path directory
+)
+```
+
+Look up a single session by ID within a specific project directory.
+
+**Parameters**:
+- `sessionId` - UUID of the session to look up
+- `directory` - project working directory to search in
+
+**Returns**: `SDKSessionInfo` or `null`
+
 ### getSessionMessages(String sessionId)
 
 ```java
