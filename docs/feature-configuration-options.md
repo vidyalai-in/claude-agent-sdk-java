@@ -140,6 +140,9 @@ Set custom system prompt to guide Claude's behavior.
 
 // Use preset
 .systemPrompt(new SystemPromptPreset("concise"))
+
+// Use prompt from file
+.systemPrompt(new SystemPromptFile("/path/to/prompt.md"))
 ```
 
 ## MCP Servers
@@ -195,6 +198,7 @@ Control how tool permissions are handled.
 - `ACCEPT_ALL` - Auto-accept all permissions
 - `ACCEPT_EDITS` - Auto-accept file edits, prompt for others
 - `BYPASS_PERMISSIONS` - Skip permission checks entirely
+- `DONT_ASK` - Allow all tools without prompting
 
 ### permissionPromptToolName()
 
@@ -221,6 +225,14 @@ Resume specific session by ID.
 
 ```java
 .resume("session-12345")
+```
+
+### sessionId()
+
+Specify a session ID for the new session.
+
+```java
+.sessionId("my-custom-session-id")
 ```
 
 ### forkSession()
@@ -256,6 +268,14 @@ Maximum cost in US dollars.
 ```
 
 Stops execution when budget exceeded.
+
+### taskBudget()
+
+API-side task budget in tokens. When set, the model is made aware of its remaining token budget.
+
+```java
+.taskBudget(new TaskBudget(100000))  // 100K token budget
+```
 
 ### maxBufferSize()
 

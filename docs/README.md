@@ -77,8 +77,10 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Reading full conversation transcripts
   - Renaming sessions (`renameSession`)
   - Tagging sessions for organization (`tagSession`)
+  - Deleting sessions (`deleteSession`)
+  - Forking sessions with UUID remapping (`forkSession`)
   - SDKSessionInfo (with tag, createdAt, nullable fileSize) and SessionMessage types
-  - Pagination and worktree support
+  - Pagination with offset and worktree support
 
 ### Advanced Features
 - **[Extended Thinking Configuration](./feature-thinking-config.md)** - Control Claude's reasoning depth

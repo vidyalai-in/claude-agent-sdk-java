@@ -18,6 +18,7 @@ The permission system controls which tools Claude can use and how permission req
 - **ACCEPT_ALL** - Automatically accept all permissions
 - **ACCEPT_EDITS** - Auto-accept file edits, prompt for others
 - **BYPASS_PERMISSIONS** - Skip permission checks entirely
+- **DONT_ASK** - Allow all tools without prompting
 
 ## Custom Permission Callback
 
@@ -42,9 +43,10 @@ For fine-grained control, use `canUseTool` callback (requires streaming mode):
 
 ```java
 record ToolPermissionContext(
-    String toolName,
-    @Nullable String path,
-    @Nullable Object args
+    @Nullable Object signal,
+    List<PermissionUpdate> suggestions,
+    @Nullable String toolUseId,    // Unique tool call ID within the assistant message
+    @Nullable String agentId       // Sub-agent's ID if running in sub-agent context
 )
 ```
 

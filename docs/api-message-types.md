@@ -49,7 +49,11 @@ record AssistantMessage(
     String model,                                 // Model that generated the response
     @Nullable String parentToolUseId,             // Set when inside a subagent tool use
     @Nullable AssistantMessageError error,        // Error information, if any
-    @Nullable Map<String, Object> usage           // Per-turn token usage (input_tokens, output_tokens, cache tokens, etc.)
+    @Nullable Map<String, Object> usage,          // Per-turn token usage (input_tokens, output_tokens, cache tokens, etc.)
+    @Nullable String messageId,                   // Unique message ID from the API (e.g. "msg_01HRq...")
+    @Nullable String stopReason,                  // Reason the model stopped (e.g. "end_turn")
+    @Nullable String sessionId,                   // Session ID this message belongs to
+    @Nullable String uuid                         // Unique identifier in the session transcript
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
@@ -57,10 +61,11 @@ record AssistantMessage(
 }
 ```
 
-A backwards-compatible constructor without the `usage` field is also available:
+Backwards-compatible constructors are also available for code that does not need the newer fields:
 
 ```java
-new AssistantMessage(content, model, parentToolUseId, error)  // usage defaults to null
+new AssistantMessage(content, model, parentToolUseId, error)  // usage and all later fields default to null
+new AssistantMessage(content, model, parentToolUseId, error, usage)  // messageId and later fields default to null
 ```
 
 ### AssistantMessageError
@@ -94,20 +99,27 @@ record SystemMessage(
 
 ```java
 record ResultMessage(
-    String subtype,                          // e.g., "success", "error_max_budget_usd"
-    int durationMs,                          // Total duration in milliseconds
-    int durationApiMs,                       // API call duration in milliseconds
-    boolean isError,                         // Whether the result is an error
-    int numTurns,                            // Number of conversation turns
-    String sessionId,                        // Session identifier
-    @Nullable Double totalCostUsd,           // Total cost in USD
-    @Nullable Map<String, Object> usage,     // Token usage: "input_tokens", "output_tokens", etc.
-    @Nullable String result,                 // Result text
-    @Nullable Object structuredOutput        // Structured output (when json_schema was used)
+    String subtype,                               // "success", "error_during_execution", etc.
+    int durationMs,                               // Total duration in milliseconds
+    int durationApiMs,                            // API call duration in milliseconds
+    boolean isError,                              // Whether the result is an error
+    int numTurns,                                 // Number of conversation turns
+    String sessionId,                             // Session identifier
+    @Nullable String stopReason,                  // Reason the session stopped
+    @Nullable Double totalCostUsd,                // Total cost in USD
+    @Nullable Map<String, Object> usage,          // Token usage breakdown
+    @Nullable String result,                      // Result text
+    @Nullable Object structuredOutput,            // Structured output if json_schema specified
+    @Nullable Map<String, Object> modelUsage,     // Per-model usage breakdown
+    @Nullable List<Object> permissionDenials,     // Permission denials during session
+    @Nullable List<String> errors,                // Error messages from the CLI
+    @Nullable String uuid                         // Unique message identifier in session
 ) implements Message {
     String type();  // Returns "result"
 }
 ```
+
+Backwards-compatible constructors are also available for code that does not need the newer fields. The original 10-parameter constructor (without `stopReason`, `modelUsage`, `permissionDenials`, `errors`, and `uuid`) continues to work.
 
 ## StreamEvent
 

@@ -364,6 +364,97 @@ Tag a session scoped to a specific project directory.
 - `tag` - Tag string, or `null` to clear
 - `directory` - Project working directory to search in
 
+### deleteSession(String sessionId)
+
+```java
+public static void deleteSession(String sessionId) throws IOException
+```
+
+Delete a session permanently by removing its JSONL file.
+
+**Parameters**:
+- `sessionId` - UUID of the session to delete
+
+**Throws**:
+- `IllegalArgumentException` - If `sessionId` is not a valid UUID
+- `FileNotFoundException` - If the session file cannot be found
+- `IOException` - If the delete fails
+
+### deleteSession(String sessionId, Path directory)
+
+```java
+public static void deleteSession(
+    String sessionId,
+    Path directory
+) throws IOException
+```
+
+Delete a session scoped to a specific project directory.
+
+### forkSession(String sessionId)
+
+```java
+public static ForkSessionResult forkSession(String sessionId) throws IOException
+```
+
+Fork a session into a new branch with fresh UUIDs.
+
+**Returns**: `ForkSessionResult` containing the new session's UUID
+
+**Throws**:
+- `IllegalArgumentException` - If `sessionId` is not a valid UUID
+- `FileNotFoundException` - If the session file cannot be found
+- `IOException` - If the fork fails
+
+### forkSession(String sessionId, Path directory)
+
+```java
+public static ForkSessionResult forkSession(
+    String sessionId,
+    Path directory
+) throws IOException
+```
+
+Fork a session scoped to a specific project directory.
+
+### forkSession(String sessionId, Path directory, String upToMessageId, String title)
+
+```java
+public static ForkSessionResult forkSession(
+    String sessionId,
+    @Nullable Path directory,
+    @Nullable String upToMessageId,
+    @Nullable String title
+) throws IOException
+```
+
+Fork a session with optional truncation point and custom title.
+
+**Parameters**:
+- `sessionId` - UUID of the source session
+- `directory` - Project directory (null searches all projects)
+- `upToMessageId` - Slice transcript at this message UUID (inclusive); null copies all
+- `title` - Custom title for the fork; null derives from original + " (fork)"
+
+### listSessions(Path directory, Integer limit, int offset, boolean includeWorktrees)
+
+```java
+public static List<SDKSessionInfo> listSessions(
+    Path directory,
+    Integer limit,
+    int offset,
+    boolean includeWorktrees
+)
+```
+
+List sessions with offset pagination support.
+
+**Parameters**:
+- `directory` - Project directory (null for all projects)
+- `limit` - Maximum number of sessions to return
+- `offset` - Number of sessions to skip (for pagination)
+- `includeWorktrees` - Include sessions from git worktrees
+
 ## Version Method
 
 ### getVersion()

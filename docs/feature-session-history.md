@@ -11,6 +11,8 @@ Read and browse historical Claude Code conversation sessions without running the
 - [Reading Session Messages](#reading-session-messages)
 - [Renaming Sessions](#renaming-sessions)
 - [Tagging Sessions](#tagging-sessions)
+- [Deleting Sessions](#deleting-sessions)
+- [Forking Sessions](#forking-sessions)
 - [Examples](#examples)
 - [Best Practices](#best-practices)
 
@@ -114,6 +116,18 @@ List<SDKSessionInfo> recent = ClaudeSDK.listSessions(
 ```
 
 `includeWorktrees = true` runs `git worktree list` and includes sessions from all worktrees of the repository.
+
+### With offset pagination
+
+```java
+// Page 1: first 50 sessions
+List<SDKSessionInfo> page1 = ClaudeSDK.listSessions(
+    Path.of("/my/project"), 50, 0, true);
+
+// Page 2: next 50 sessions
+List<SDKSessionInfo> page2 = ClaudeSDK.listSessions(
+    Path.of("/my/project"), 50, 50, true);
+```
 
 ## Looking Up a Single Session
 
@@ -230,6 +244,55 @@ ClaudeSDK.tagSession(
 - Throws `IOException` if the file write fails.
 
 **Concurrent safety:** If the session is currently open in the CLI process, the CLI absorbs SDK-written entries into its cache on next metadata re-append. The most recent write wins.
+
+## Deleting Sessions
+
+Delete a session permanently by removing its JSONL file. This is a hard delete — the file is removed permanently.
+
+```java
+// Delete by session ID (searches all projects)
+ClaudeSDK.deleteSession("550e8400-e29b-41d4-a716-446655440000");
+
+// Delete scoped to a specific project directory
+ClaudeSDK.deleteSession("550e8400-e29b-41d4-a716-446655440000", Path.of("/my/project"));
+```
+
+**Constraints:**
+- `sessionId` must be a valid UUID.
+- Throws `FileNotFoundException` if the session file is not found.
+- For soft-delete semantics, use `tagSession(id, "__hidden")` and filter on listing instead.
+
+## Forking Sessions
+
+Fork a session into a new branch with fresh UUIDs. Copies transcript messages from the source session, remapping every message UUID and preserving the `parentUuid` chain. Forked sessions start without undo history.
+
+```java
+// Fork a session (searches all projects)
+ForkSessionResult result = ClaudeSDK.forkSession("550e8400-e29b-41d4-a716-446655440000");
+System.out.println("New session: " + result.sessionId());
+
+// Fork scoped to a project directory
+ForkSessionResult result = ClaudeSDK.forkSession(
+    "550e8400-e29b-41d4-a716-446655440000",
+    Path.of("/my/project")
+);
+
+// Fork from a specific message (truncate transcript)
+ForkSessionResult result = ClaudeSDK.forkSession(
+    "550e8400-e29b-41d4-a716-446655440000",
+    null,                                       // search all projects
+    "660e8400-e29b-41d4-a716-446655440001",    // slice transcript at this message
+    "My Fork Title"                            // custom title (null = original + " (fork)")
+);
+```
+
+**`ForkSessionResult`** contains:
+- `sessionId` — UUID of the newly created forked session
+
+**Constraints:**
+- `sessionId` and optional `upToMessageId` must be valid UUIDs.
+- Throws `FileNotFoundException` if the source session is not found.
+- Throws `IllegalArgumentException` if the session has no messages or `upToMessageId` is not found.
 
 ## Examples
 

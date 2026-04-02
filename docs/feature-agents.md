@@ -36,7 +36,7 @@ AgentDefinition agent = new AgentDefinition(
     "Reviews code for quality and bugs",   // description
     "You are a code review expert...",     // system prompt
     List.of("Read", "Grep"),               // tools (null = inherit)
-    AIModel.SONNET,                        // model (null = inherit)
+    "sonnet",                              // model (null = inherit)
     List.of("commit", "review"),           // skills (null = inherit)
     MemoryScope.PROJECT,                   // memory scope (null = inherit)
     List.of("my-mcp-server")              // MCP servers (null = inherit)
@@ -53,7 +53,7 @@ AgentDefinition compat = new AgentDefinition(
     "Reviews code",
     "You are a code reviewer.",
     List.of("Read", "Grep"),
-    AIModel.SONNET
+    "sonnet"   // model can be "sonnet", "opus", "haiku", or full model ID
 );
 ```
 
@@ -64,12 +64,18 @@ AgentDefinition compat = new AgentDefinition(
 | `description` | `String` | Human-readable description shown to Claude |
 | `prompt` | `String` | System prompt defining the agent's behavior |
 | `tools` | `List<String>` (nullable) | Allowed tool names; null inherits parent's tools |
-| `model` | `AIModel` (nullable) | Model to use; null inherits parent's model |
+| `disallowedTools` | `List<String>` (nullable) | Tools the agent cannot use; null means none |
+| `model` | `String` (nullable) | Model alias ("sonnet", "opus", "haiku", "inherit") or full model ID |
 | `skills` | `List<String>` (nullable) | Skill names available to the agent; null inherits |
 | `memory` | `MemoryScope` (nullable) | Memory scope; null inherits from parent |
 | `mcpServers` | `List<Object>` (nullable) | MCP server references (names or inline configs); null inherits |
+| `initialPrompt` | `String` (nullable) | Initial prompt sent when agent starts |
+| `maxTurns` | `Integer` (nullable) | Max turns for the agent; null means unlimited |
+| `background` | `Boolean` (nullable) | Run the agent in background |
+| `effort` | `String` (nullable) | Effort level: "low", "medium", "high", "max" |
+| `permissionMode` | `String` (nullable) | Permission mode for the agent |
 
-**`AIModel` values:** `SONNET`, `OPUS`, `HAIKU`, or use the string values `"sonnet"`, `"opus"`, `"haiku"`, `"inherit"`.
+**Model field:** The `model` field accepts short aliases (`"sonnet"`, `"opus"`, `"haiku"`, `"inherit"`) or full model IDs (e.g., `"claude-sonnet-4-5"`).
 
 ### MemoryScope Enum
 
@@ -91,7 +97,6 @@ Register agents programmatically via `ClaudeAgentOptions`:
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDK;
 import in.vidyalai.claude.sdk.types.config.AgentDefinition;
-import in.vidyalai.claude.sdk.types.config.AIModel;
 
 AgentDefinition codeReviewer = new AgentDefinition(
     "Reviews code for best practices and potential issues",
@@ -101,7 +106,7 @@ AgentDefinition codeReviewer = new AgentDefinition(
     Provide constructive feedback.
     """,
     List.of("Read", "Grep"),
-    AIModel.SONNET
+    "sonnet"   // model can be "sonnet", "opus", "haiku", or full model ID
 );
 
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -136,7 +141,7 @@ AgentDefinition tester = new AgentDefinition(
     "Creates and runs tests",
     "You are a testing expert. Write comprehensive tests and ensure code quality.",
     List.of("Read", "Write", "Bash"),
-    AIModel.SONNET
+    "sonnet"
 );
 
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()

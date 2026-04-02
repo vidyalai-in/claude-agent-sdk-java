@@ -182,6 +182,26 @@ Get MCP server connection status.
 
 **Returns**: `Map<String, Object>` - Status information
 
+### getContextUsage()
+
+```java
+public ContextUsageResponse getContextUsage()
+```
+
+Get a breakdown of current context window usage by category.
+
+Returns the same data shown by the `/context` command in the CLI, including token counts per category, total usage, and detailed breakdowns of MCP tools, memory files, and agents.
+
+**Returns**: `ContextUsageResponse` with fields:
+- `categories` — List of `ContextUsageCategory` (name, tokens, color)
+- `totalTokens` — Total tokens in the context window
+- `maxTokens` — Effective context limit
+- `percentage` — Percent of context used (0-100)
+- `model` — Model name
+- Plus optional fields: `autoCompactThreshold`, `memoryFiles`, `mcpTools`, `agents`, etc.
+
+**Throws**: `CLIConnectionException` if not connected
+
 ### getServerInfo()
 
 ```java
