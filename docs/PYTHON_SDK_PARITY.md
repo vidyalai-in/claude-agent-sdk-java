@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-03-22 (Updated)
-**Java SDK Version:** 0.1.9
-**Python SDK Version:** [0.1.50](https://github.com/anthropics/claude-agent-sdk-python/commit/a7fd631911c9f5269a01e7a5eea5c67d6aa7bce6) (latest)
+**Analysis Date:** 2026-04-02 (Updated)
+**Java SDK Version:** 0.1.10
+**Python SDK Version:** [0.1.54](https://github.com/anthropics/claude-agent-sdk-python/commit/574044a1fcbaf89afc821bb742ccd8d31c4d6944) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,11 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.50):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.50. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.54):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.54. These updates include:
+- **v0.1.54** - `background`, `effort`, `permissionMode` fields on `AgentDefinition`; CLI 2.1.89-2.1.90
+- **v0.1.53** - Fix: omit `--setting-sources` flag when empty; fix: spawn wait_for_result as background task for string prompts; CLI 2.1.88
+- **v0.1.52** - Fix: send string prompt in `connect()` instead of dropping it; `control_cancel_request` handling; `get_context_usage()` method; `Annotated` support for `@tool` parameter descriptions; `tool_use_id`/`agent_id` in `ToolPermissionContext`; `session_id` option; CLI 2.1.86-2.1.87
+- **v0.1.51** - `disallowedTools`, `maxTurns`, `initialPrompt` on `AgentDefinition`; `errors` field on `ResultMessage`; `delete_session`/`fork_session` APIs; offset pagination in `list_sessions`; `task_budget` option; `dontAsk` permission mode; `SystemPromptFile` support; resource_link/embedded resource handling in MCP; `isError` propagation; skip non-JSON lines on stdout; filter `CLAUDECODE` env var; preserved fields on `AssistantMessage`/`ResultMessage` (`message_id`, `stop_reason`, `session_id`, `uuid`, `model_usage`, `permission_denials`, `errors`); CLI 2.1.83-2.1.85
 - **v0.1.50** - Per-turn `usage` on `AssistantMessage`; `skills`/`memory`/`mcpServers` fields on `AgentDefinition`; `tag`/`created_at` on `SDKSessionInfo` (file_size now optional); `get_session_info()` single-session lookup; `aiTitle`/`lastPrompt` in summary resolution; ENTRYPOINT default-if-absent (caller can override); graceful subprocess shutdown (wait before SIGTERM); CLI 2.1.77-2.1.81
 - **v0.1.49** - Typed `RateLimitEvent` message; `rename_session`/`tag_session` APIs; CLI 2.1.72-2.1.76; revert FGTS env var
 - **v0.1.48** - Fix: enable fine-grained tool streaming when `include_partial_messages=True`, CLI 2.1.71 *(reverted in v0.1.49)*
@@ -52,6 +56,29 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - ✅ ENTRYPOINT default-if-absent: `CLAUDE_CODE_ENTRYPOINT` can be overridden via `env` option (v0.1.50)
 - ✅ Graceful subprocess shutdown: wait for process to exit before SIGTERM (v0.1.50)
 - ✅ Removed System.setProperty calls for ENTRYPOINT from ClaudeSDK/ClaudeSDKClient (v0.1.50)
+
+✅ **All new features from Python SDK v0.1.54 are now implemented in Java SDK v0.1.10**. This includes:
+- ✅ `dontAsk` permission mode (v0.1.51)
+- ✅ `SystemPromptFile` support for `--system-prompt-file` flag (v0.1.51)
+- ✅ `TaskBudget` type and `--task-budget` CLI flag (v0.1.51)
+- ✅ `disallowedTools`, `maxTurns`, `initialPrompt` fields on `AgentDefinition` (v0.1.51)
+- ✅ `background`, `effort`, `permissionMode` fields on `AgentDefinition` (v0.1.54)
+- ✅ `AgentDefinition.model` type relaxed from `AIModel` enum to `String` for full model IDs (v0.1.51)
+- ✅ `errors` field on `ResultMessage` (v0.1.51)
+- ✅ `modelUsage`, `permissionDenials`, `uuid` fields on `ResultMessage` (v0.1.51)
+- ✅ `messageId`, `stopReason`, `sessionId`, `uuid` fields on `AssistantMessage` (v0.1.51)
+- ✅ `toolUseId`, `agentId` fields on `ToolPermissionContext` (v0.1.52)
+- ✅ `sessionId` option on `ClaudeAgentOptions` (v0.1.52)
+- ✅ `getContextUsage()` method on `ClaudeSDKClient` (v0.1.52)
+- ✅ `ContextUsageResponse` and `ContextUsageCategory` types (v0.1.52)
+- ✅ `deleteSession()` and `forkSession()` session mutation APIs (v0.1.51)
+- ✅ `ForkSessionResult` type (v0.1.51)
+- ✅ Offset pagination in `listSessions()` (v0.1.51)
+- ✅ Fix: omit `--setting-sources` flag when empty/unset (v0.1.53)
+- ✅ Fix: send string prompt in `connect()` via `transport.write()` (v0.1.52/v0.1.53)
+- ✅ Fix: skip non-JSON lines on CLI stdout to prevent buffer corruption (v0.1.51)
+- ✅ Fix: filter `CLAUDECODE` env var from subprocess environment (v0.1.51)
+- ✅ MCP: `isError` propagation from SDK tool results (v0.1.51)
 
 All features from Python SDK v0.1.49 and earlier were already implemented. This includes:
 - ✅ `stop_reason` field added to `ResultMessage` (v0.1.45)
@@ -659,12 +686,12 @@ All previously identified gaps have been closed:
 
 **Status: COMPLETE & MAINTAINED** ✅
 
-The Java SDK is a high-quality, feature-complete port that maintains full compatibility with the Python SDK's capabilities (v0.1.36) while following Java best practices and idioms. Regular verification ensures continued parity as both SDKs evolve.
+The Java SDK is a high-quality, feature-complete port that maintains full compatibility with the Python SDK's capabilities (v0.1.54) while following Java best practices and idioms. Regular verification ensures continued parity as both SDKs evolve.
 
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-03-22
-**Python SDK Version:** 0.1.50 (commit a7fd631911c9f5269a01e7a5eea5c67d6aa7bce6)
-**Java SDK Version:** 0.1.9
+**Latest Verification:** 2026-04-02
+**Python SDK Version:** 0.1.54 (commit 574044a1fcbaf89afc821bb742ccd8d31c4d6944)
+**Java SDK Version:** 0.1.10
 **Status:** ✅ 100% Feature Parity Maintained

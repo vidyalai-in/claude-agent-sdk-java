@@ -321,7 +321,7 @@ class SubprocessCLITransportTest {
                 "Test agent",
                 "You are a test agent",
                 List.of("Bash"),
-                AIModel.SONNET);
+                AIModel.SONNET.getValue());
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .agents(Map.of("test-agent", agent))
                 .build();

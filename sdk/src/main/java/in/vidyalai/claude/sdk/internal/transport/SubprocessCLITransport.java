@@ -37,6 +37,7 @@ import in.vidyalai.claude.sdk.internal.SdkVersion;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
+import in.vidyalai.claude.sdk.types.config.SystemPromptFile;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.config.ThinkingConfig;
 import in.vidyalai.claude.sdk.types.config.ThinkingConfigAdaptive;
@@ -366,6 +367,10 @@ public class SubprocessCLITransport implements Transport {
      * @param env     the environment map to mutate
      */
     static void applyEnvDefaults(ClaudeAgentOptions options, Map<String, String> env) {
+        // Filter CLAUDECODE so SDK-spawned subprocesses don't think
+        // they're running inside a Claude Code parent
+        env.remove("CLAUDECODE");
+
         // CLAUDE_CODE_ENTRYPOINT defaults to sdk-java; options.env can override it.
         // CLAUDE_AGENT_SDK_VERSION is always set by the SDK.
         env.put("CLAUDE_CODE_ENTRYPOINT", "sdk-java");
@@ -397,6 +402,9 @@ public class SubprocessCLITransport implements Transport {
                 cmd.add("--append-system-prompt");
                 cmd.add(spPreset.append());
             }
+        } else if (options.systemPrompt() instanceof SystemPromptFile spFile) {
+            cmd.add("--system-prompt-file");
+            cmd.add(spFile.path());
         }
 
         // Tools
@@ -435,6 +443,11 @@ public class SubprocessCLITransport implements Transport {
             cmd.add(String.join(",", options.disallowedTools()));
         }
 
+        if (options.taskBudget() != null) {
+            cmd.add("--task-budget");
+            cmd.add(String.valueOf(options.taskBudget().total()));
+        }
+
         if (options.model() != null) {
             cmd.add("--model");
             cmd.add(options.model());
@@ -467,6 +480,11 @@ public class SubprocessCLITransport implements Transport {
         if (options.resume() != null) {
             cmd.add("--resume");
             cmd.add(options.resume());
+        }
+
+        if (options.sessionId() != null) {
+            cmd.add("--session-id");
+            cmd.add(options.sessionId());
         }
 
         // Settings and sandbox
@@ -517,11 +535,10 @@ public class SubprocessCLITransport implements Transport {
         // No --agents CLI flag needed
 
         // Setting sources
-        String sourcesValue = ((options.settingSources() != null)
-                ? String.join(",", options.settingSources().stream().map(SettingSource::getValue).toList())
-                : "");
-        cmd.add("--setting-sources");
-        cmd.add(sourcesValue);
+        if (options.settingSources() != null && !options.settingSources().isEmpty()) {
+            cmd.add("--setting-sources");
+            cmd.add(String.join(",", options.settingSources().stream().map(SettingSource::getValue).toList()));
+        }
 
         // Plugins
         for (ClaudeAgentOptions.SdkPluginConfig plugin : options.plugins()) {
@@ -939,6 +956,14 @@ public class SubprocessCLITransport implements Transport {
                 while ((line = localStdout.readLine()) != null) {
                     line = line.trim();
                     if (line.isEmpty()) {
+                        continue;
+                    }
+
+                    // Skip non-JSON lines (e.g. [SandboxDebug]) when not
+                    // mid-parse — they corrupt the buffer otherwise.
+                    if (jsonBuffer.isEmpty() && !line.startsWith("{")) {
+                        logger.fine("Skipping non-JSON line from CLI stdout: "
+                                + line.substring(0, Math.min(line.length(), 200)));
                         continue;
                     }
 

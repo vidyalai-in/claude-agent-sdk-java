@@ -25,6 +25,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  * <li>{@link SDKControlMcpReconnectRequest} - reconnect a disconnected MCP server</li>
  * <li>{@link SDKControlMcpToggleRequest} - enable or disable an MCP server</li>
  * <li>{@link SDKControlStopTaskRequest} - stop a running task</li>
+ * <li>{@link SDKControlGetContextUsageRequest} - get context window usage breakdown</li>
  * </ul>
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "subtype")
@@ -40,7 +41,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = SDKControlRewindFilesRequest.class, name = "rewind_files"),
         @JsonSubTypes.Type(value = SDKControlMcpReconnectRequest.class, name = "mcp_reconnect"),
         @JsonSubTypes.Type(value = SDKControlMcpToggleRequest.class, name = "mcp_toggle"),
-        @JsonSubTypes.Type(value = SDKControlStopTaskRequest.class, name = "stop_task")
+        @JsonSubTypes.Type(value = SDKControlStopTaskRequest.class, name = "stop_task"),
+        @JsonSubTypes.Type(value = SDKControlGetContextUsageRequest.class, name = "get_context_usage")
 })
 public sealed interface SDKControlRequestData permits
         SDKControlMCPStatusRequest,
@@ -54,7 +56,8 @@ public sealed interface SDKControlRequestData permits
         SDKControlRewindFilesRequest,
         SDKControlMcpReconnectRequest,
         SDKControlMcpToggleRequest,
-        SDKControlStopTaskRequest {
+        SDKControlStopTaskRequest,
+        SDKControlGetContextUsageRequest {
 
     /**
      * Gets the request subtype.

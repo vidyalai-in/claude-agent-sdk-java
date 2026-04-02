@@ -1030,4 +1030,153 @@ class MessageParserTest {
         assertThat(am.usage()).isNull();
     }
 
+    // --- Tests for new AssistantMessage fields (v0.1.51) ---
+
+    @SuppressWarnings("null")
+    @Test
+    void parseAssistantMessage_withAllFields() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "assistant");
+        data.put("session_id", "fdf2d90a-fd9e-4736-ae35-806edd13643f");
+        data.put("uuid", "0dbd2453-1209-4fe9-bd51-4102f64e33df");
+        data.put("message", Map.of(
+                "content", List.of(Map.of("type", "text", "text", "Hello")),
+                "model", "claude-sonnet-4-5-20250929",
+                "id", "msg_01HRq7YZE3apPqSHydvG77Ve",
+                "stop_reason", "end_turn",
+                "usage", Map.of("input_tokens", 10, "output_tokens", 5)));
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(AssistantMessage.class);
+        AssistantMessage am = (AssistantMessage) message;
+        assertThat(am.messageId()).isEqualTo("msg_01HRq7YZE3apPqSHydvG77Ve");
+        assertThat(am.stopReason()).isEqualTo("end_turn");
+        assertThat(am.sessionId()).isEqualTo("fdf2d90a-fd9e-4736-ae35-806edd13643f");
+        assertThat(am.uuid()).isEqualTo("0dbd2453-1209-4fe9-bd51-4102f64e33df");
+        assertThat(am.usage()).isNotNull();
+        assertThat(am.usage().get("input_tokens")).isEqualTo(10);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseAssistantMessage_optionalFieldsAbsent() {
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "content", List.of(Map.of("type", "text", "text", "hi")),
+                        "model", "claude-opus-4-5"));
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(AssistantMessage.class);
+        AssistantMessage am = (AssistantMessage) message;
+        assertThat(am.messageId()).isNull();
+        assertThat(am.stopReason()).isNull();
+        assertThat(am.sessionId()).isNull();
+        assertThat(am.uuid()).isNull();
+    }
+
+    // --- Tests for new ResultMessage fields (v0.1.51) ---
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_withModelUsage() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "result");
+        data.put("subtype", "success");
+        data.put("duration_ms", 3000);
+        data.put("duration_api_ms", 2000);
+        data.put("is_error", false);
+        data.put("num_turns", 1);
+        data.put("session_id", "fdf2d90a-fd9e-4736-ae35-806edd13643f");
+        data.put("stop_reason", "end_turn");
+        data.put("total_cost_usd", 0.0106);
+        data.put("usage", Map.of("input_tokens", 3, "output_tokens", 24));
+        data.put("result", "Hello");
+        data.put("modelUsage", Map.of(
+                "claude-sonnet-4-5-20250929", Map.of(
+                        "inputTokens", 3,
+                        "outputTokens", 24,
+                        "costUSD", 0.0106)));
+        data.put("permission_denials", List.of());
+        data.put("uuid", "d379c496-f33a-4ea4-b920-3c5483baa6f7");
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(ResultMessage.class);
+        ResultMessage rm = (ResultMessage) message;
+        assertThat(rm.modelUsage()).isNotNull();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sonnetUsage = (Map<String, Object>) rm.modelUsage().get("claude-sonnet-4-5-20250929");
+        assertThat(sonnetUsage.get("costUSD")).isEqualTo(0.0106);
+        assertThat(rm.permissionDenials()).isEmpty();
+        assertThat(rm.uuid()).isEqualTo("d379c496-f33a-4ea4-b920-3c5483baa6f7");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_optionalFieldsAbsent() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "result");
+        data.put("subtype", "success");
+        data.put("duration_ms", 1000);
+        data.put("duration_api_ms", 500);
+        data.put("is_error", false);
+        data.put("num_turns", 1);
+        data.put("session_id", "session_123");
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(ResultMessage.class);
+        ResultMessage rm = (ResultMessage) message;
+        assertThat(rm.modelUsage()).isNull();
+        assertThat(rm.permissionDenials()).isNull();
+        assertThat(rm.errors()).isNull();
+        assertThat(rm.uuid()).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_withErrors() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "result");
+        data.put("subtype", "error_during_execution");
+        data.put("duration_ms", 5000);
+        data.put("duration_api_ms", 3000);
+        data.put("is_error", true);
+        data.put("num_turns", 3);
+        data.put("session_id", "session_456");
+        data.put("errors", List.of(
+                "Tool execution failed: permission denied",
+                "Unable to write to /etc/hosts"));
+        data.put("uuid", "err-uuid-789");
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(ResultMessage.class);
+        ResultMessage rm = (ResultMessage) message;
+        assertThat(rm.errors()).containsExactly(
+                "Tool execution failed: permission denied",
+                "Unable to write to /etc/hosts");
+        assertThat(rm.isError()).isTrue();
+        assertThat(rm.subtype()).isEqualTo("error_during_execution");
+        assertThat(rm.uuid()).isEqualTo("err-uuid-789");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_successNoErrors() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "result");
+        data.put("subtype", "success");
+        data.put("duration_ms", 1000);
+        data.put("duration_api_ms", 500);
+        data.put("is_error", false);
+        data.put("num_turns", 1);
+        data.put("session_id", "session_789");
+        data.put("result", "Task completed successfully");
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(ResultMessage.class);
+        ResultMessage rm = (ResultMessage) message;
+        assertThat(rm.errors()).isNull();
+        assertThat(rm.result()).isEqualTo("Task completed successfully");
+    }
+
 }

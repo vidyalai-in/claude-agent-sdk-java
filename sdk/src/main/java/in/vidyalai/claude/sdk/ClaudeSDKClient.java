@@ -18,10 +18,12 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
+import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
 import in.vidyalai.claude.sdk.internal.QueryHandler;
 import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.transport.Transport;
+import in.vidyalai.claude.sdk.types.mcp.ContextUsageResponse;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpStatusResponse;
 import in.vidyalai.claude.sdk.types.message.Message;
@@ -263,9 +265,23 @@ public class ClaudeSDKClient implements AutoCloseable {
         connected.set(true);
 
         // Send initial prompt if provided (streaming mode doesn't send it via command
-        // line)
+        // line). Send directly via transport.write() rather than sendMessage() to
+        // ensure the prompt is sent during connection setup.
         if ((initialPrompt != null) && (!initialPrompt.isBlank())) {
-            sendMessage(initialPrompt);
+            try {
+                Map<String, Object> message = new HashMap<>();
+                message.put("type", "user");
+                Map<String, Object> messageContent = new HashMap<>();
+                messageContent.put("role", "user");
+                messageContent.put("content", initialPrompt);
+                message.put("message", messageContent);
+                message.put("parent_tool_use_id", null);
+                message.put("session_id", "default");
+                String json = MAPPER.writeValueAsString(message);
+                transport.write(json + "\n");
+            } catch (JsonProcessingException e) {
+                throw new CLIConnectionException("Failed to serialize initial prompt", e);
+            }
         }
     }
 
@@ -502,7 +518,27 @@ public class ClaudeSDKClient implements AutoCloseable {
     }
 
     /**
-     * Reconnects a disconnected or failed MCP server (only works with streaming mode).
+     * Gets a breakdown of current context window usage by category.
+     *
+     * <p>
+     * Returns the same data shown by the {@code /context} command in the CLI,
+     * including token counts per category, total usage, and detailed
+     * breakdowns of MCP tools, memory files, and agents.
+     *
+     * @return context usage response with categories, totals, and breakdowns
+     * @throws CLIConnectionException if not connected
+     * @throws ClaudeSDKException     if the request fails
+     */
+    public ContextUsageResponse getContextUsage() {
+        if (query == null) {
+            throw new CLIConnectionException("Not connected. Call connect() first.");
+        }
+        return query.getContextUsage();
+    }
+
+    /**
+     * Reconnects a disconnected or failed MCP server (only works with streaming
+     * mode).
      *
      * <p>
      * Use this to retry connecting to an MCP server that failed to connect or was

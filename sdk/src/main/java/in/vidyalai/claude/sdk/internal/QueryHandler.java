@@ -58,6 +58,8 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
 import in.vidyalai.claude.sdk.types.hook.input.HookInput;
 import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
+import in.vidyalai.claude.sdk.types.control.request.SDKControlGetContextUsageRequest;
+import in.vidyalai.claude.sdk.types.mcp.ContextUsageResponse;
 import in.vidyalai.claude.sdk.types.mcp.McpStatusResponse;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;
@@ -463,6 +465,9 @@ public class QueryHandler implements AutoCloseable {
                     continue;
                 } else if ("control_cancel_request".equals(msgType)) {
                     // TODO: Implement cancellation support
+                    // (the Python SDK cancels asyncio tasks; in Java, the control
+                    // executor handles each request in its own virtual thread and
+                    // we currently don't track them individually for cancellation)
                     continue;
                 }
 
@@ -564,7 +569,7 @@ public class QueryHandler implements AutoCloseable {
                     List<PermissionUpdate> suggestions = ((permissionReq.permissionSuggestions() != null)
                             ? permissionReq.permissionSuggestions()
                             : List.of());
-                    ToolPermissionContext context = new ToolPermissionContext(null, suggestions);
+                    ToolPermissionContext context = new ToolPermissionContext(null, suggestions, permissionReq.toolUseId(), permissionReq.agentId());
 
                     CompletableFuture<PermissionResult> resultFuture = canUseTool.apply(toolName, input, context);
                     PermissionResult result = resultFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);
@@ -647,6 +652,10 @@ public class QueryHandler implements AutoCloseable {
                 case SDKControlStopTaskRequest ignored -> {
                     // Stop task is sent from SDK to CLI, not CLI to SDK
                     throw new ClaudeSDKException("Unexpected stop_task request from CLI: " + ignored);
+                }
+                case SDKControlGetContextUsageRequest ignored -> {
+                    // Get context usage is sent from SDK to CLI, not CLI to SDK
+                    throw new ClaudeSDKException("Unexpected get_context_usage request from CLI: " + ignored);
                 }
             }
 
@@ -754,6 +763,19 @@ public class QueryHandler implements AutoCloseable {
         SDKControlResponse response = sendControlRequest(request, Duration.ofSeconds(RESULT_WAIT_SECS));
         Map<String, Object> rawResponse = ((ControlResponse) response.response()).response();
         return MAPPER.convertValue(rawResponse, McpStatusResponse.class);
+    }
+
+    /**
+     * Sends a get context usage control request.
+     *
+     * @return typed context usage response
+     * @throws ClaudeSDKException if the context usage request fails
+     */
+    public ContextUsageResponse getContextUsage() {
+        SDKControlGetContextUsageRequest request = new SDKControlGetContextUsageRequest();
+        SDKControlResponse response = sendControlRequest(request, Duration.ofSeconds(RESULT_WAIT_SECS));
+        Map<String, Object> rawResponse = ((ControlResponse) response.response()).response();
+        return MAPPER.convertValue(rawResponse, ContextUsageResponse.class);
     }
 
     /**

@@ -33,7 +33,7 @@ public final class ToolResult {
     private static final String DATA = "data";
     private static final String MIME_TYPE = "mimeType";
     private static final String CONTENT = "content";
-    private static final String IS_ERROR = "is_error";
+    private static final String IS_ERROR = "isError";
 
     private final List<Map<String, Object>> content;
     private final boolean isError;

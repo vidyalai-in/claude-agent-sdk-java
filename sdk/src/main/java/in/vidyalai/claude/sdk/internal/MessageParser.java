@@ -154,7 +154,14 @@ public final class MessageParser {
             // Per-turn usage from the API (input_tokens, output_tokens, cache tokens, etc.)
             Map<String, Object> usage = (Map<String, Object>) message.get("usage");
 
-            return new AssistantMessage(blocks, model, parentToolUseId, error, usage);
+            // Additional metadata fields
+            String messageId = (String) message.get("id");
+            String stopReason = (String) message.get("stop_reason");
+            String sessionId = (String) data.get("session_id");
+            String uuid = (String) data.get("uuid");
+
+            return new AssistantMessage(blocks, model, parentToolUseId, error, usage,
+                    messageId, stopReason, sessionId, uuid);
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in assistant message: " + e.getMessage(), data, e);
         }
@@ -250,9 +257,16 @@ public final class MessageParser {
             String result = (String) data.get("result");
             Object structuredOutput = data.get("structured_output");
 
+            // Additional metadata fields
+            Map<String, Object> modelUsage = (Map<String, Object>) data.get("modelUsage");
+            List<Object> permissionDenials = (List<Object>) data.get("permission_denials");
+            List<String> errors = (List<String>) data.get("errors");
+            String uuid = (String) data.get("uuid");
+
             return new ResultMessage(
                     subtype, durationMs, durationApiMs, isError, numTurns,
-                    sessionId, stopReason, totalCostUsd, usage, result, structuredOutput);
+                    sessionId, stopReason, totalCostUsd, usage, result, structuredOutput,
+                    modelUsage, permissionDenials, errors, uuid);
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in result message: " + e.getMessage(), data, e);
         }

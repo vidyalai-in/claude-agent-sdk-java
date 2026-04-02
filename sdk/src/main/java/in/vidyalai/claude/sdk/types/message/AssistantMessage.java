@@ -22,20 +22,38 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param error           error information if the response contains an error
  * @param usage           per-turn token usage breakdown (input_tokens,
  *                        output_tokens, cache tokens, etc.) or null if absent
+ * @param messageId       unique message ID from the API (e.g.
+ *                        "msg_01HRq7YZE3apPqSHydvG77Ve")
+ * @param stopReason      reason the model stopped generating (e.g. "end_turn")
+ * @param sessionId       session ID this message belongs to
+ * @param uuid            unique identifier for this message in the session
  */
 public record AssistantMessage(
         @JsonProperty("content") List<ContentBlock> content,
         @JsonProperty("model") String model,
         @JsonProperty("parent_tool_use_id") @Nullable String parentToolUseId,
         @JsonProperty("error") @Nullable AssistantMessageError error,
-        @JsonProperty("usage") @Nullable Map<String, Object> usage) implements Message {
+        @JsonProperty("usage") @Nullable Map<String, Object> usage,
+        @JsonProperty("message_id") @Nullable String messageId,
+        @JsonProperty("stop_reason") @Nullable String stopReason,
+        @JsonProperty("session_id") @Nullable String sessionId,
+        @JsonProperty("uuid") @Nullable String uuid) implements Message {
 
     /**
-     * Backwards-compatible constructor without usage field.
+     * Backwards-compatible constructor without new fields.
      */
     public AssistantMessage(List<ContentBlock> content, String model,
             @Nullable String parentToolUseId, @Nullable AssistantMessageError error) {
-        this(content, model, parentToolUseId, error, null);
+        this(content, model, parentToolUseId, error, null, null, null, null, null);
+    }
+
+    /**
+     * Backwards-compatible constructor with usage but without new fields.
+     */
+    public AssistantMessage(List<ContentBlock> content, String model,
+            @Nullable String parentToolUseId, @Nullable AssistantMessageError error,
+            @Nullable Map<String, Object> usage) {
+        this(content, model, parentToolUseId, error, usage, null, null, null, null);
     }
 
     @Override

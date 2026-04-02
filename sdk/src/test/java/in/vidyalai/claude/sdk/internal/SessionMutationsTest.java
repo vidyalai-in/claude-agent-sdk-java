@@ -7,7 +7,9 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
@@ -15,7 +17,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import in.vidyalai.claude.sdk.types.message.ForkSessionResult;
 import in.vidyalai.claude.sdk.types.message.SDKSessionInfo;
+import in.vidyalai.claude.sdk.types.message.SessionMessage;
 
 /**
  * Tests for the SessionMutations internal class.
@@ -613,6 +617,483 @@ class SessionMutationsTest {
         // A string that needs multiple passes still converges
         String result = SessionMutations.sanitizeUnicode("a" + "\u200b".repeat(20) + "b");
         assertThat(result).isEqualTo("ab");
+    }
+
+    // -------------------------------------------------------------------------
+    // deleteSession() tests
+    // -------------------------------------------------------------------------
+
+    @SuppressWarnings("null")
+    @Test
+    void testDeleteSession_invalidSessionIdRaises(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        withClaudeHome(claudeHome, () -> {
+            assertThatThrownBy(() -> SessionMutations.deleteSession("not-a-uuid", null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Invalid session_id");
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testDeleteSession_sessionNotFoundRaises(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        withClaudeHome(claudeHome, () -> {
+            String sid = UUID.randomUUID().toString();
+            assertThatThrownBy(() -> SessionMutations.deleteSession(sid, null))
+                    .isInstanceOf(FileNotFoundException.class)
+                    .hasMessageContaining("not found");
+        });
+    }
+
+    @Test
+    void testDeleteSession_deletesSessionFile(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeSessionFile(projectDir);
+            String sid = session[0];
+            Path filePath = Path.of(session[1]);
+
+            assertThat(Files.exists(filePath)).isTrue();
+            SessionMutations.deleteSession(sid, projectPath);
+            assertThat(Files.exists(filePath)).isFalse();
+        });
+    }
+
+    @Test
+    void testDeleteSession_deletesWithoutDirectory(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, "/any/project");
+            String[] session = makeSessionFile(projectDir);
+            String sid = session[0];
+            Path filePath = Path.of(session[1]);
+
+            assertThat(Files.exists(filePath)).isTrue();
+            SessionMutations.deleteSession(sid, null);
+            assertThat(Files.exists(filePath)).isFalse();
+        });
+    }
+
+    @Test
+    void testDeleteSession_noLongerInListSessions(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeSessionFile(projectDir);
+            String sid = session[0];
+
+            List<SDKSessionInfo> sessions = Sessions.listSessions(projectPath, null, false);
+            assertThat(sessions).anyMatch(s -> s.sessionId().equals(sid));
+
+            SessionMutations.deleteSession(sid, projectPath);
+
+            sessions = Sessions.listSessions(projectPath, null, false);
+            assertThat(sessions).noneMatch(s -> s.sessionId().equals(sid));
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers for fork tests — transcript entries with uuid + parentUuid
+    // -------------------------------------------------------------------------
+
+    /**
+     * Creates a session file with proper uuid/parentUuid chain.
+     * Returns {sessionId, filePath, uuid1, uuid2, ...}.
+     */
+    private String[] makeTranscriptSession(Path projectDir, String sessionId, int numTurns)
+            throws IOException {
+        if (sessionId == null) {
+            sessionId = UUID.randomUUID().toString();
+        }
+        Path filePath = projectDir.resolve(sessionId + ".jsonl");
+        List<String> uuids = new ArrayList<>();
+        List<String> lines = new ArrayList<>();
+        String parentUuid = null;
+
+        for (int i = 0; i < numTurns; i++) {
+            // User message
+            String userUuid = UUID.randomUUID().toString();
+            uuids.add(userUuid);
+            String userParent = parentUuid != null ? "\"" + parentUuid + "\"" : "null";
+            lines.add("{\"type\":\"user\",\"uuid\":\"" + userUuid
+                    + "\",\"parentUuid\":" + userParent
+                    + ",\"sessionId\":\"" + sessionId
+                    + "\",\"timestamp\":\"2026-03-01T00:00:00Z\""
+                    + ",\"message\":{\"role\":\"user\",\"content\":\"Turn " + (i + 1) + " question\"}}");
+            parentUuid = userUuid;
+
+            // Assistant message
+            String asstUuid = UUID.randomUUID().toString();
+            uuids.add(asstUuid);
+            lines.add("{\"type\":\"assistant\",\"uuid\":\"" + asstUuid
+                    + "\",\"parentUuid\":\"" + parentUuid
+                    + "\",\"sessionId\":\"" + sessionId
+                    + "\",\"timestamp\":\"2026-03-01T00:00:00Z\""
+                    + ",\"message\":{\"role\":\"assistant\",\"content\":["
+                    + "{\"type\":\"text\",\"text\":\"Turn " + (i + 1) + " answer\"}]}}");
+            parentUuid = asstUuid;
+        }
+
+        Files.writeString(filePath, String.join("\n", lines) + "\n");
+
+        // Return sessionId, filePath, then all uuids
+        List<String> result = new ArrayList<>();
+        result.add(sessionId);
+        result.add(filePath.toString());
+        result.addAll(uuids);
+        return result.toArray(String[]::new);
+    }
+
+    // -------------------------------------------------------------------------
+    // forkSession() tests
+    // -------------------------------------------------------------------------
+
+    @SuppressWarnings("null")
+    @Test
+    void testForkSession_invalidSessionIdRaises(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        withClaudeHome(claudeHome, () -> {
+            assertThatThrownBy(() -> SessionMutations.forkSession("not-a-uuid", null, null, null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Invalid session_id");
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testForkSession_sessionNotFoundRaises(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        withClaudeHome(claudeHome, () -> {
+            String sid = UUID.randomUUID().toString();
+            assertThatThrownBy(() -> SessionMutations.forkSession(sid, null, null, null))
+                    .isInstanceOf(FileNotFoundException.class)
+                    .hasMessageContaining("not found");
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testForkSession_invalidUpToMessageIdRaises(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        withClaudeHome(claudeHome, () -> {
+            assertThatThrownBy(
+                    () -> SessionMutations.forkSession(UUID.randomUUID().toString(), null, "not-valid", null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Invalid up_to_message_id");
+        });
+    }
+
+    @Test
+    void testForkSession_createsNewSession(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeTranscriptSession(projectDir, null, 2);
+            String sid = session[0];
+
+            ForkSessionResult result = SessionMutations.forkSession(sid, projectPath, null, null);
+            assertThat(result.sessionId()).isNotEqualTo(sid);
+
+            // New file exists
+            Path forkPath = projectDir.resolve(result.sessionId() + ".jsonl");
+            assertThat(Files.exists(forkPath)).isTrue();
+        });
+    }
+
+    @SuppressWarnings({ "unchecked", "null" })
+    @Test
+    void testForkSession_remapsUuids(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeTranscriptSession(projectDir, null, 2);
+            String sid = session[0];
+            // Original UUIDs start at index 2
+            List<String> originalUuids = new ArrayList<>();
+            for (int i = 2; i < session.length; i++) {
+                originalUuids.add(session[i]);
+            }
+
+            ForkSessionResult result = SessionMutations.forkSession(sid, projectPath, null, null);
+            Path forkPath = projectDir.resolve(result.sessionId() + ".jsonl");
+
+            for (String line : Files.readAllLines(forkPath)) {
+                Map<String, Object> entry = MAPPER.readValue(line, Map.class);
+                String type = (String) entry.get("type");
+                if ("user".equals(type) || "assistant".equals(type)) {
+                    assertThat(originalUuids).doesNotContain((String) entry.get("uuid"));
+                    if (entry.get("parentUuid") != null) {
+                        assertThat(originalUuids).doesNotContain((String) entry.get("parentUuid"));
+                    }
+                }
+            }
+        });
+    }
+
+    @Test
+    void testForkSession_preservesMessageCount(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeTranscriptSession(projectDir, null, 3);
+            String sid = session[0];
+
+            ForkSessionResult result = SessionMutations.forkSession(sid, projectPath, null, null);
+
+            List<SessionMessage> originalMsgs = Sessions.getSessionMessages(sid, projectPath, null, 0);
+            List<SessionMessage> forkMsgs = Sessions.getSessionMessages(
+                    result.sessionId(), projectPath, null, 0);
+            // Fork has same visible messages
+            assertThat(forkMsgs).hasSameSizeAs(originalMsgs);
+        });
+    }
+
+    @Test
+    void testForkSession_upToMessageId(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeTranscriptSession(projectDir, null, 3);
+            String sid = session[0];
+            // uuid index 3 = first assistant response (index 2 in session array)
+            String cutoffUuid = session[3]; // second uuid (first assistant)
+
+            ForkSessionResult result = SessionMutations.forkSession(
+                    sid, projectPath, cutoffUuid, null);
+
+            List<SessionMessage> forkMsgs = Sessions.getSessionMessages(
+                    result.sessionId(), projectPath, null, 0);
+            // Should have 2 messages (1 user + 1 assistant from first turn)
+            assertThat(forkMsgs).hasSize(2);
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testForkSession_upToMessageIdNotFoundRaises(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeTranscriptSession(projectDir, null, 2);
+            String sid = session[0];
+
+            String fakeUuid = UUID.randomUUID().toString();
+            assertThatThrownBy(
+                    () -> SessionMutations.forkSession(sid, projectPath, fakeUuid, null))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("not found in session");
+        });
+    }
+
+    @Test
+    void testForkSession_customTitle(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeTranscriptSession(projectDir, null, 2);
+            String sid = session[0];
+
+            ForkSessionResult result = SessionMutations.forkSession(
+                    sid, projectPath, null, "My Fork");
+
+            List<SDKSessionInfo> sessions = Sessions.listSessions(projectPath, null, false);
+            SDKSessionInfo forkInfo = sessions.stream()
+                    .filter(s -> s.sessionId().equals(result.sessionId()))
+                    .findFirst().orElse(null);
+            assertThat(forkInfo).isNotNull();
+            assertThat(forkInfo.customTitle()).isEqualTo("My Fork");
+        });
+    }
+
+    @Test
+    void testForkSession_defaultTitleHasSuffix(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeTranscriptSession(projectDir, null, 2);
+            String sid = session[0];
+
+            ForkSessionResult result = SessionMutations.forkSession(
+                    sid, projectPath, null, null);
+
+            List<SDKSessionInfo> sessions = Sessions.listSessions(projectPath, null, false);
+            SDKSessionInfo forkInfo = sessions.stream()
+                    .filter(s -> s.sessionId().equals(result.sessionId()))
+                    .findFirst().orElse(null);
+            assertThat(forkInfo).isNotNull();
+            assertThat(forkInfo.customTitle()).isNotNull();
+            assertThat(forkInfo.customTitle()).endsWith("(fork)");
+        });
+    }
+
+    @SuppressWarnings({ "unchecked", "null" })
+    @Test
+    void testForkSession_sessionIdInEntries(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeTranscriptSession(projectDir, null, 2);
+            String sid = session[0];
+
+            ForkSessionResult result = SessionMutations.forkSession(
+                    sid, projectPath, null, null);
+            Path forkPath = projectDir.resolve(result.sessionId() + ".jsonl");
+
+            for (String line : Files.readAllLines(forkPath)) {
+                Map<String, Object> entry = MAPPER.readValue(line, Map.class);
+                assertThat(entry.get("sessionId")).isEqualTo(result.sessionId());
+            }
+        });
+    }
+
+    @SuppressWarnings({ "unchecked", "null" })
+    @Test
+    void testForkSession_forkedFromField(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeTranscriptSession(projectDir, null, 2);
+            String sid = session[0];
+
+            ForkSessionResult result = SessionMutations.forkSession(
+                    sid, projectPath, null, null);
+            Path forkPath = projectDir.resolve(result.sessionId() + ".jsonl");
+
+            for (String line : Files.readAllLines(forkPath)) {
+                Map<String, Object> entry = MAPPER.readValue(line, Map.class);
+                String type = (String) entry.get("type");
+                if ("user".equals(type) || "assistant".equals(type)) {
+                    Map<String, Object> forkedFrom = (Map<String, Object>) entry.get("forkedFrom");
+                    assertThat(forkedFrom).isNotNull();
+                    assertThat(forkedFrom.get("sessionId")).isEqualTo(sid);
+                }
+            }
+        });
+    }
+
+    @Test
+    void testForkSession_withoutDirectory(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, "/any/project");
+            String[] session = makeTranscriptSession(projectDir, null, 2);
+            String sid = session[0];
+
+            ForkSessionResult result = SessionMutations.forkSession(sid, null, null, null);
+            Path forkPath = projectDir.resolve(result.sessionId() + ".jsonl");
+            assertThat(Files.exists(forkPath)).isTrue();
+        });
+    }
+
+    @SuppressWarnings({ "unchecked", "null" })
+    @Test
+    void testForkSession_clearsStaleFields(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String sid = UUID.randomUUID().toString();
+            Path filePath = projectDir.resolve(sid + ".jsonl");
+            String userUuid = UUID.randomUUID().toString();
+            String entry = "{\"type\":\"user\",\"uuid\":\"" + userUuid
+                    + "\",\"parentUuid\":null,\"sessionId\":\"" + sid
+                    + "\",\"timestamp\":\"2026-03-01T00:00:00Z\""
+                    + ",\"teamName\":\"test-team\",\"agentName\":\"test-agent\""
+                    + ",\"slug\":\"test-slug\""
+                    + ",\"message\":{\"role\":\"user\",\"content\":\"Hello\"}}";
+            Files.writeString(filePath, entry + "\n");
+
+            ForkSessionResult result = SessionMutations.forkSession(
+                    sid, projectPath, null, null);
+            Path forkPath = projectDir.resolve(result.sessionId() + ".jsonl");
+
+            for (String line : Files.readAllLines(forkPath)) {
+                Map<String, Object> e = MAPPER.readValue(line, Map.class);
+                if ("user".equals(e.get("type"))) {
+                    assertThat(e).doesNotContainKey("teamName");
+                    assertThat(e).doesNotContainKey("agentName");
+                    assertThat(e).doesNotContainKey("slug");
+                }
+            }
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // listSessions with offset tests
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testListSessions_appliesOffset(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        // Create 5 sessions
+        for (int i = 0; i < 5; i++) {
+            String sessionId = String.format("5234567%d-1234-1234-1234-123456789abc", i);
+            String jsonl = "{\"type\":\"user\",\"uuid\":\"m" + i + "\",\"sessionId\":\""
+                    + sessionId + "\",\"parentUuid\":null,"
+                    + "\"message\":{\"role\":\"user\",\"content\":\"Session " + i + "\"}}\n"
+                    + "{\"type\":\"system\",\"summary\":\"Session " + i + "\"}\n";
+            Files.writeString(projectDir.resolve(sessionId + ".jsonl"), jsonl);
+        }
+
+        withClaudeHome(claudeHome, () -> {
+            // All sessions
+            List<SDKSessionInfo> all = Sessions.listSessions(null, null, 0, false);
+            assertThat(all).hasSize(5);
+
+            // Offset of 2, should return 3
+            List<SDKSessionInfo> offset2 = Sessions.listSessions(null, null, 2, false);
+            assertThat(offset2).hasSize(3);
+
+            // Offset + limit for pagination
+            List<SDKSessionInfo> page = Sessions.listSessions(null, 2, 2, false);
+            assertThat(page).hasSize(2);
+
+            // Offset past end
+            List<SDKSessionInfo> empty = Sessions.listSessions(null, null, 10, false);
+            assertThat(empty).isEmpty();
+        });
     }
 
 }

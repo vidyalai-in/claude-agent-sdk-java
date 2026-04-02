@@ -151,7 +151,7 @@ public class AdvancedFeatures {
                         "- Code style and best practices\n" +
                         "Be thorough but constructive.",
                 List.of("Read", "Glob", "Grep"),
-                AIModel.SONNET);
+                AIModel.SONNET.getValue());
 
         AgentDefinition testWriter = new AgentDefinition(
                 "Test Writer",
@@ -160,7 +160,7 @@ public class AdvancedFeatures {
                         "- Use descriptive test names\n" +
                         "- Mock external dependencies",
                 List.of("Read", "Write", "Bash"),
-                AIModel.SONNET);
+                AIModel.SONNET.getValue());
 
         AgentDefinition documentor = new AgentDefinition(
                 "Documentation Writer",
@@ -169,7 +169,7 @@ public class AdvancedFeatures {
                         "- API references\n" +
                         "- Common pitfalls",
                 List.of("Read", "Write"),
-                AIModel.HAIKU // Use faster model for docs
+                AIModel.HAIKU.getValue() // Use faster model for docs
         );
 
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()

@@ -56,7 +56,8 @@ public class SDKControlProtocolTypesTest {
                 "Bash",
                 input,
                 suggestions,
-                "/some/path");
+                "/some/path",
+                null, null);
 
         assertThat(request.subtype()).isEqualTo("can_use_tool");
         assertThat(request.toolName()).isEqualTo("Bash");
@@ -148,7 +149,7 @@ public class SDKControlProtocolTypesTest {
     public void testSDKControlRequestDataPolymorphism() {
         // Test that all request types are valid SDKControlRequestData instances
         SDKControlRequestData interrupt = new SDKControlInterruptRequest();
-        SDKControlRequestData permission = new SDKControlPermissionRequest("Bash", Map.of(), null, null);
+        SDKControlRequestData permission = new SDKControlPermissionRequest("Bash", Map.of(), null, null, null, null);
         SDKControlRequestData setModel = new SDKControlSetModelRequest("claude-opus-4-5");
         SDKControlRequestData setMode = new SDKControlSetPermissionModeRequest(PermissionMode.DEFAULT);
         SDKControlRequestData rewindFiles = new SDKControlRewindFilesRequest("msg-123");

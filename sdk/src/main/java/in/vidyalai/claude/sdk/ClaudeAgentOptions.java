@@ -14,7 +14,9 @@ import in.vidyalai.claude.sdk.types.config.AgentDefinition;
 import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
+import in.vidyalai.claude.sdk.types.config.SystemPromptFile;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
+import in.vidyalai.claude.sdk.types.config.TaskBudget;
 import in.vidyalai.claude.sdk.types.config.ThinkingConfig;
 import in.vidyalai.claude.sdk.types.config.ToolsPreset;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
@@ -64,6 +66,8 @@ public final class ClaudeAgentOptions {
     private final boolean continueConversation;
     @Nullable
     private final String resume;
+    @Nullable
+    private final String sessionId;
     // When true resumed sessions will fork to a new session ID rather than
     // continuing the previous session
     private final boolean forkSession;
@@ -160,6 +164,12 @@ public final class ClaudeAgentOptions {
     // using `ClaudeSDKClient.rewind_files()`.
     private final boolean enableFileCheckpointing;
 
+    // API-side task budget in tokens. When set, the model is made aware of
+    // its remaining token budget so it can pace tool use and wrap up before
+    // the limit.
+    @Nullable
+    private final TaskBudget taskBudget;
+
     private ClaudeAgentOptions(Builder builder) {
         this.tools = builder.tools;
         // Default to empty lists (matching Python SDK's field(default_factory=list))
@@ -171,6 +181,7 @@ public final class ClaudeAgentOptions {
         this.permissionPromptToolName = builder.permissionPromptToolName;
         this.continueConversation = builder.continueConversation;
         this.resume = builder.resume;
+        this.sessionId = builder.sessionId;
         this.forkSession = builder.forkSession;
         this.maxTurns = builder.maxTurns;
         this.maxBudgetUsd = builder.maxBudgetUsd;
@@ -203,6 +214,7 @@ public final class ClaudeAgentOptions {
         this.plugins = ((builder.plugins != null) ? List.copyOf(builder.plugins) : List.of());
         this.outputFormat = builder.outputFormat;
         this.enableFileCheckpointing = builder.enableFileCheckpointing;
+        this.taskBudget = builder.taskBudget;
     }
 
     /**
@@ -240,6 +252,7 @@ public final class ClaudeAgentOptions {
         builder.permissionPromptToolName = this.permissionPromptToolName;
         builder.continueConversation = this.continueConversation;
         builder.resume = this.resume;
+        builder.sessionId = this.sessionId;
         builder.forkSession = this.forkSession;
         builder.maxTurns = this.maxTurns;
         builder.maxBudgetUsd = this.maxBudgetUsd;
@@ -268,6 +281,7 @@ public final class ClaudeAgentOptions {
         builder.plugins = ((!this.plugins.isEmpty()) ? new ArrayList<>(this.plugins) : null);
         builder.outputFormat = this.outputFormat;
         builder.enableFileCheckpointing = this.enableFileCheckpointing;
+        builder.taskBudget = this.taskBudget;
         return builder;
     }
 
@@ -333,6 +347,16 @@ public final class ClaudeAgentOptions {
     @Nullable
     public String resume() {
         return resume;
+    }
+
+    /**
+     * Returns the session ID to use for a new session.
+     *
+     * @return the session ID, or null if not set
+     */
+    @Nullable
+    public String sessionId() {
+        return sessionId;
     }
 
     public boolean forkSession() {
@@ -541,6 +565,16 @@ public final class ClaudeAgentOptions {
     }
 
     /**
+     * Returns the task budget configuration.
+     *
+     * @return the task budget, or null if not set
+     */
+    @Nullable
+    public TaskBudget taskBudget() {
+        return taskBudget;
+    }
+
+    /**
      * Functional interface for tool permission callbacks.
      *
      * <p>
@@ -614,6 +648,8 @@ public final class ClaudeAgentOptions {
         private boolean continueConversation;
         @Nullable
         private String resume;
+        @Nullable
+        private String sessionId;
         private boolean forkSession;
         @Nullable
         private Integer maxTurns;
@@ -667,6 +703,8 @@ public final class ClaudeAgentOptions {
         @Nullable
         private Map<String, Object> outputFormat;
         private boolean enableFileCheckpointing;
+        @Nullable
+        private TaskBudget taskBudget;
 
         private Builder() {
         }
@@ -734,6 +772,17 @@ public final class ClaudeAgentOptions {
          */
         public Builder systemPrompt(SystemPromptPreset preset) {
             this.systemPrompt = preset;
+            return this;
+        }
+
+        /**
+         * Sets the system prompt from a file path.
+         *
+         * @param file the system prompt file configuration
+         * @return this builder
+         */
+        public Builder systemPrompt(SystemPromptFile file) {
+            this.systemPrompt = file;
             return this;
         }
 
@@ -822,6 +871,17 @@ public final class ClaudeAgentOptions {
          */
         public Builder resume(String resume) {
             this.resume = resume;
+            return this;
+        }
+
+        /**
+         * Sets the session ID for a new session.
+         *
+         * @param sessionId the session ID
+         * @return this builder
+         */
+        public Builder sessionId(String sessionId) {
+            this.sessionId = sessionId;
             return this;
         }
 
@@ -1103,6 +1163,17 @@ public final class ClaudeAgentOptions {
 
         public Builder enableFileCheckpointing(boolean enableFileCheckpointing) {
             this.enableFileCheckpointing = enableFileCheckpointing;
+            return this;
+        }
+
+        /**
+         * Sets the task budget configuration.
+         *
+         * @param taskBudget the task budget
+         * @return this builder
+         */
+        public Builder taskBudget(TaskBudget taskBudget) {
+            this.taskBudget = taskBudget;
             return this;
         }
 

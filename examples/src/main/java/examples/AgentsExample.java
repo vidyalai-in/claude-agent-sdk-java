@@ -50,7 +50,7 @@ public class AgentsExample {
                         Provide constructive feedback.
                         """,
                 List.of("Read", "Grep"),
-                AIModel.SONNET);
+                AIModel.SONNET.getValue());
 
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .agents(Map.of("code-reviewer", codeReviewer))
@@ -87,7 +87,7 @@ public class AgentsExample {
                         documentation with examples. Focus on clarity and completeness.
                         """,
                 List.of("Read", "Write", "Edit"),
-                AIModel.SONNET);
+                AIModel.SONNET.getValue());
 
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .agents(Map.of("doc-writer", docWriter))
@@ -127,7 +127,7 @@ public class AgentsExample {
                 "Creates and runs tests",
                 "You are a testing expert. Write comprehensive tests and ensure code quality.",
                 List.of("Read", "Write", "Bash"),
-                AIModel.SONNET);
+                AIModel.SONNET.getValue());
 
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .agents(Map.of(

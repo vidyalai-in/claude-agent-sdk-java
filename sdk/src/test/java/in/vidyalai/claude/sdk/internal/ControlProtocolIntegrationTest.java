@@ -22,6 +22,7 @@ import in.vidyalai.claude.sdk.types.control.request.SDKControlRequestData;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlRewindFilesRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlSetModelRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlSetPermissionModeRequest;
+import in.vidyalai.claude.sdk.types.control.request.SDKControlGetContextUsageRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKHookCallbackRequest;
 import in.vidyalai.claude.sdk.types.control.response.ControlErrorResponse;
 import in.vidyalai.claude.sdk.types.control.response.ControlResponse;
@@ -70,7 +71,8 @@ public class ControlProtocolIntegrationTest {
                 "Bash",
                 input,
                 suggestions,
-                "/some/path");
+                "/some/path",
+                null, null);
         SDKControlRequest request = new SDKControlRequest("req-456", permReq);
 
         String json = MAPPER.writeValueAsString(request);
@@ -167,7 +169,7 @@ public class ControlProtocolIntegrationTest {
         // Test each request type can be serialized and deserialized
         SDKControlRequestData[] requests = {
                 new SDKControlInterruptRequest(),
-                new SDKControlPermissionRequest("Bash", Map.of(), null, null),
+                new SDKControlPermissionRequest("Bash", Map.of(), null, null, null, null),
                 new SDKControlInitializeRequest(null, null),
                 new SDKControlSetPermissionModeRequest(PermissionMode.ACCEPT_EDITS),
                 new SDKControlSetModelRequest("claude-opus-4-5"),
@@ -209,6 +211,7 @@ public class ControlProtocolIntegrationTest {
             case SDKControlMcpReconnectRequest r -> "mcp_reconnect";
             case SDKControlMcpToggleRequest r -> "mcp_toggle";
             case SDKControlStopTaskRequest r -> "stop_task";
+            case SDKControlGetContextUsageRequest r -> "get_context_usage";
         };
 
         assertThat(result).isEqualTo("set_model:claude-sonnet-4-5");

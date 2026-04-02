@@ -10,16 +10,23 @@ import org.jspecify.annotations.Nullable;
  * @param signal      reserved for future abort signal support (currently always
  *                    null)
  * @param suggestions permission suggestions from the CLI
+ * @param toolUseId   unique identifier for this specific tool call within the
+ *                    assistant message; multiple tool calls in the same message
+ *                    will have different toolUseIds
+ * @param agentId     if running within the context of a sub-agent, the
+ *                    sub-agent's ID
  */
 public record ToolPermissionContext(
         @Nullable Object signal,
-        List<PermissionUpdate> suggestions) {
+        List<PermissionUpdate> suggestions,
+        @Nullable String toolUseId,
+        @Nullable String agentId) {
 
     /**
      * Creates a context with no signal and empty suggestions.
      */
     public ToolPermissionContext() {
-        this(null, List.of());
+        this(null, List.of(), null, null);
     }
 
     /**
@@ -28,7 +35,17 @@ public record ToolPermissionContext(
      * @param suggestions the permission suggestions
      */
     public ToolPermissionContext(List<PermissionUpdate> suggestions) {
-        this(null, suggestions);
+        this(null, suggestions, null, null);
+    }
+
+    /**
+     * Creates a context with signal and suggestions (backwards compatible).
+     *
+     * @param signal      reserved for future abort signal support
+     * @param suggestions the permission suggestions
+     */
+    public ToolPermissionContext(@Nullable Object signal, List<PermissionUpdate> suggestions) {
+        this(signal, suggestions, null, null);
     }
 
 }

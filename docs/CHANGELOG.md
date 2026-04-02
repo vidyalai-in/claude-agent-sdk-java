@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-04-02
+
+### Added
+- **`dontAsk` permission mode**: New `PermissionMode.DONT_ASK` enum value for allowing all tools without prompting (matching Python SDK v0.1.51)
+- **`SystemPromptFile` support**: New `SystemPromptFile` record for loading system prompts from files via `--system-prompt-file` CLI flag (matching Python SDK v0.1.51)
+- **`TaskBudget` option**: New `TaskBudget` record and `taskBudget()` builder method for API-side token budget management via `--task-budget` CLI flag (matching Python SDK v0.1.51)
+- **`AgentDefinition` new fields**: Added `disallowedTools`, `initialPrompt`, `maxTurns`, `background`, `effort`, `permissionMode`; `model` field relaxed from `AIModel` enum to `String` to support full model IDs (matching Python SDK v0.1.51-v0.1.54)
+- **Preserved fields on `AssistantMessage`**: New `messageId`, `stopReason`, `sessionId`, `uuid` fields capturing API-level identifiers (matching Python SDK v0.1.51)
+- **New fields on `ResultMessage`**: Added `modelUsage`, `permissionDenials`, `errors`, `uuid` for richer result metadata (matching Python SDK v0.1.51)
+- **`toolUseId`/`agentId` on `ToolPermissionContext`**: Expose tool call ID and sub-agent ID in permission callbacks (matching Python SDK v0.1.52)
+- **`sessionId` on `ClaudeAgentOptions`**: New `sessionId()` builder method for specifying session ID via `--session-id` CLI flag (matching Python SDK v0.1.52)
+- **`getContextUsage()` on `ClaudeSDKClient`**: Returns `ContextUsageResponse` with token usage breakdown by category, matching the CLI's `/context` command (matching Python SDK v0.1.52)
+- **`ContextUsageResponse`/`ContextUsageCategory` types**: Typed response for context window usage data (matching Python SDK v0.1.52)
+- **`deleteSession()` API**: Delete a session permanently by removing its JSONL file (matching Python SDK v0.1.51)
+- **`forkSession()` API**: Fork a session into a new branch with UUID remapping, optional truncation, and title derivation. Returns `ForkSessionResult` (matching Python SDK v0.1.51)
+- **Offset pagination in `listSessions()`**: New `offset` parameter for paginated session listing (matching Python SDK v0.1.51)
+
+### Fixed
+- **Setting sources flag**: No longer sends `--setting-sources ""` when setting sources list is empty or null (matching Python SDK v0.1.53)
+- **String prompt in `connect()`**: String prompts are now sent via `transport.write()` directly during connection instead of being dropped (matching Python SDK v0.1.52)
+- **Non-JSON stdout lines**: Lines not starting with `{` are now skipped when the JSON buffer is empty, preventing parse corruption from CLI debug output (matching Python SDK v0.1.51)
+- **`CLAUDECODE` env var filtered**: SDK-spawned subprocesses no longer inherit the `CLAUDECODE` environment variable (matching Python SDK v0.1.51)
+- **MCP `isError` propagation**: `ToolResult.toMap()` now uses `isError` key (was `is_error`) to match MCP protocol conventions (matching Python SDK v0.1.51)
+
+### Synced
+- Python SDK v0.1.50 → v0.1.54 (commits a7fd631..574044a)
+- v0.1.51: AgentDefinition fields, ResultMessage errors/modelUsage/uuid, AssistantMessage preserved fields, delete/fork session, offset pagination, task_budget, dontAsk, SystemPromptFile, non-JSON skip, CLAUDECODE filter, MCP isError; CLI 2.1.83-2.1.85
+- v0.1.52: get_context_usage, session_id option, tool_use_id/agent_id in ToolPermissionContext, control_cancel_request handling, string prompt connect fix; CLI 2.1.86-2.1.87
+- v0.1.53: Fix setting-sources empty, spawn wait_for_result as task; CLI 2.1.88
+- v0.1.54: AgentDefinition background/effort/permissionMode; CLI 2.1.89-2.1.90
+
+[0.1.10]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.10
+
 ## [0.1.9] - 2026-03-22
 
 ### Added

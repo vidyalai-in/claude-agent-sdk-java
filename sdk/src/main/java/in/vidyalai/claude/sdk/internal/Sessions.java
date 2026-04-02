@@ -591,8 +591,22 @@ public class Sessions {
 
     static List<SDKSessionInfo> applySortAndLimit(
             List<SDKSessionInfo> sessions, @Nullable Integer limit) {
+        return applySortLimitOffset(sessions, limit, 0);
+    }
+
+    /**
+     * Sorts sessions by last_modified descending and applies offset + limit.
+     */
+    static List<SDKSessionInfo> applySortLimitOffset(
+            List<SDKSessionInfo> sessions, @Nullable Integer limit, int offset) {
         sessions.sort(Comparator.comparingLong(SDKSessionInfo::lastModified).reversed());
-        if (limit != null && sessions.size() > limit) {
+        if (offset > 0) {
+            if (offset >= sessions.size()) {
+                return new ArrayList<>();
+            }
+            sessions = new ArrayList<>(sessions.subList(offset, sessions.size()));
+        }
+        if (limit != null && limit > 0 && sessions.size() > limit) {
             return new ArrayList<>(sessions.subList(0, limit));
         }
         return sessions;
@@ -615,6 +629,27 @@ public class Sessions {
     public static List<SDKSessionInfo> listSessions(
             @Nullable String directory,
             @Nullable Integer limit,
+            boolean includeWorktrees) {
+        return listSessions(directory, limit, 0, includeWorktrees);
+    }
+
+    /**
+     * Lists sessions across project directories with offset for pagination.
+     *
+     * @param directory        working directory of the project to filter by (null =
+     *                         all projects)
+     * @param limit            maximum number of sessions to return (null = no
+     *                         limit)
+     * @param offset           number of sessions to skip from the start of the
+     *                         sorted result set. Use with {@code limit} for
+     *                         pagination. Defaults to 0.
+     * @param includeWorktrees whether to include git worktree directories
+     * @return session list sorted by last-modified descending
+     */
+    public static List<SDKSessionInfo> listSessions(
+            @Nullable String directory,
+            @Nullable Integer limit,
+            int offset,
             boolean includeWorktrees) {
 
         List<SDKSessionInfo> allSessions = new ArrayList<>();
@@ -649,7 +684,7 @@ public class Sessions {
         }
 
         List<SDKSessionInfo> deduped = deduplicateBySessionId(allSessions);
-        return applySortAndLimit(new ArrayList<>(deduped), limit);
+        return applySortLimitOffset(new ArrayList<>(deduped), limit, offset);
     }
 
     /**

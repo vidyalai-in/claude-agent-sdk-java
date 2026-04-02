@@ -22,7 +22,9 @@ public record SDKControlPermissionRequest(
         @JsonProperty("tool_name") String toolName,
         Map<String, Object> input,
         @JsonProperty("permission_suggestions") @Nullable List<PermissionUpdate> permissionSuggestions,
-        @JsonProperty("blocked_path") @Nullable String blockedPath) implements SDKControlRequestData {
+        @JsonProperty("blocked_path") @Nullable String blockedPath,
+        @JsonProperty("tool_use_id") @Nullable String toolUseId,
+        @JsonProperty("agent_id") @Nullable String agentId) implements SDKControlRequestData {
 
     @Override
     public String subtype() {

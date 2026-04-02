@@ -1,21 +1,31 @@
 package in.vidyalai.claude.sdk.internal;
 
+import java.io.BufferedReader;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.text.Normalizer;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import in.vidyalai.claude.sdk.types.message.ForkSessionResult;
 
 /**
  * Internal implementation of session mutation functions (rename, tag).
@@ -133,9 +143,409 @@ public class SessionMutations {
         appendToSession(sessionId, data, directory);
     }
 
+    /**
+     * Delete a session by removing its JSONL file.
+     *
+     * <p>
+     * This is a hard delete — the file is removed permanently. SDK users who
+     * need soft-delete semantics can use
+     * {@code tagSession(id, "__hidden", directory)} and filter on listing
+     * instead.
+     *
+     * @param sessionId the UUID of the session to delete
+     * @param directory project directory path (same semantics as
+     *                  {@code listSessions(directory=...)}). When {@code null}, all
+     *                  project directories are searched for the session file.
+     * @throws IllegalArgumentException if {@code sessionId} is not a valid UUID.
+     * @throws FileNotFoundException    if the session file cannot be found.
+     * @throws IOException              if the delete fails.
+     */
+    public static void deleteSession(String sessionId, @Nullable String directory)
+            throws IOException {
+        if (!isValidUuid(sessionId)) {
+            throw new IllegalArgumentException("Invalid session_id: " + sessionId);
+        }
+
+        Path path = findSessionFile(sessionId, directory);
+        if (path == null) {
+            throw new FileNotFoundException(
+                    "Session " + sessionId + " not found"
+                            + (directory != null ? " in project directory for " + directory : ""));
+        }
+        try {
+            Files.delete(path);
+        } catch (java.nio.file.NoSuchFileException e) {
+            throw new FileNotFoundException("Session " + sessionId + " not found");
+        }
+    }
+
+    /**
+     * Fork a session into a new branch with fresh UUIDs.
+     *
+     * <p>
+     * Copies transcript messages from the source session into a new session
+     * file, remapping every message UUID and preserving the {@code parentUuid}
+     * chain. Supports {@code upToMessageId} for branching from a specific
+     * point in the conversation.
+     *
+     * <p>
+     * Forked sessions start without undo history (file-history snapshots are
+     * not copied).
+     *
+     * @param sessionId     UUID of the source session to fork.
+     * @param directory     project directory path (same semantics as
+     *                      {@code listSessions(directory=...)}). When
+     *                      {@code null}, all project directories are searched.
+     * @param upToMessageId slice transcript up to this message UUID
+     *                      (inclusive). If {@code null}, copies the full
+     *                      transcript.
+     * @param title         custom title for the fork. If {@code null}, derives
+     *                      from the original title + " (fork)".
+     * @return {@link ForkSessionResult} with the new session's UUID.
+     * @throws IllegalArgumentException if {@code sessionId} or
+     *                                  {@code upToMessageId} is not a valid
+     *                                  UUID.
+     * @throws FileNotFoundException    if the source session file cannot be
+     *                                  found.
+     * @throws IllegalStateException    if the session has no messages to fork, or
+     *                                  if {@code upToMessageId} is not found in
+     *                                  the transcript.
+     * @throws IOException              if the read or write fails.
+     */
+    public static ForkSessionResult forkSession(String sessionId,
+            @Nullable String directory, @Nullable String upToMessageId,
+            @Nullable String title) throws IOException {
+        if (!isValidUuid(sessionId)) {
+            throw new IllegalArgumentException("Invalid session_id: " + sessionId);
+        }
+        if (upToMessageId != null && !isValidUuid(upToMessageId)) {
+            throw new IllegalArgumentException("Invalid up_to_message_id: " + upToMessageId);
+        }
+
+        Path[] source = findSessionFileWithDir(sessionId, directory);
+        if (source == null) {
+            throw new FileNotFoundException(
+                    "Session " + sessionId + " not found"
+                            + (directory != null ? " in project directory for " + directory : ""));
+        }
+        Path filePath = source[0];
+        Path projectDir = source[1];
+
+        byte[] contentBytes = Files.readAllBytes(filePath);
+        if (contentBytes.length == 0) {
+            throw new IllegalStateException(
+                    "Session " + sessionId + " has no messages to fork");
+        }
+        String content = new String(contentBytes, StandardCharsets.UTF_8);
+
+        ForkTranscriptResult parsed = parseForkTranscript(content, sessionId);
+        List<Map<String, Object>> transcript = parsed.transcript;
+        List<Object> contentReplacements = parsed.contentReplacements;
+
+        // Filter out sidechains
+        transcript = transcript.stream()
+                .filter(e -> !Boolean.TRUE.equals(e.get("isSidechain")))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+
+        if (transcript.isEmpty()) {
+            throw new IllegalStateException(
+                    "Session " + sessionId + " has no messages to fork");
+        }
+
+        if (upToMessageId != null) {
+            int cutoff = -1;
+            for (int i = 0; i < transcript.size(); i++) {
+                if (upToMessageId.equals(transcript.get(i).get("uuid"))) {
+                    cutoff = i;
+                    break;
+                }
+            }
+            if (cutoff == -1) {
+                throw new IllegalStateException(
+                        "Message " + upToMessageId + " not found in session " + sessionId);
+            }
+            transcript = new ArrayList<>(transcript.subList(0, cutoff + 1));
+        }
+
+        // Build UUID mapping for all entries (including progress, for parentUuid chain
+        // walk)
+        Map<String, String> uuidMapping = new LinkedHashMap<>();
+        for (Map<String, Object> entry : transcript) {
+            uuidMapping.put((String) entry.get("uuid"), UUID.randomUUID().toString());
+        }
+
+        // Filter out progress messages from written output
+        List<Map<String, Object>> writable = transcript.stream()
+                .filter(e -> !"progress".equals(e.get("type")))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+
+        if (writable.isEmpty()) {
+            throw new IllegalStateException(
+                    "Session " + sessionId + " has no messages to fork");
+        }
+
+        // Build lookup by uuid for parentUuid chain walk
+        Map<String, Map<String, Object>> byUuid = new LinkedHashMap<>();
+        for (Map<String, Object> entry : transcript) {
+            byUuid.put((String) entry.get("uuid"), entry);
+        }
+
+        String forkedSessionId = UUID.randomUUID().toString();
+        String now = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
+                .replace("+00:00", "Z");
+
+        List<String> lines = new ArrayList<>();
+
+        for (int i = 0; i < writable.size(); i++) {
+            Map<String, Object> original = writable.get(i);
+            String newUuid = uuidMapping.get(original.get("uuid"));
+
+            // Resolve parentUuid, skipping progress ancestors
+            String newParentUuid = null;
+            String parentId = (String) original.get("parentUuid");
+            while (parentId != null) {
+                Map<String, Object> parent = byUuid.get(parentId);
+                if (parent == null) {
+                    break;
+                }
+                if (!"progress".equals(parent.get("type"))) {
+                    newParentUuid = uuidMapping.get(parentId);
+                    break;
+                }
+                parentId = (String) parent.get("parentUuid");
+            }
+
+            // Only update timestamp on the last message (leaf detection on resume)
+            String timestamp = (i == writable.size() - 1)
+                    ? now
+                    : (String) original.getOrDefault("timestamp", now);
+
+            // Remap logicalParentUuid (compact-boundary backpointer)
+            String logicalParent = (String) original.get("logicalParentUuid");
+            String newLogicalParent = logicalParent != null
+                    ? uuidMapping.get(logicalParent)
+                    : null;
+
+            Map<String, Object> forked = new LinkedHashMap<>(original);
+            forked.put("uuid", newUuid);
+            forked.put("parentUuid", newParentUuid);
+            forked.put("logicalParentUuid", newLogicalParent);
+            forked.put("sessionId", forkedSessionId);
+            forked.put("timestamp", timestamp);
+            forked.put("isSidechain", false);
+            forked.put("forkedFrom", Map.of(
+                    "sessionId", sessionId,
+                    "messageUuid", original.get("uuid")));
+
+            // Remove fields that would leak state from the source session
+            for (String key : List.of("teamName", "agentName", "slug", "sourceToolAssistantUUID")) {
+                forked.remove(key);
+            }
+
+            lines.add(MAPPER.writeValueAsString(forked));
+        }
+
+        // Append content-replacement entry (if any) with the fork's sessionId
+        if (!contentReplacements.isEmpty()) {
+            Map<String, Object> crEntry = new LinkedHashMap<>();
+            crEntry.put("type", "content-replacement");
+            crEntry.put("sessionId", forkedSessionId);
+            crEntry.put("replacements", contentReplacements);
+            lines.add(MAPPER.writeValueAsString(crEntry));
+        }
+
+        // Derive title: explicit > original customTitle/aiTitle > first prompt
+        String forkTitle = (title != null) ? title.strip() : null;
+        if (forkTitle == null || forkTitle.isEmpty()) {
+            int bufLen = contentBytes.length;
+            int headLen = Math.min(bufLen, Sessions.LITE_READ_BUF_SIZE);
+            String head = new String(contentBytes, 0, headLen, StandardCharsets.UTF_8);
+            int tailStart = Math.max(0, bufLen - Sessions.LITE_READ_BUF_SIZE);
+            String tail = new String(contentBytes, tailStart,
+                    bufLen - tailStart, StandardCharsets.UTF_8);
+
+            String base = Sessions.extractLastJsonStringField(tail, "customTitle");
+            if (base == null) {
+                base = Sessions.extractLastJsonStringField(head, "customTitle");
+            }
+            if (base == null) {
+                base = Sessions.extractLastJsonStringField(tail, "aiTitle");
+            }
+            if (base == null) {
+                base = Sessions.extractLastJsonStringField(head, "aiTitle");
+            }
+            if (base == null) {
+                base = Sessions.extractFirstPromptFromHead(head);
+            }
+            if (base == null || base.isEmpty()) {
+                base = "Forked session";
+            }
+            forkTitle = base + " (fork)";
+        }
+
+        Map<String, Object> titleEntry = new LinkedHashMap<>();
+        titleEntry.put("type", "custom-title");
+        titleEntry.put("sessionId", forkedSessionId);
+        titleEntry.put("customTitle", forkTitle);
+        lines.add(MAPPER.writeValueAsString(titleEntry));
+
+        // Write new session file
+        Path forkPath = projectDir.resolve(forkedSessionId + ".jsonl");
+        String forkContent = String.join("\n", lines) + "\n";
+        Files.writeString(forkPath, forkContent,
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE);
+
+        return new ForkSessionResult(forkedSessionId);
+    }
+
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Transcript types valid for fork operations.
+     */
+    private static final Set<String> TRANSCRIPT_TYPES = Set.of(
+            "user", "assistant", "attachment", "system", "progress");
+
+    /**
+     * Result of parsing a session's JSONL for fork.
+     */
+    private static class ForkTranscriptResult {
+        final List<Map<String, Object>> transcript;
+        final List<Object> contentReplacements;
+
+        ForkTranscriptResult(List<Map<String, Object>> transcript,
+                List<Object> contentReplacements) {
+            this.transcript = transcript;
+            this.contentReplacements = contentReplacements;
+        }
+    }
+
+    /**
+     * Parses JSONL content into transcript entries + content-replacement records.
+     */
+    @SuppressWarnings({ "unchecked", "null" })
+    private static ForkTranscriptResult parseForkTranscript(String content, String sessionId) {
+        List<Map<String, Object>> transcript = new ArrayList<>();
+        List<Object> contentReplacements = new ArrayList<>();
+
+        try (BufferedReader reader = new BufferedReader(new StringReader(content))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+                try {
+                    Map<String, Object> entry = MAPPER.readValue(line, Map.class);
+                    String entryType = (String) entry.get("type");
+                    if (TRANSCRIPT_TYPES.contains(entryType)
+                            && entry.get("uuid") instanceof String) {
+                        transcript.add(entry);
+                    } else if ("content-replacement".equals(entryType)
+                            && sessionId.equals(entry.get("sessionId"))
+                            && entry.get("replacements") instanceof List<?> replacements) {
+                        contentReplacements.addAll(replacements);
+                    }
+                } catch (Exception e) {
+                    // Skip corrupt lines
+                }
+            }
+        } catch (IOException e) {
+            // StringReader never throws
+        }
+
+        return new ForkTranscriptResult(transcript, contentReplacements);
+    }
+
+    /**
+     * Finds a session's JSONL file path.
+     *
+     * @return the path if found, {@code null} otherwise
+     */
+    private static @Nullable Path findSessionFile(String sessionId,
+            @Nullable String directory) {
+        Path[] result = findSessionFileWithDir(sessionId, directory);
+        return result != null ? result[0] : null;
+    }
+
+    /**
+     * Finds a session file and its containing project directory.
+     *
+     * @return {@code {filePath, projectDir}} or {@code null}
+     */
+    private static Path @Nullable [] findSessionFileWithDir(String sessionId,
+            @Nullable String directory) {
+        String fileName = sessionId + ".jsonl";
+
+        if (directory != null) {
+            Sessions.sanitizePath(directory);
+            Path projectDir = Sessions.findProjectDir(directory);
+            if (projectDir != null) {
+                Path[] result = tryDir(projectDir, fileName);
+                if (result != null) {
+                    return result;
+                }
+            }
+
+            // Worktree fallback
+            try {
+                List<String> worktreePaths = Sessions.getWorktreePaths(directory);
+                for (String wt : worktreePaths) {
+                    if (wt.equals(directory)) {
+                        continue;
+                    }
+                    Path wtProjectDir = Sessions.findProjectDir(wt);
+                    if (wtProjectDir != null) {
+                        Path[] result = tryDir(wtProjectDir, fileName);
+                        if (result != null) {
+                            return result;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                // Worktree detection failure is non-fatal
+            }
+
+            return null;
+        }
+
+        // No directory — search all project directories
+        Path projectsDir = Sessions.getProjectsDir();
+        if (!Files.exists(projectsDir)) {
+            return null;
+        }
+        try (Stream<Path> dirs = Files.list(projectsDir)) {
+            List<Path> dirList = dirs.filter(Files::isDirectory).toList();
+            for (Path dir : dirList) {
+                Path[] result = tryDir(dir, fileName);
+                if (result != null) {
+                    return result;
+                }
+            }
+        } catch (IOException e) {
+            return null;
+        }
+        return null;
+    }
+
+    /**
+     * Tries to find a non-empty session file in the given directory.
+     */
+    private static Path @Nullable [] tryDir(Path projectDir, String fileName) {
+        Path path = projectDir.resolve(fileName);
+        try {
+            if (Files.exists(path) && Files.size(path) > 0) {
+                return new Path[] { path, projectDir };
+            }
+        } catch (IOException e) {
+            // Ignore
+        }
+        return null;
+    }
 
     private static void appendToSession(String sessionId, String data, @Nullable String directory)
             throws IOException {

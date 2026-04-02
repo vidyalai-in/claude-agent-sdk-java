@@ -23,6 +23,7 @@ import in.vidyalai.claude.sdk.mcp.SdkMcpTool;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
+import in.vidyalai.claude.sdk.types.message.ForkSessionResult;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.SDKSessionInfo;
@@ -550,6 +551,34 @@ public final class ClaudeSDK {
     }
 
     /**
+     * Lists sessions with full control over filtering, limits, and pagination.
+     *
+     * <p>
+     * Use {@code limit} and {@code offset} for pagination:
+     *
+     * <pre>{@code
+     * List<SDKSessionInfo> page1 = ClaudeSDK.listSessions(dir, 50, 0, true);
+     * List<SDKSessionInfo> page2 = ClaudeSDK.listSessions(dir, 50, 50, true);
+     * }</pre>
+     *
+     * @param directory        project working directory to filter by (null = all
+     *                         projects)
+     * @param limit            maximum sessions to return (null = no limit)
+     * @param offset           number of sessions to skip from the start of the
+     *                         sorted result set (for pagination)
+     * @param includeWorktrees whether to include git worktree directories
+     * @return session list sorted by last-modified descending
+     */
+    public static List<SDKSessionInfo> listSessions(
+            Path directory, Integer limit, int offset, boolean includeWorktrees) {
+        return Sessions.listSessions(
+                directory != null ? directory.toString() : null,
+                limit,
+                offset,
+                includeWorktrees);
+    }
+
+    /**
      * Reads metadata for a single session by ID.
      *
      * <p>
@@ -691,6 +720,107 @@ public final class ClaudeSDK {
      */
     public static void tagSession(String sessionId, @Nullable String tag, Path directory) throws java.io.IOException {
         SessionMutations.tagSession(sessionId, tag, directory.toString());
+    }
+
+    /**
+     * Delete a session by removing its JSONL file.
+     *
+     * <p>
+     * This is a hard delete — the file is removed permanently. For soft-delete
+     * semantics, use {@code tagSession(id, "__hidden")} and filter on listing
+     * instead.
+     *
+     * @param sessionId the UUID of the session to delete
+     * @throws IllegalArgumentException      if {@code sessionId} is not a valid
+     *                                       UUID.
+     * @throws java.io.FileNotFoundException if the session file cannot be found.
+     * @throws java.io.IOException           if the delete fails.
+     */
+    public static void deleteSession(String sessionId) throws java.io.IOException {
+        SessionMutations.deleteSession(sessionId, null);
+    }
+
+    /**
+     * Delete a session within a specific project directory.
+     *
+     * @param sessionId the UUID of the session to delete
+     * @param directory project directory path
+     * @throws IllegalArgumentException      if {@code sessionId} is not a valid
+     *                                       UUID.
+     * @throws java.io.FileNotFoundException if the session file cannot be found.
+     * @throws java.io.IOException           if the delete fails.
+     */
+    public static void deleteSession(String sessionId, Path directory) throws java.io.IOException {
+        SessionMutations.deleteSession(sessionId, directory.toString());
+    }
+
+    /**
+     * Fork a session into a new branch with fresh UUIDs.
+     *
+     * <p>
+     * Copies transcript messages from the source session into a new session
+     * file, remapping every message UUID and preserving the {@code parentUuid}
+     * chain. Forked sessions start without undo history.
+     *
+     * @param sessionId the UUID of the source session to fork
+     * @return {@link ForkSessionResult} with the new session's UUID
+     * @throws IllegalArgumentException      if {@code sessionId} is not a valid
+     *                                       UUID.
+     * @throws java.io.FileNotFoundException if the source session cannot be
+     *                                       found.
+     * @throws java.io.IOException           if the read or write fails.
+     */
+    public static ForkSessionResult forkSession(String sessionId) throws java.io.IOException {
+        return SessionMutations.forkSession(sessionId, null, null, null);
+    }
+
+    /**
+     * Fork a session within a specific project directory.
+     *
+     * @param sessionId the UUID of the source session to fork
+     * @param directory project directory path
+     * @return {@link ForkSessionResult} with the new session's UUID
+     * @throws IllegalArgumentException      if {@code sessionId} is not a valid
+     *                                       UUID.
+     * @throws java.io.FileNotFoundException if the source session cannot be
+     *                                       found.
+     * @throws java.io.IOException           if the read or write fails.
+     */
+    public static ForkSessionResult forkSession(String sessionId, Path directory) throws java.io.IOException {
+        return SessionMutations.forkSession(sessionId, directory.toString(), null, null);
+    }
+
+    /**
+     * Fork a session with full control over branching and titling.
+     *
+     * <pre>{@code
+     * // Fork from a specific point in the conversation
+     * ForkSessionResult result = ClaudeSDK.forkSession(
+     *         sessionId,
+     *         directory,
+     *         upToMessageId,    // null for full copy
+     *         "My Fork Title"); // null for auto-derived title
+     * }</pre>
+     *
+     * @param sessionId     the UUID of the source session to fork
+     * @param directory     project directory path (null = search all projects)
+     * @param upToMessageId slice transcript up to this message UUID (inclusive),
+     *                      or null to copy the full transcript
+     * @param title         custom title for the fork, or null to auto-derive
+     *                      from the original title + " (fork)"
+     * @return {@link ForkSessionResult} with the new session's UUID
+     * @throws IllegalArgumentException      if {@code sessionId} or
+     *                                       {@code upToMessageId} is not a
+     *                                       valid UUID.
+     * @throws java.io.FileNotFoundException if the source session cannot be
+     *                                       found.
+     * @throws java.io.IOException           if the read or write fails.
+     */
+    public static ForkSessionResult forkSession(String sessionId, @Nullable Path directory,
+            @Nullable String upToMessageId, @Nullable String title) throws java.io.IOException {
+        return SessionMutations.forkSession(sessionId,
+                directory != null ? directory.toString() : null,
+                upToMessageId, title);
     }
 
     /**

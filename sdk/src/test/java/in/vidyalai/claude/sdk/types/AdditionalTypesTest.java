@@ -306,10 +306,10 @@ class AdditionalTypesTest {
                 "Full agent",
                 "Full prompt",
                 List.of("Bash", "Read", "Write"),
-                AIModel.OPUS);
+                AIModel.OPUS.getValue());
 
         assertThat(agent.tools()).containsExactly("Bash", "Read", "Write");
-        assertThat(agent.model()).isEqualTo(AIModel.OPUS);
+        assertThat(agent.model()).isEqualTo(AIModel.OPUS.getValue());
     }
 
     @Test
@@ -324,8 +324,9 @@ class AdditionalTypesTest {
     void testAgentDefinitionWithSkillsAndMemory() {
         AgentDefinition agent = new AgentDefinition(
                 "test", "p",
-                List.of("Bash"), AIModel.SONNET,
-                List.of("skill-a", "skill-b"), MemoryScope.PROJECT, null);
+                List.of("Bash"), null, AIModel.SONNET.getValue(),
+                List.of("skill-a", "skill-b"), MemoryScope.PROJECT, null,
+                null, null, null, null, null);
 
         assertThat(agent.skills()).containsExactly("skill-a", "skill-b");
         assertThat(agent.memory()).isEqualTo(MemoryScope.PROJECT);
@@ -336,8 +337,9 @@ class AdditionalTypesTest {
     @Test
     void testAgentDefinitionWithMcpServers() {
         AgentDefinition agent = new AgentDefinition(
-                "test", "p", null, null, null, null,
-                List.of("slack", Map.of("local", Map.of("command", "python", "args", List.of("server.py")))));
+                "test", "p", null, null, null, null, null,
+                List.of("slack", Map.of("local", Map.of("command", "python", "args", List.of("server.py")))),
+                null, null, null, null, null);
 
         assertThat(agent.mcpServers()).hasSize(2);
         assertThat(agent.mcpServers().get(0)).isEqualTo("slack");

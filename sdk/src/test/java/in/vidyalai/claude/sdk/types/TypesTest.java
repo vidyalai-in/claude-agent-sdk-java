@@ -201,12 +201,12 @@ class TypesTest {
                 "Test agent",
                 "You are a test agent",
                 List.of("Bash", "Read"),
-                AIModel.SONNET);
+                AIModel.SONNET.getValue());
 
         assertThat(agent.description()).isEqualTo("Test agent");
         assertThat(agent.prompt()).isEqualTo("You are a test agent");
         assertThat(agent.tools()).containsExactly("Bash", "Read");
-        assertThat(agent.model()).isEqualTo(AIModel.SONNET);
+        assertThat(agent.model()).isEqualTo(AIModel.SONNET.getValue());
     }
 
     @Test
