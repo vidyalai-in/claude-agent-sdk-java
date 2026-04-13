@@ -91,6 +91,24 @@ public interface ToolAnnotations {
     }
 
     /**
+     * Maximum result size in characters for this tool.
+     *
+     * <p>
+     * Controls the CLI's layer-2 tool-result spill threshold. When set, the CLI
+     * uses this value instead of its hardcoded 50K char default, allowing tools
+     * that return large results to avoid being spilled to temp files.
+     *
+     * <p>
+     * This value is forwarded via {@code _meta} with the key
+     * {@code anthropic/maxResultSizeChars} in the tools/list JSONRPC response,
+     * bypassing Zod annotation stripping.
+     */
+    @Nullable
+    default Integer maxResultSizeChars() {
+        return null;
+    }
+
+    /**
      * Checks if any annotations are set.
      *
      * @return true if at least one annotation is non-null
@@ -171,12 +189,18 @@ public interface ToolAnnotations {
         @JsonProperty("openWorldHint")
         private final Boolean openWorldHint;
 
+        @Nullable
+        @JsonProperty("maxResultSizeChars")
+        private final Integer maxResultSizeChars;
+
         Impl(@Nullable Boolean readOnlyHint, @Nullable Boolean destructiveHint,
-                @Nullable Boolean idempotentHint, @Nullable Boolean openWorldHint) {
+                @Nullable Boolean idempotentHint, @Nullable Boolean openWorldHint,
+                @Nullable Integer maxResultSizeChars) {
             this.readOnlyHint = readOnlyHint;
             this.destructiveHint = destructiveHint;
             this.idempotentHint = idempotentHint;
             this.openWorldHint = openWorldHint;
+            this.maxResultSizeChars = maxResultSizeChars;
         }
 
         @Override
@@ -197,6 +221,11 @@ public interface ToolAnnotations {
         @Override
         public @Nullable Boolean openWorldHint() {
             return openWorldHint;
+        }
+
+        @Override
+        public @Nullable Integer maxResultSizeChars() {
+            return maxResultSizeChars;
         }
 
         @JsonIgnore
@@ -229,6 +258,9 @@ public interface ToolAnnotations {
 
         @Nullable
         private Boolean openWorldHint;
+
+        @Nullable
+        private Integer maxResultSizeChars;
 
         private Builder() {
         }
@@ -278,12 +310,23 @@ public interface ToolAnnotations {
         }
 
         /**
+         * Sets the maximum result size in characters.
+         *
+         * @param maxResultSizeChars max chars before CLI spills to temp file
+         * @return this builder
+         */
+        public Builder maxResultSizeChars(int maxResultSizeChars) {
+            this.maxResultSizeChars = maxResultSizeChars;
+            return this;
+        }
+
+        /**
          * Builds the tool annotations.
          *
          * @return a new ToolAnnotations instance
          */
         public ToolAnnotations build() {
-            return new Impl(readOnlyHint, destructiveHint, idempotentHint, openWorldHint);
+            return new Impl(readOnlyHint, destructiveHint, idempotentHint, openWorldHint, maxResultSizeChars);
         }
 
     }

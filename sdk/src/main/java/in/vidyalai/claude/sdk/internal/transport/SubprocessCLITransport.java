@@ -383,7 +383,7 @@ public class SubprocessCLITransport implements Transport {
     }
 
     @SuppressWarnings({ "unchecked", "null" })
-    private List<String> buildCommand() {
+    List<String> buildCommand() {
         List<String> cmd = new ArrayList<>();
         cmd.add(cliPath);
         cmd.add("--output-format");
@@ -556,29 +556,31 @@ public class SubprocessCLITransport implements Transport {
             }
         }
 
-        // Resolve thinking config → --max-thinking-tokens
+        // Resolve thinking config -> --thinking / --max-thinking-tokens
         // `thinking` takes precedence over the deprecated `max_thinking_tokens`
-        @SuppressWarnings("deprecation")
-        Integer resolvedMaxThinkingTokens = options.maxThinkingTokens();
         ThinkingConfig thinking = options.thinking();
         if (thinking != null) {
             switch (thinking) {
                 case ThinkingConfigAdaptive _ -> {
-                    if (resolvedMaxThinkingTokens == null) {
-                        resolvedMaxThinkingTokens = 32_000;
-                    }
+                    cmd.add("--thinking");
+                    cmd.add("adaptive");
                 }
                 case ThinkingConfigEnabled enabled -> {
-                    resolvedMaxThinkingTokens = enabled.budgetTokens();
+                    cmd.add("--max-thinking-tokens");
+                    cmd.add(String.valueOf(enabled.budgetTokens()));
                 }
                 case ThinkingConfigDisabled _ -> {
-                    resolvedMaxThinkingTokens = 0;
+                    cmd.add("--thinking");
+                    cmd.add("disabled");
                 }
             }
-        }
-        if (resolvedMaxThinkingTokens != null) {
-            cmd.add("--max-thinking-tokens");
-            cmd.add(String.valueOf(resolvedMaxThinkingTokens));
+        } else {
+            @SuppressWarnings("deprecation")
+            Integer maxThinkingTokens = options.maxThinkingTokens();
+            if (maxThinkingTokens != null) {
+                cmd.add("--max-thinking-tokens");
+                cmd.add(String.valueOf(maxThinkingTokens));
+            }
         }
 
         // Add effort level if specified

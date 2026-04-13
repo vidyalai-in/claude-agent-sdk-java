@@ -878,4 +878,50 @@ class SdkMcpTest {
         assertThat(result.openWorldHint()).isNull();
     }
 
+    @SuppressWarnings({ "unchecked" })
+    @Test
+    void testMaxResultSizeCharsAnnotationFlowsToCli() throws ExecutionException, InterruptedException {
+        // maxResultSizeChars annotation reaches the CLI via the tools/list JSONRPC response.
+        // The CLI's layer-2 spill threshold defaults to 50K chars. When maxResultSizeChars
+        // is declared, the CLI reads it from _meta and uses it as the per-tool threshold.
+        ToolAnnotations largeResultAnnotations = ToolAnnotations.builder()
+                .maxResultSizeChars(500_000)
+                .build();
+
+        SdkMcpTool<Map<String, Object>> largeTool = SdkMcpTool
+                .<Map<String, Object>>builder("get_large_schema", "Returns a large DB schema")
+                .inputSchema(Map.of("type", "object"))
+                .handler(args -> CompletableFuture.completedFuture(ToolResult.text("schema")))
+                .annotations(largeResultAnnotations)
+                .build();
+
+        SdkMcpTool<Map<String, Object>> smallTool = SdkMcpTool
+                .<Map<String, Object>>builder("small_tool", "Returns a small result")
+                .inputSchema(Map.of("type", "object"))
+                .handler(args -> CompletableFuture.completedFuture(ToolResult.text("ok")))
+                .build();
+
+        SdkMcpServer server = SdkMcpServer.create("large-output-test", List.of(largeTool, smallTool));
+
+        Map<String, Object> response = server.handleMessage(Map.of(
+                "jsonrpc", "2.0",
+                "id", 1,
+                "method", "tools/list",
+                "params", Map.of())).get();
+
+        Map<String, Object> result = (Map<String, Object>) response.get("result");
+        List<Map<String, Object>> tools = (List<Map<String, Object>>) result.get("tools");
+
+        Map<String, Map<String, Object>> toolsByName = tools.stream()
+                .collect(java.util.stream.Collectors.toMap(t -> (String) t.get("name"), t -> t));
+
+        // maxResultSizeChars must appear in _meta so the CLI can read it
+        assertThat(toolsByName.get("get_large_schema")).containsKey("_meta");
+        Map<String, Object> meta = (Map<String, Object>) toolsByName.get("get_large_schema").get("_meta");
+        assertThat(meta.get("anthropic/maxResultSizeChars")).isEqualTo(500_000);
+
+        // Tools without the annotation must not have the _meta key
+        assertThat(toolsByName.get("small_tool")).doesNotContainKey("_meta");
+    }
+
 }

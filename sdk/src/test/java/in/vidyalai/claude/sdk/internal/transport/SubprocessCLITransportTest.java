@@ -19,6 +19,7 @@ import in.vidyalai.claude.sdk.types.config.SettingSource;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.config.ThinkingConfigAdaptive;
 import in.vidyalai.claude.sdk.types.config.ThinkingConfigDisabled;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfigEnabled;
 import in.vidyalai.claude.sdk.types.config.ToolsPreset;
 import in.vidyalai.claude.sdk.types.mcp.McpHttpServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpServerConfig;
@@ -162,6 +163,68 @@ class SubprocessCLITransportTest {
 
         assertThat(options.thinking()).isInstanceOf(ThinkingConfigAdaptive.class);
         assertThat(options.effort()).isEqualTo("high");
+    }
+
+    @Test
+    void testBuildCommandWithThinkingAdaptive() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigAdaptive())
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        int idx = cmd.indexOf("--thinking");
+        assertThat(idx).isGreaterThanOrEqualTo(0);
+        assertThat(cmd.get(idx + 1)).isEqualTo("adaptive");
+        assertThat(cmd).doesNotContain("--max-thinking-tokens");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandWithThinkingEnabled() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigEnabled(5000))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        int idx = cmd.indexOf("--max-thinking-tokens");
+        assertThat(idx).isGreaterThanOrEqualTo(0);
+        assertThat(cmd.get(idx + 1)).isEqualTo("5000");
+        assertThat(cmd).doesNotContain("--thinking");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandWithThinkingDisabled() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigDisabled())
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        int idx = cmd.indexOf("--thinking");
+        assertThat(idx).isGreaterThanOrEqualTo(0);
+        assertThat(cmd.get(idx + 1)).isEqualTo("disabled");
+        assertThat(cmd).doesNotContain("--max-thinking-tokens");
+        transport.close();
+    }
+
+    @SuppressWarnings("deprecation")
+    @Test
+    void testBuildCommandThinkingPrecedenceOverMaxThinkingTokens() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigAdaptive())
+                .maxThinkingTokens(9999)
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        int idx = cmd.indexOf("--thinking");
+        assertThat(idx).isGreaterThanOrEqualTo(0);
+        assertThat(cmd.get(idx + 1)).isEqualTo("adaptive");
+        assertThat(cmd).doesNotContain("--max-thinking-tokens");
+        transport.close();
     }
 
     @Test
@@ -663,6 +726,59 @@ class SubprocessCLITransportTest {
         SubprocessCLITransport.applyEnvDefaults(options, env);
 
         assertThat(env.get("CLAUDE_CODE_ENTRYPOINT")).isEqualTo("sdk-java");
+    }
+
+    @Test
+    void testClaudeCodeEnvVarStripped() {
+        // CLAUDECODE is stripped so spawned subprocesses don't detect a parent CC
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder().build();
+
+        Map<String, String> env = new java.util.HashMap<>();
+        env.put("CLAUDECODE", "1");
+        env.put("OTHER_VAR", "kept");
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env).doesNotContainKey("CLAUDECODE");
+        assertThat(env.get("OTHER_VAR")).isEqualTo("kept");
+    }
+
+    @Test
+    void testOptionsEnvCannotOverrideSdkVersion() {
+        // options.env cannot override CLAUDE_AGENT_SDK_VERSION — SDK always controls it
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .env(Map.of("CLAUDE_AGENT_SDK_VERSION", "0.0.0"))
+                .build();
+
+        Map<String, String> env = new java.util.HashMap<>();
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        // SDK version must be the real version, not the caller's override
+        assertThat(env.get("CLAUDE_AGENT_SDK_VERSION")).isNotEqualTo("0.0.0");
+        assertThat(env.get("CLAUDE_AGENT_SDK_VERSION")).isNotBlank();
+    }
+
+    @Test
+    void testMaxMcpOutputTokensPassesThrough() {
+        // MAX_MCP_OUTPUT_TOKENS set in options.env must reach the subprocess environment
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .env(Map.of("MAX_MCP_OUTPUT_TOKENS", "500000"))
+                .build();
+
+        Map<String, String> env = new java.util.HashMap<>();
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env.get("MAX_MCP_OUTPUT_TOKENS")).isEqualTo("500000");
+    }
+
+    @Test
+    void testMaxMcpOutputTokensNotInjectedByDefault() {
+        // When not set, the SDK must not inject a default — the CLI's own governs
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder().build();
+
+        Map<String, String> env = new java.util.HashMap<>();
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env).doesNotContainKey("MAX_MCP_OUTPUT_TOKENS");
     }
 
     // ==================== Environment Variables Tests ====================

@@ -24,6 +24,7 @@ import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.mcp.ContextUsageResponse;
+import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpStatusResponse;
 import in.vidyalai.claude.sdk.types.message.Message;
@@ -246,6 +247,10 @@ public class ClaudeSDKClient implements AutoCloseable {
         // Extract SDK MCP servers from options
         Map<String, SdkMcpServer> sdkMcpServers = extractSdkMcpServers(effectiveOptions);
 
+        // Extract exclude_dynamic_sections from preset system prompt for the
+        // initialize request (older CLIs ignore unknown initialize fields)
+        Boolean excludeDynamicSections = extractExcludeDynamicSections(effectiveOptions);
+
         // Create QueryHandler
         query = new QueryHandler(
                 transport,
@@ -254,6 +259,7 @@ public class ClaudeSDKClient implements AutoCloseable {
                 effectiveOptions.hooks(),
                 sdkMcpServers,
                 effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
+                excludeDynamicSections,
                 initializeTimeout,
                 effectiveOptions.maxMsgQSize());
 
@@ -804,6 +810,20 @@ public class ClaudeSDKClient implements AutoCloseable {
         }
 
         return (sdkServers.isEmpty() ? null : sdkServers);
+    }
+
+    /**
+     * Extracts exclude_dynamic_sections from a preset system prompt.
+     *
+     * @return the boolean value if set, or null
+     */
+    @Nullable
+    private static Boolean extractExcludeDynamicSections(ClaudeAgentOptions options) {
+        Object systemPrompt = options.systemPrompt();
+        if (systemPrompt instanceof SystemPromptPreset preset) {
+            return preset.excludeDynamicSections();
+        }
+        return null;
     }
 
 }

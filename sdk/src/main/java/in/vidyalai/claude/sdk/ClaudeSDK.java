@@ -21,6 +21,7 @@ import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.mcp.SdkMcpTool;
 import in.vidyalai.claude.sdk.transport.Transport;
+import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.ForkSessionResult;
@@ -228,6 +229,9 @@ public final class ClaudeSDK {
             // Extract SDK MCP servers
             Map<String, SdkMcpServer> sdkMcpServers = extractSdkMcpServers(effectiveOptions);
 
+            // Extract exclude_dynamic_sections from preset system prompt
+            Boolean excludeDynamicSections = extractExcludeDynamicSections(effectiveOptions);
+
             // Create QueryHandler for bidirectional control protocol
             @SuppressWarnings("resource")
             QueryHandler qh = new QueryHandler(
@@ -237,6 +241,7 @@ public final class ClaudeSDK {
                     effectiveOptions.hooks(),
                     sdkMcpServers,
                     effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
+                    excludeDynamicSections,
                     initializeTimeout,
                     effectiveOptions.maxMsgQSize());
 
@@ -358,6 +363,18 @@ public final class ClaudeSDK {
         }
 
         return (sdkServers.isEmpty() ? null : sdkServers);
+    }
+
+    /**
+     * Extracts exclude_dynamic_sections from a preset system prompt.
+     */
+    @Nullable
+    private static Boolean extractExcludeDynamicSections(ClaudeAgentOptions options) {
+        Object systemPrompt = options.systemPrompt();
+        if (systemPrompt instanceof SystemPromptPreset preset) {
+            return preset.excludeDynamicSections();
+        }
+        return null;
     }
 
     /**

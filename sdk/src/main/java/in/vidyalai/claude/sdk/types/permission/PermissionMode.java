@@ -30,7 +30,12 @@ public enum PermissionMode {
     /**
      * Allow all tools without prompting (alias for bypassPermissions).
      */
-    DONT_ASK("dontAsk");
+    DONT_ASK("dontAsk"),
+
+    /**
+     * Automatically determine permission mode.
+     */
+    AUTO("auto");
 
     private final String value;
 

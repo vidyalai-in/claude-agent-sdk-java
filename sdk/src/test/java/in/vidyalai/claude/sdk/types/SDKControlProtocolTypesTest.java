@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import in.vidyalai.claude.sdk.types.control.request.SDKControlInitializeRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlInterruptRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlPermissionRequest;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlRequest;
@@ -227,6 +228,26 @@ public class SDKControlProtocolTypesTest {
         // Verify the second permission suggestion (setMode)
         PermissionUpdate secondSuggestion = permReq.permissionSuggestions().get(1);
         assertThat(secondSuggestion.mode()).isEqualTo(PermissionMode.ACCEPT_EDITS);
+    }
+
+    @Test
+    public void testInitializeRequestIncludesExcludeDynamicSections() throws Exception {
+        SDKControlInitializeRequest request = new SDKControlInitializeRequest(null, null, true);
+        assertThat(request.subtype()).isEqualTo("initialize");
+        assertThat(request.excludeDynamicSections()).isTrue();
+
+        String json = mapper.writeValueAsString(request);
+        assertThat(json).contains("\"excludeDynamicSections\":true");
+    }
+
+    @Test
+    public void testInitializeRequestOmitsExcludeDynamicSectionsWhenUnset() throws Exception {
+        SDKControlInitializeRequest request = new SDKControlInitializeRequest(null, null);
+        assertThat(request.excludeDynamicSections()).isNull();
+
+        // When null, the field should not appear in the JSON (NON_NULL inclusion)
+        String json = mapper.writeValueAsString(request);
+        assertThat(json).doesNotContain("excludeDynamicSections");
     }
 
 }

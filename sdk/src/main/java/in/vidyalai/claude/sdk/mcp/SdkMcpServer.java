@@ -509,6 +509,15 @@ public final class SdkMcpServer {
                         if (annotationsMap != null) {
                             toolInfo.put(KEY_ANNOTATIONS, annotationsMap);
                         }
+
+                        // The MCP SDK's Zod schema strips unknown annotation fields, so
+                        // Anthropic-specific hints use _meta with namespaced keys instead.
+                        // maxResultSizeChars controls the CLI's layer-2 tool-result spill
+                        // threshold (toolResultStorage.ts maybePersistLargeToolResult).
+                        Map<String, Object> meta = buildMeta(tool.annotations());
+                        if (meta != null) {
+                            toolInfo.put("_meta", meta);
+                        }
                     }
 
                     return toolInfo;
@@ -517,6 +526,15 @@ public final class SdkMcpServer {
 
         return CompletableFuture.completedFuture(
                 successResponse(id, Map.of(KEY_TOOLS, toolList)));
+    }
+
+    @Nullable
+    private static Map<String, Object> buildMeta(ToolAnnotations annotations) {
+        Integer maxResultSize = annotations.maxResultSizeChars();
+        if (maxResultSize == null) {
+            return null;
+        }
+        return Map.of("anthropic/maxResultSizeChars", maxResultSize);
     }
 
     @SuppressWarnings("unchecked")

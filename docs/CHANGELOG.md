@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-04-13
+
+### Added
+- **`auto` permission mode**: New `PermissionMode.AUTO` enum value for automatically determining permission mode (matching Python SDK v0.1.57)
+- **`excludeDynamicSections` on `SystemPromptPreset`**: Strip per-user dynamic sections (working directory, auto-memory, git status) for cross-user prompt caching; wired through initialize request to CLI (matching Python SDK v0.1.57)
+- **`maxResultSizeChars` on `ToolAnnotations`**: Controls the CLI's layer-2 tool-result spill threshold for large MCP results; forwarded via `_meta` with `anthropic/maxResultSizeChars` key in tools/list JSONRPC response to bypass Zod annotation stripping (matching Python SDK v0.1.55)
+
+### Fixed
+- **Thinking config CLI flags**: `--thinking adaptive` and `--thinking disabled` are now passed as proper flags instead of being converted to `--max-thinking-tokens` values. `thinking` config takes strict precedence over the deprecated `maxThinkingTokens` (matching Python SDK v0.1.57)
+
+### Synced
+- Python SDK v0.1.54 → v0.1.58 (commits 574044a..c26fd62)
+- v0.1.55: Forward maxResultSizeChars via `_meta` to bypass Zod annotation stripping; CLI 2.1.91
+- v0.1.56: CLI 2.1.92 (no API changes)
+- v0.1.57: `exclude_dynamic_sections` on SystemPromptPreset, `--thinking` flag fix, `auto` permission mode; CLI 2.1.94-2.1.96
+- v0.1.58: CLI 2.1.97 (no API changes)
+
+[0.1.11]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.11
+
 ## [0.1.10] - 2026-04-02
 
 ### Added

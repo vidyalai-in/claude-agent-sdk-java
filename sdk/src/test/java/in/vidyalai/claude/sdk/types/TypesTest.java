@@ -54,6 +54,8 @@ class TypesTest {
         assertThat(PermissionMode.fromValue("acceptEdits")).isEqualTo(PermissionMode.ACCEPT_EDITS);
         assertThat(PermissionMode.fromValue("plan")).isEqualTo(PermissionMode.PLAN);
         assertThat(PermissionMode.fromValue("bypassPermissions")).isEqualTo(PermissionMode.BYPASS_PERMISSIONS);
+        assertThat(PermissionMode.fromValue("dontAsk")).isEqualTo(PermissionMode.DONT_ASK);
+        assertThat(PermissionMode.fromValue("auto")).isEqualTo(PermissionMode.AUTO);
 
         assertThatThrownBy(() -> PermissionMode.fromValue("unknown"))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -486,6 +488,27 @@ class TypesTest {
         assertThat(preset.type()).isEqualTo("preset");
         assertThat(preset.preset()).isEqualTo("claude_code");
         assertThat(preset.append()).isEqualTo("Be concise.");
+        assertThat(preset.excludeDynamicSections()).isNull();
+    }
+
+    @Test
+    void systemPromptPreset_claudeCodeWithExcludeDynamicSections() {
+        SystemPromptPreset preset = SystemPromptPreset.claudeCode(null, true);
+
+        assertThat(preset.type()).isEqualTo("preset");
+        assertThat(preset.preset()).isEqualTo("claude_code");
+        assertThat(preset.append()).isNull();
+        assertThat(preset.excludeDynamicSections()).isTrue();
+    }
+
+    @Test
+    void systemPromptPreset_claudeCodeWithAppendAndExcludeDynamicSections() {
+        SystemPromptPreset preset = SystemPromptPreset.claudeCode("Be concise.", true);
+
+        assertThat(preset.type()).isEqualTo("preset");
+        assertThat(preset.preset()).isEqualTo("claude_code");
+        assertThat(preset.append()).isEqualTo("Be concise.");
+        assertThat(preset.excludeDynamicSections()).isTrue();
     }
 
     // ==================== ToolsPreset Tests ====================

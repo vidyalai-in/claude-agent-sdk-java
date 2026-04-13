@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-04-02 (Updated)
-**Java SDK Version:** 0.1.10
-**Python SDK Version:** [0.1.54](https://github.com/anthropics/claude-agent-sdk-python/commit/574044a1fcbaf89afc821bb742ccd8d31c4d6944) (latest)
+**Analysis Date:** 2026-04-13 (Updated)
+**Java SDK Version:** 0.1.11
+**Python SDK Version:** [0.1.58](https://github.com/anthropics/claude-agent-sdk-python/commit/c26fd628ef82c6d3371099e4980cf6f2498a07d8) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,11 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.54):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.54. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.58):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.58. These updates include:
+- **v0.1.58** - CLI update to 2.1.97 (no API changes)
+- **v0.1.57** - `exclude_dynamic_sections` on `SystemPromptPreset` for cross-user prompt caching; fix: pass `--thinking` flag for adaptive/disabled instead of `--max-thinking-tokens`; `auto` permission mode; forward `maxResultSizeChars` via `_meta` to bypass Zod annotation stripping; CLI 2.1.91-2.1.96
+- **v0.1.56** - CLI update to 2.1.92 (no API changes)
+- **v0.1.55** - Fix(mcp): forward maxResultSizeChars via `_meta` to bypass Zod annotation stripping; CLI 2.1.91
 - **v0.1.54** - `background`, `effort`, `permissionMode` fields on `AgentDefinition`; CLI 2.1.89-2.1.90
 - **v0.1.53** - Fix: omit `--setting-sources` flag when empty; fix: spawn wait_for_result as background task for string prompts; CLI 2.1.88
 - **v0.1.52** - Fix: send string prompt in `connect()` instead of dropping it; `control_cancel_request` handling; `get_context_usage()` method; `Annotated` support for `@tool` parameter descriptions; `tool_use_id`/`agent_id` in `ToolPermissionContext`; `session_id` option; CLI 2.1.86-2.1.87
@@ -79,6 +83,14 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - ✅ Fix: skip non-JSON lines on CLI stdout to prevent buffer corruption (v0.1.51)
 - ✅ Fix: filter `CLAUDECODE` env var from subprocess environment (v0.1.51)
 - ✅ MCP: `isError` propagation from SDK tool results (v0.1.51)
+
+✅ **All new features from Python SDK v0.1.58 are now implemented in Java SDK v0.1.11**. This includes:
+- ✅ `auto` permission mode added to `PermissionMode` enum (v0.1.57)
+- ✅ `excludeDynamicSections` field on `SystemPromptPreset` for cross-user prompt caching (v0.1.57)
+- ✅ `excludeDynamicSections` wired through initialize request to CLI (v0.1.57)
+- ✅ Fix: pass `--thinking` flag for adaptive/disabled instead of `--max-thinking-tokens` (v0.1.57)
+- ✅ `maxResultSizeChars` field on `ToolAnnotations` for large MCP result support (v0.1.55)
+- ✅ Forward `maxResultSizeChars` via `_meta` in tools/list JSONRPC response to bypass Zod stripping (v0.1.55)
 
 All features from Python SDK v0.1.49 and earlier were already implemented. This includes:
 - ✅ `stop_reason` field added to `ResultMessage` (v0.1.45)
@@ -691,7 +703,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-04-02
-**Python SDK Version:** 0.1.54 (commit 574044a1fcbaf89afc821bb742ccd8d31c4d6944)
-**Java SDK Version:** 0.1.10
+**Latest Verification:** 2026-04-13
+**Python SDK Version:** 0.1.58 (commit c26fd628ef82c6d3371099e4980cf6f2498a07d8)
+**Java SDK Version:** 0.1.11
 **Status:** ✅ 100% Feature Parity Maintained

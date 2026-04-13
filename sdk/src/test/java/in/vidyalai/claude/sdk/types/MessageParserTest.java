@@ -349,6 +349,64 @@ class MessageParserTest {
 
     @SuppressWarnings("null")
     @Test
+    void parseUserMessage_toolResultInlineContentPreserved() {
+        // Full tool-result content is preserved when the CLI passes it inline
+        String inlineContent = "x".repeat(1000);
+        Map<String, Object> data = Map.of(
+                "type", "user",
+                "message", Map.of(
+                        "role", "user",
+                        "content", List.of(
+                                Map.of(
+                                        "type", "tool_result",
+                                        "tool_use_id", "toolu_01ABC",
+                                        "content", inlineContent,
+                                        "is_error", false))));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(UserMessage.class);
+        UserMessage userMessage = (UserMessage) message;
+        ToolResultBlock toolResult = (ToolResultBlock) userMessage.contentAsBlocks().get(0);
+        assertThat(toolResult.content()).isEqualTo(inlineContent);
+        assertThat(toolResult.content().toString()).doesNotStartWith("<persisted-output>");
+        assertThat(toolResult.isError()).isFalse();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseUserMessage_toolResultPersistedOutputDetectable() {
+        // After a layer-2 spill, content starts with '<persisted-output>' —
+        // callers can detect this and warn users
+        String persistedContent =
+                "<persisted-output>\n"
+                        + "Output too large (73.0KB). Full output saved to: /tmp/.claude/tool-results/abc123.txt\n"
+                        + "\nPreview (first 2KB):\n" + "x".repeat(2000) + "\n...\n</persisted-output>";
+
+        Map<String, Object> data = Map.of(
+                "type", "user",
+                "message", Map.of(
+                        "role", "user",
+                        "content", List.of(
+                                Map.of(
+                                        "type", "tool_result",
+                                        "tool_use_id", "toolu_01DEF",
+                                        "content", persistedContent,
+                                        "is_error", false))));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(UserMessage.class);
+        UserMessage userMessage = (UserMessage) message;
+        ToolResultBlock toolResult = (ToolResultBlock) userMessage.contentAsBlocks().get(0);
+        // Content is preserved as-is — callers can detect by prefix
+        assertThat(toolResult.content().toString()).startsWith("<persisted-output>");
+        // Persisted output is only a 2KB preview, not the full 73K
+        assertThat(toolResult.content().toString().length()).isLessThan(50_000);
+    }
+
+    @SuppressWarnings("null")
+    @Test
     void parseUserMessage_withMixedContent() {
         Map<String, Object> data = Map.of(
                 "type", "user",

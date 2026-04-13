@@ -257,6 +257,8 @@ public class QueryHandler implements AutoCloseable {
     private final Map<String, SdkMcpServer> sdkMcpServers;
     @Nullable
     private final Map<String, AgentDefinition> agents;
+    @Nullable
+    private final Boolean excludeDynamicSections;
     private final Duration initializeTimeout;
 
     // Control protocol state
@@ -297,7 +299,7 @@ public class QueryHandler implements AutoCloseable {
             ClaudeAgentOptions.CanUseTool canUseTool, // may be null
             @Nullable Map<HookEvent, List<HookMatcher>> hooks,
             Duration initializeTimeout) {
-        this(transport, isStreamingMode, canUseTool, hooks, null, null, initializeTimeout, DEFAULT_MSG_Q_SIZE);
+        this(transport, isStreamingMode, canUseTool, hooks, null, null, null, initializeTimeout, DEFAULT_MSG_Q_SIZE);
     }
 
     /**
@@ -308,12 +310,13 @@ public class QueryHandler implements AutoCloseable {
      * @param canUseTool        optional callback for tool permission requests (may
      *                          be null)
      * @param hooks             optional hook configurations
-     * @param sdkMcpServers     optional SDK MCP servers for in-process tool
-     *                          execution
-     * @param agents            optional agent definitions to send via initialize
-     *                          request
-     * @param initializeTimeout timeout for the initialize request
-     * @param maxMsgQSize       max message queue size
+     * @param sdkMcpServers          optional SDK MCP servers for in-process tool
+     *                                 execution
+     * @param agents                   optional agent definitions to send via initialize
+     *                                 request
+     * @param excludeDynamicSections   optional preset-prompt flag for cross-user caching
+     * @param initializeTimeout        timeout for the initialize request
+     * @param maxMsgQSize              max message queue size
      */
     public QueryHandler(
             Transport transport,
@@ -322,6 +325,7 @@ public class QueryHandler implements AutoCloseable {
             @Nullable Map<HookEvent, List<HookMatcher>> hooks,
             @Nullable Map<String, SdkMcpServer> sdkMcpServers,
             @Nullable Map<String, AgentDefinition> agents,
+            @Nullable Boolean excludeDynamicSections,
             Duration initializeTimeout,
             @Nullable Integer maxMsgQSize) {
         this.transport = transport;
@@ -330,6 +334,7 @@ public class QueryHandler implements AutoCloseable {
         this.hooks = hooks;
         this.sdkMcpServers = sdkMcpServers;
         this.agents = agents;
+        this.excludeDynamicSections = excludeDynamicSections;
         this.initializeTimeout = initializeTimeout;
         this.messageQueue = new LinkedBlockingQueue<>((maxMsgQSize != null) ? maxMsgQSize : DEFAULT_MSG_Q_SIZE);
 
@@ -404,7 +409,8 @@ public class QueryHandler implements AutoCloseable {
             // the initialize request instead of CLI flags to avoid ARG_MAX limits
             SDKControlInitializeRequest request = new SDKControlInitializeRequest(
                     hooksConfig.isEmpty() ? null : hooksConfig,
-                    ((agents == null) || agents.isEmpty()) ? null : agents);
+                    ((agents == null) || agents.isEmpty()) ? null : agents,
+                    excludeDynamicSections);
 
             initializationResult = sendControlRequest(request, initializeTimeout);
             return initializationResult;
