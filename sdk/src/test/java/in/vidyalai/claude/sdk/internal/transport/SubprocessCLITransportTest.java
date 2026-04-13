@@ -169,6 +169,7 @@ class SubprocessCLITransportTest {
     void testBuildCommandWithThinkingAdaptive() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .thinking(new ThinkingConfigAdaptive())
+                .cliPath(Path.of("/usr/bin/claude"))
                 .build();
         SubprocessCLITransport transport = new SubprocessCLITransport(options);
         List<String> cmd = transport.buildCommand();
@@ -184,6 +185,7 @@ class SubprocessCLITransportTest {
     void testBuildCommandWithThinkingEnabled() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .thinking(new ThinkingConfigEnabled(5000))
+                .cliPath(Path.of("/usr/bin/claude"))
                 .build();
         SubprocessCLITransport transport = new SubprocessCLITransport(options);
         List<String> cmd = transport.buildCommand();
@@ -199,6 +201,7 @@ class SubprocessCLITransportTest {
     void testBuildCommandWithThinkingDisabled() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .thinking(new ThinkingConfigDisabled())
+                .cliPath(Path.of("/usr/bin/claude"))
                 .build();
         SubprocessCLITransport transport = new SubprocessCLITransport(options);
         List<String> cmd = transport.buildCommand();
@@ -216,6 +219,7 @@ class SubprocessCLITransportTest {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .thinking(new ThinkingConfigAdaptive())
                 .maxThinkingTokens(9999)
+                .cliPath(Path.of("/usr/bin/claude"))
                 .build();
         SubprocessCLITransport transport = new SubprocessCLITransport(options);
         List<String> cmd = transport.buildCommand();
