@@ -33,7 +33,7 @@ ThinkingConfig is a sealed interface with three variants:
 
 ### ThinkingConfigAdaptive
 
-Use adaptive thinking with a default budget of 32,000 tokens. The system automatically determines how much thinking to use.
+Use adaptive thinking where the system automatically determines how much thinking to use. Passes `--thinking adaptive` to the CLI.
 
 ```java
 ThinkingConfig config = new ThinkingConfigAdaptive();
@@ -51,7 +51,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 ### ThinkingConfigEnabled
 
-Enable thinking with a specific token budget. Provides fine-grained control over thinking costs.
+Enable thinking with a specific token budget. Passes `--max-thinking-tokens <budgetTokens>` to the CLI.
 
 ```java
 ThinkingConfig config = new ThinkingConfigEnabled(10000);  // 10K tokens
@@ -74,7 +74,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 ### ThinkingConfigDisabled
 
-Disable extended thinking entirely. Claude will not use thinking tokens.
+Disable extended thinking entirely. Passes `--thinking disabled` to the CLI.
 
 ```java
 ThinkingConfig config = new ThinkingConfigDisabled();
@@ -358,7 +358,7 @@ String type()  // Returns "adaptive", "enabled", or "disabled"
 public record ThinkingConfigAdaptive() implements ThinkingConfig
 ```
 
-Default token budget: 32,000 tokens
+CLI flag: `--thinking adaptive`
 
 ### ThinkingConfigEnabled Record
 
@@ -377,7 +377,7 @@ public record ThinkingConfigEnabled(int budgetTokens) implements ThinkingConfig
 public record ThinkingConfigDisabled() implements ThinkingConfig
 ```
 
-No thinking tokens used.
+CLI flag: `--thinking disabled`
 
 ### ClaudeAgentOptions Methods
 

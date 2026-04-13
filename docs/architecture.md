@@ -117,7 +117,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Hook callbacks
   - Tool permission callbacks
   - Message streaming
-  - Initialization handshake (includes hooks and agent definitions)
+  - Initialization handshake (includes hooks, agent definitions, and excludeDynamicSections)
   - MCP server lifecycle management
 - **Thread Safety**: Fully thread-safe with atomic operations and synchronization
 - **Key Features**:

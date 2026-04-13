@@ -138,8 +138,14 @@ Set custom system prompt to guide Claude's behavior.
     - Explain your reasoning
     """)
 
-// Use preset
-.systemPrompt(new SystemPromptPreset("concise"))
+// Use Claude Code preset
+.systemPrompt(SystemPromptPreset.claudeCode())
+
+// Use Claude Code preset with additional instructions
+.systemPrompt(SystemPromptPreset.claudeCode("Always respond in JSON format."))
+
+// Use Claude Code preset with exclude_dynamic_sections for cross-user caching
+.systemPrompt(SystemPromptPreset.claudeCode("Custom instructions", true))
 
 // Use prompt from file
 .systemPrompt(new SystemPromptFile("/path/to/prompt.md"))
@@ -199,6 +205,7 @@ Control how tool permissions are handled.
 - `ACCEPT_EDITS` - Auto-accept file edits, prompt for others
 - `BYPASS_PERMISSIONS` - Skip permission checks entirely
 - `DONT_ASK` - Allow all tools without prompting
+- `AUTO` - Automatically determine the appropriate permission mode
 
 ### permissionPromptToolName()
 

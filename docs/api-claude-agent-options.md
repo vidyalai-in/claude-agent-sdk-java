@@ -35,7 +35,7 @@ options.toBuilder()
 - `disallowedTools(List<String>)` - Blacklist
 
 ### System Prompt
-- `systemPrompt(Object)` - String or preset
+- `systemPrompt(Object)` - String, `SystemPromptPreset`, or `SystemPromptFile`
 
 ### MCP Servers
 - `mcpServers(Object)` - Map, Path, or String

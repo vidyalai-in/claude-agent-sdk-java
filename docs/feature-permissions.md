@@ -19,6 +19,7 @@ The permission system controls which tools Claude can use and how permission req
 - **ACCEPT_EDITS** - Auto-accept file edits, prompt for others
 - **BYPASS_PERMISSIONS** - Skip permission checks entirely
 - **DONT_ASK** - Allow all tools without prompting
+- **AUTO** - Automatically determine the appropriate permission mode
 
 ## Custom Permission Callback
 

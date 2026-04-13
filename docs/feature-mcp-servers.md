@@ -183,6 +183,30 @@ Available annotation hints:
 | `destructiveHint` | Tool performs irreversible operations |
 | `idempotentHint` | Repeated calls with same inputs produce same results |
 | `openWorldHint` | Tool queries external systems with unbounded results |
+| `maxResultSizeChars` | Maximum result size in characters before the CLI spills to a temp file |
+
+### maxResultSizeChars (Anthropic-Specific Hint)
+
+The `maxResultSizeChars` annotation controls the CLI's layer-2 tool-result spill threshold. By default the CLI spills tool results larger than ~50K characters to temporary files. Setting this annotation raises (or lowers) that threshold for a specific tool.
+
+Because the MCP SDK's Zod schema strips unknown annotation fields, `maxResultSizeChars` is forwarded via `_meta` with the namespaced key `anthropic/maxResultSizeChars` in the `tools/list` JSONRPC response.
+
+```java
+ToolAnnotations hints = ToolAnnotations.builder()
+    .readOnlyHint(true)
+    .maxResultSizeChars(200_000)  // Allow up to 200K chars
+    .build();
+
+SdkMcpTool<Map<String, Object>> bigResultTool = SdkMcpTool.builder("large_query", "Query returning large results")
+    .inputSchema(Map.of("type", "object", "properties", Map.of(
+        "query", Map.of("type", "string")
+    ), "required", List.of("query")))
+    .handler(args -> CompletableFuture.completedFuture(
+        ToolResult.text(runLargeQuery((String) args.get("query")))
+    ))
+    .annotations(hints)
+    .build();
+```
 
 ### Method Signatures
 
