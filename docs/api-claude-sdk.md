@@ -288,6 +288,85 @@ Return messages with full control over filtering.
 
 **Returns**: `List<SessionMessage>`
 
+## Subagent Transcript Methods
+
+When a session spawns subagents (via the `Task` tool or programmatic agent definitions), each subagent's transcript is written to `~/.claude/projects/<project>/<sessionId>/subagents/agent-<agentId>.jsonl`. These files may also live under nested directories such as `subagents/workflows/<runId>/`.
+
+### listSubagents(String sessionId)
+
+```java
+public static List<String> listSubagents(String sessionId)
+```
+
+List subagent IDs for a session by scanning the session's `subagents/` directory across all project directories.
+
+**Parameters**:
+- `sessionId` - UUID of the parent session
+
+**Returns**: `List<String>` of subagent IDs. Empty when the session is not found, the `sessionId` is not a valid UUID, or the session has no subagents.
+
+### listSubagents(String sessionId, Path directory)
+
+```java
+public static List<String> listSubagents(String sessionId, Path directory)
+```
+
+List subagent IDs scoped to a specific project directory.
+
+**Parameters**:
+- `sessionId` - UUID of the parent session
+- `directory` - Project working directory to find the session in
+
+### getSubagentMessages(String sessionId, String agentId)
+
+```java
+public static List<SessionMessage> getSubagentMessages(
+    String sessionId,
+    String agentId
+)
+```
+
+Read a subagent's user/assistant messages from its JSONL transcript. Walks `parentUuid` links to reconstruct the chain.
+
+**Parameters**:
+- `sessionId` - UUID of the parent session
+- `agentId` - Subagent ID (as returned by `listSubagents`)
+
+**Returns**: `List<SessionMessage>` in chronological order. Empty when the session or subagent is not found, the `sessionId` is not a valid UUID, or the transcript contains no user/assistant messages.
+
+### getSubagentMessages(String sessionId, String agentId, Path directory)
+
+```java
+public static List<SessionMessage> getSubagentMessages(
+    String sessionId,
+    String agentId,
+    Path directory
+)
+```
+
+Read a subagent's messages scoped to a specific project directory.
+
+### getSubagentMessages(String sessionId, String agentId, Path directory, Integer limit, int offset)
+
+```java
+public static List<SessionMessage> getSubagentMessages(
+    String sessionId,
+    String agentId,
+    @Nullable Path directory,
+    @Nullable Integer limit,
+    int offset
+)
+```
+
+Read subagent messages with full control over filtering and pagination.
+
+**Parameters**:
+- `sessionId` - UUID of the parent session
+- `agentId` - Subagent ID
+- `directory` - Project directory to search in (null = all projects)
+- `limit` - Maximum messages to return (null or `0` = no limit)
+- `offset` - Number of messages to skip from the start
+
 ## Session Mutation Methods
 
 ### renameSession(String sessionId, String title)
@@ -370,7 +449,7 @@ Tag a session scoped to a specific project directory.
 public static void deleteSession(String sessionId) throws IOException
 ```
 
-Delete a session permanently by removing its JSONL file.
+Delete a session permanently by removing its JSONL file. Also recursively removes the sibling `<sessionId>/` directory containing subagent transcripts (if it exists). Soft-delete callers should use `tagSession(id, "__hidden")` and filter on listing instead.
 
 **Parameters**:
 - `sessionId` - UUID of the session to delete
@@ -378,7 +457,7 @@ Delete a session permanently by removing its JSONL file.
 **Throws**:
 - `IllegalArgumentException` - If `sessionId` is not a valid UUID
 - `FileNotFoundException` - If the session file cannot be found
-- `IOException` - If the delete fails
+- `IOException` - If the delete fails (subagent dir cleanup is best-effort and never fails the call)
 
 ### deleteSession(String sessionId, Path directory)
 

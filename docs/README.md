@@ -75,12 +75,24 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Listing sessions across all projects or filtered by directory
   - Looking up a single session by ID (`getSessionInfo`)
   - Reading full conversation transcripts
+  - Reading subagent transcripts (`listSubagents`, `getSubagentMessages`)
   - Renaming sessions (`renameSession`)
   - Tagging sessions for organization (`tagSession`)
-  - Deleting sessions (`deleteSession`)
+  - Deleting sessions (`deleteSession`) — cascades subagent transcript dir
   - Forking sessions with UUID remapping (`forkSession`)
   - SDKSessionInfo (with tag, createdAt, nullable fileSize) and SessionMessage types
   - Pagination with offset and worktree support
+
+- **[Skills](./feature-skills.md)** - Top-level `skills` option for the main session
+  - Three modes: `skillsAll()`, `skills(List)`, `skills(List.of())`
+  - Auto-injects `Skill(name)` into `allowedTools` and defaults `settingSources`
+  - Wire-protocol propagation via initialize control request
+  - Idempotent injection; explicit settings always win
+
+- **[W3C Trace Context Propagation](./feature-trace-context.md)** - Distributed tracing across SDK and CLI
+  - Best-effort `TRACEPARENT`/`TRACESTATE` injection into the CLI subprocess
+  - Zero runtime dependency on OpenTelemetry (reflection-based)
+  - Stale-env scrubbing, baggage-only contexts, propagator errors
 
 ### Advanced Features
 - **[Extended Thinking Configuration](./feature-thinking-config.md)** - Control Claude's reasoning depth
@@ -182,7 +194,7 @@ Add to your `pom.xml`:
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.11</version>
+    <version>0.1.12</version>
 </dependency>
 
 <repositories>

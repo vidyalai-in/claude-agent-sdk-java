@@ -247,7 +247,7 @@ ClaudeSDK.tagSession(
 
 ## Deleting Sessions
 
-Delete a session permanently by removing its JSONL file. This is a hard delete — the file is removed permanently.
+Delete a session permanently by removing its JSONL file. The sibling `<sessionId>/` directory holding subagent transcripts is also recursively removed (best-effort; absent dir is fine).
 
 ```java
 // Delete by session ID (searches all projects)
@@ -261,6 +261,40 @@ ClaudeSDK.deleteSession("550e8400-e29b-41d4-a716-446655440000", Path.of("/my/pro
 - `sessionId` must be a valid UUID.
 - Throws `FileNotFoundException` if the session file is not found.
 - For soft-delete semantics, use `tagSession(id, "__hidden")` and filter on listing instead.
+
+## Reading Subagent Transcripts
+
+When a session spawns subagents (via the `Task` tool or programmatic agent definitions), each subagent writes its own transcript to `~/.claude/projects/<project>/<sessionId>/subagents/agent-<agentId>.jsonl`. Subagent transcripts may also live in nested directories such as `subagents/workflows/<runId>/`.
+
+```java
+// Enumerate subagent IDs for a session
+List<String> agentIds = ClaudeSDK.listSubagents(
+    "550e8400-e29b-41d4-a716-446655440000");
+
+// Or scoped to a specific project
+List<String> agentIds = ClaudeSDK.listSubagents(
+    "550e8400-e29b-41d4-a716-446655440000",
+    Path.of("/my/project"));
+
+// Read a subagent's full conversation
+List<SessionMessage> messages = ClaudeSDK.getSubagentMessages(
+    "550e8400-e29b-41d4-a716-446655440000",
+    "abc123");
+
+// With limit and offset
+List<SessionMessage> page = ClaudeSDK.getSubagentMessages(
+    "550e8400-e29b-41d4-a716-446655440000",
+    "abc123",
+    Path.of("/my/project"),
+    50,    // limit (null or 0 = no limit)
+    0);    // offset
+```
+
+**Behavior:**
+- `listSubagents` recursively scans the `subagents/` tree for files matching `agent-<id>.jsonl` and returns the IDs in directory iteration order.
+- `getSubagentMessages` walks `parentUuid` links from the leaf to reconstruct the chain. Subagent transcripts are linear (no compaction, no sidechains), so the returned list is the full conversation in chronological order.
+- Corrupt JSONL lines are skipped silently.
+- Invalid UUIDs, missing sessions, missing agents, and empty agent IDs all return an empty list (never throw).
 
 ## Forking Sessions
 

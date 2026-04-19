@@ -572,6 +572,38 @@ Control which settings files to load.
 ))
 ```
 
+**Empty list disables all sources.** Pass `List.of()` to send `--setting-sources=` (empty) to the CLI, which suppresses every filesystem settings source. When the option is **omitted entirely** (the default), no `--setting-sources` flag is added and the CLI applies its own defaults.
+
+### skills() / skillsAll()
+
+Top-level skills allowlist for the main session. The SDK auto-injects matching `Skill(name)` entries into `allowedTools` and defaults `settingSources` to user/project so the CLI discovers installed skills without extra wiring. The list is also propagated via the initialize control request so a supporting CLI can filter which skills are loaded into the system prompt (older CLIs ignore the field).
+
+```java
+// Enable every discovered skill
+.skillsAll()
+
+// Enable only the listed skills
+.skills(List.of("commit", "review"))
+
+// Suppress every skill from the listing
+.skills(List.of())
+```
+
+Three modes:
+
+| Builder call | `allowedTools` injection | `settingSources` default | Initialize wire field |
+|---|---|---|---|
+| _omitted_ (null) | none | none | omitted |
+| `.skillsAll()` | adds bare `Skill` | `[user, project]` | omitted |
+| `.skills(List.of("a", "b"))` | adds `Skill(a)`, `Skill(b)` | `[user, project]` | `["a", "b"]` |
+| `.skills(List.of())` | none | `[user, project]` | `[]` |
+
+Behavior details:
+- **Idempotent injection** — if `allowedTools` already contains `Skill` or `Skill(name)`, the SDK does not duplicate it.
+- **Non-mutating** — applying skills defaults builds a new list; the original `ClaudeAgentOptions` is never modified.
+- **Explicit `settingSources` wins** — if you set `.settingSources(...)` alongside `.skills(...)`, your value is preserved.
+- **Context filter, not a sandbox** — unlisted skills are hidden from the model's listing and cannot be invoked via the `Skill` tool, but their files remain on disk; a session with `Read`/`Bash` can still access `.claude/skills/**` directly.
+
 ### sandbox()
 
 Configure bash command sandboxing.
