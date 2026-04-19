@@ -681,6 +681,54 @@ class SessionMutationsTest {
     }
 
     @Test
+    void testDeleteSession_cascadesSubagentTranscripts(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeSessionFile(projectDir);
+            String sid = session[0];
+            Path filePath = Path.of(session[1]);
+
+            // Create the sibling subagents directory tree
+            Path subagentsDir = projectDir.resolve(sid).resolve("subagents");
+            Files.createDirectories(subagentsDir);
+            Path agentFile = subagentsDir.resolve("agent-abc123.jsonl");
+            Files.writeString(agentFile, "{\"type\":\"user\",\"uuid\":\"u1\"}\n");
+
+            assertThat(Files.exists(filePath)).isTrue();
+            assertThat(Files.exists(agentFile)).isTrue();
+
+            SessionMutations.deleteSession(sid, projectPath);
+
+            assertThat(Files.exists(filePath)).isFalse();
+            assertThat(Files.exists(agentFile)).isFalse();
+            assertThat(Files.exists(projectDir.resolve(sid))).isFalse();
+        });
+    }
+
+    @Test
+    void testDeleteSession_succeedsWhenSubagentDirAbsent(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = createClaudeHome(tempDir);
+        String projectPath = tempDir.resolve("proj").toString();
+        Files.createDirectories(Path.of(projectPath));
+
+        withClaudeHome(claudeHome, () -> {
+            Path projectDir = makeProjectDir(claudeHome, projectPath);
+            String[] session = makeSessionFile(projectDir);
+            String sid = session[0];
+            Path filePath = Path.of(session[1]);
+
+            // No subagents dir created — delete should still succeed.
+            assertThat(Files.exists(filePath)).isTrue();
+            SessionMutations.deleteSession(sid, projectPath);
+            assertThat(Files.exists(filePath)).isFalse();
+        });
+    }
+
+    @Test
     void testDeleteSession_noLongerInListSessions(@TempDir Path tempDir) throws IOException {
         Path claudeHome = createClaudeHome(tempDir);
         String projectPath = tempDir.resolve("proj").toString();

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-04-19
+
+### Added
+- **Top-level `skills` option on `ClaudeAgentOptions`**: New `skills(List<String>)` and `skillsAll()` builder methods. The SDK auto-injects `Skill(name)` entries (or the bare `Skill` tool for `skillsAll()`) into `allowedTools` and defaults `settingSources` to user/project so the CLI discovers installed skills without extra wiring. The allowlist is also propagated via the initialize control request so a supporting CLI can filter which skills are loaded into the system prompt; older CLIs ignore the field. Empty list suppresses every skill from the listing (matching Python SDK v0.1.62)
+- **`ClaudeSDK.listSubagents()` / `getSubagentMessages()`**: New session helpers for reading subagent transcripts under `<project>/<sessionId>/subagents/`, including nested directories like `subagents/workflows/<runId>/`. Added 2 + 3 overloads each; mirrors Python SDK helpers (matching Python SDK v0.1.60)
+- **W3C trace context propagation**: When OpenTelemetry is on the classpath and an active span exists, the SDK injects `TRACEPARENT`/`TRACESTATE` into the CLI subprocess environment so its spans parent under the caller's distributed trace. Best-effort via reflection through the public `OpenTelemetry` / `ContextPropagators` / `TextMapPropagator` interfaces (concrete `GlobalOpenTelemetry$ObfuscatedOpenTelemetry` is package-private). No hard dependency on `opentelemetry-api`; also handles stale-env scrubbing, baggage-only carriers, and propagator errors (matching Python SDK v0.1.60)
+- **`SkillsExample.java`** and **`SubagentTranscriptExample.java`**: New examples demonstrating the skills option modes and subagent transcript helpers
+
+### Changed
+- **`deleteSession()` cascades subagent transcripts**: Removing a session now also recursively deletes the sibling `<sessionId>/` directory containing subagent transcripts (matching Python SDK v0.1.60, TypeScript SDK behavior)
+
+### Fixed
+- **Empty `settingSources` list**: `settingSources(List.of())` is now passed as `--setting-sources=` (single token) so the CLI knows to disable all filesystem settings. Previously the empty list was silently dropped, falling back to CLI defaults. Regression of the v0.1.10 omit-when-empty behavior — explicit empty now wins (matching Python SDK v0.1.60)
+
+### Synced
+- Python SDK v0.1.58 → v0.1.63 (commits c26fd62..7ca64f6)
+- v0.1.59: CLI 2.1.105 (no API changes)
+- v0.1.60: `list_subagents`/`get_subagent_messages`, W3C trace context propagation, `delete_session` subagent cascade, fix `--setting-sources=` for empty list; CLI 2.1.107-2.1.111
+- v0.1.61: CLI 2.1.112 (no API changes)
+- v0.1.62: Top-level `skills` option on `ClaudeAgentOptions`; CLI 2.1.113
+- v0.1.63: CLI 2.1.114 (no API changes)
+
+[0.1.12]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.12
+
 ## [0.1.11] - 2026-04-13
 
 ### Added

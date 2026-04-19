@@ -27,13 +27,18 @@ import com.fasterxml.jackson.annotation.JsonTypeName;
  * @param agents                  Agent definitions to register (sent via stdin, no size limit)
  * @param excludeDynamicSections  Optional preset-prompt flag to strip per-user dynamic sections
  *                                for cross-user caching (older CLIs ignore unknown fields)
+ * @param skills                  Optional skill allowlist sent so the CLI can filter which
+ *                                skills are loaded into the system prompt. Only included
+ *                                when the caller passed an explicit list (the wire protocol
+ *                                treats omission and {@code "all"} as equivalent).
  */
 @JsonTypeName("initialize")
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record SDKControlInitializeRequest(
         @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
         @Nullable Map<String, AgentDefinition> agents,
-        @Nullable Boolean excludeDynamicSections) implements SDKControlRequestData {
+        @Nullable Boolean excludeDynamicSections,
+        @Nullable List<String> skills) implements SDKControlRequestData {
 
     /**
      * Backwards-compatible constructor without excludeDynamicSections.
@@ -41,7 +46,17 @@ public record SDKControlInitializeRequest(
     public SDKControlInitializeRequest(
             @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
             @Nullable Map<String, AgentDefinition> agents) {
-        this(hooks, agents, null);
+        this(hooks, agents, null, null);
+    }
+
+    /**
+     * Backwards-compatible constructor without skills.
+     */
+    public SDKControlInitializeRequest(
+            @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
+            @Nullable Map<String, AgentDefinition> agents,
+            @Nullable Boolean excludeDynamicSections) {
+        this(hooks, agents, excludeDynamicSections, null);
     }
 
     @Override

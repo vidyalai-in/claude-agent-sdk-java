@@ -260,6 +260,7 @@ public class ClaudeSDKClient implements AutoCloseable {
                 sdkMcpServers,
                 effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
                 excludeDynamicSections,
+                effectiveOptions.skills(),
                 initializeTimeout,
                 effectiveOptions.maxMsgQSize());
 

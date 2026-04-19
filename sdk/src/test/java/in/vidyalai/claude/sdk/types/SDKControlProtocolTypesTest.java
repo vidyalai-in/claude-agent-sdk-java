@@ -250,4 +250,30 @@ public class SDKControlProtocolTypesTest {
         assertThat(json).doesNotContain("excludeDynamicSections");
     }
 
+    @Test
+    public void testInitializeRequestIncludesSkillsList() throws Exception {
+        SDKControlInitializeRequest request = new SDKControlInitializeRequest(
+                null, null, null, java.util.List.of("pdf", "docx"));
+        String json = mapper.writeValueAsString(request);
+        assertThat(json).contains("\"skills\":[\"pdf\",\"docx\"]");
+    }
+
+    @Test
+    public void testInitializeRequestIncludesEmptySkillsList() throws Exception {
+        // Empty list explicitly suppresses every skill — must be sent on the wire.
+        SDKControlInitializeRequest request = new SDKControlInitializeRequest(
+                null, null, null, java.util.List.of());
+        String json = mapper.writeValueAsString(request);
+        assertThat(json).contains("\"skills\":[]");
+    }
+
+    @Test
+    public void testInitializeRequestOmitsSkillsWhenNull() throws Exception {
+        // null skills (and "all" — translated to null at QueryHandler layer) omit the field.
+        SDKControlInitializeRequest request = new SDKControlInitializeRequest(
+                null, null, null, null);
+        String json = mapper.writeValueAsString(request);
+        assertThat(json).doesNotContain("skills");
+    }
+
 }

@@ -383,6 +383,246 @@ class SubprocessCLITransportTest {
     }
 
     @Test
+    void testBuildCommandPassesSettingSourcesEvenWhenEmpty() {
+        // Regression for Python SDK fix #822: empty list must produce
+        // --setting-sources= so the CLI knows to disable filesystem settings.
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .settingSources(List.of())
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            List<String> cmd = transport.buildCommand();
+            assertThat(cmd).contains("--setting-sources=");
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testBuildCommandOmitsSettingSourcesWhenNullAndNoSkills() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            List<String> cmd = transport.buildCommand();
+            assertThat(cmd).noneMatch(s -> s.startsWith("--setting-sources"));
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testSkillsAllInjectsBareSkillTool() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .skillsAll()
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            SubprocessCLITransport.SkillsDefaultsResult result = transport.applySkillsDefaults();
+            assertThat(result.allowedTools()).contains("Skill");
+            // Default settingSources should be user/project when not explicitly set.
+            assertThat(result.settingSources())
+                    .containsExactly(SettingSource.USER, SettingSource.PROJECT);
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testSkillsListInjectsScopedSkillTools() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .skills(List.of("commit", "review"))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            SubprocessCLITransport.SkillsDefaultsResult result = transport.applySkillsDefaults();
+            assertThat(result.allowedTools()).contains("Skill(commit)", "Skill(review)");
+            assertThat(result.settingSources())
+                    .containsExactly(SettingSource.USER, SettingSource.PROJECT);
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testSkillsNullIsNoOp() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .allowedTools(List.of("Read"))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            SubprocessCLITransport.SkillsDefaultsResult result = transport.applySkillsDefaults();
+            assertThat(result.allowedTools()).containsExactly("Read");
+            assertThat(result.settingSources()).isNull();
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testSkillsEmptyListPreservesAllowedToolsAndDefaultsSettingSources() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .skills(List.of())
+                .allowedTools(List.of("Read"))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            SubprocessCLITransport.SkillsDefaultsResult result = transport.applySkillsDefaults();
+            assertThat(result.allowedTools()).containsExactly("Read");
+            assertThat(result.settingSources())
+                    .containsExactly(SettingSource.USER, SettingSource.PROJECT);
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testSkillsMergesWithExistingAllowedTools() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .allowedTools(List.of("Read", "Write"))
+                .skills(List.of("pdf"))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            List<String> cmd = transport.buildCommand();
+            int idx = cmd.indexOf("--allowedTools");
+            assertThat(idx).isGreaterThanOrEqualTo(0);
+            assertThat(cmd.get(idx + 1)).isEqualTo("Read,Write,Skill(pdf)");
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testSkillsDoesNotMutateOptions() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .allowedTools(List.of("Read"))
+                .skills(List.of("pdf"))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            transport.buildCommand();
+            assertThat(options.allowedTools()).containsExactly("Read");
+            assertThat(options.settingSources()).isNull();
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testSkillsDoesNotDuplicateEntries() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .allowedTools(List.of("Skill(pdf)"))
+                .skills(List.of("pdf"))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            List<String> cmd = transport.buildCommand();
+            int idx = cmd.indexOf("--allowedTools");
+            assertThat(cmd.get(idx + 1)).isEqualTo("Skill(pdf)");
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testSkillsAllDoesNotDuplicateBareSkillTool() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .allowedTools(List.of("Skill", "Read"))
+                .skillsAll()
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            List<String> cmd = transport.buildCommand();
+            int idx = cmd.indexOf("--allowedTools");
+            assertThat(cmd.get(idx + 1)).isEqualTo("Skill,Read");
+        } finally {
+            transport.close();
+        }
+    }
+
+    @Test
+    void testSkillsRespectsExplicitSettingSources() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .skillsAll()
+                .settingSources(List.of(SettingSource.USER))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        try {
+            SubprocessCLITransport.SkillsDefaultsResult result = transport.applySkillsDefaults();
+            assertThat(result.settingSources()).containsExactly(SettingSource.USER);
+        } finally {
+            transport.close();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // OTEL trace context propagation
+    // -------------------------------------------------------------------------
+    //
+    // The Java implementation injects W3C trace context via reflection so
+    // OpenTelemetry stays an optional dependency. The "active span"
+    // injection paths are covered upstream in the Python SDK; here we cover
+    // the no-OTEL/no-active-span cases that are testable without adding
+    // opentelemetry-api to the test classpath.
+
+    @Test
+    void testOtelTraceContextNoopWhenOtelAbsent() {
+        // OpenTelemetry is not on the test classpath, so applyEnvDefaults
+        // must NOT inject TRACEPARENT/TRACESTATE on its own. Inherited env
+        // values (if any) are preserved.
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder().build();
+        java.util.Map<String, String> env = new java.util.HashMap<>();
+
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env).doesNotContainKey("TRACEPARENT");
+        assertThat(env).doesNotContainKey("TRACESTATE");
+    }
+
+    @Test
+    void testOtelTraceContextNoopPreservesInheritedEnv() {
+        // Stale W3C context inherited from the parent process must pass
+        // through unchanged when OTEL is absent (no active span ⇒ no scrub).
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder().build();
+        java.util.Map<String, String> env = new java.util.HashMap<>();
+        env.put("TRACEPARENT", "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01");
+        env.put("TRACESTATE", "vendor=abc");
+
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env.get("TRACEPARENT"))
+                .isEqualTo("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01");
+        assertThat(env.get("TRACESTATE")).isEqualTo("vendor=abc");
+    }
+
+    @Test
+    void testOtelUserSuppliedEnvWinsOverPropagator() {
+        // ClaudeAgentOptions.env always wins over OTEL injection. Even
+        // without OTEL on the classpath, this verifies that explicit env
+        // values flow through applyEnvDefaults intact.
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .env(java.util.Map.of("TRACEPARENT", "custom"))
+                .build();
+        java.util.Map<String, String> env = new java.util.HashMap<>();
+
+        SubprocessCLITransport.applyEnvDefaults(options, env);
+
+        assertThat(env.get("TRACEPARENT")).isEqualTo("custom");
+    }
+
+    @Test
     void testOptionsWithAgents() {
         AgentDefinition agent = new AgentDefinition(
                 "Test agent",

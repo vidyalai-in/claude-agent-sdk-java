@@ -380,6 +380,131 @@ public class SubprocessCLITransport implements Transport {
         if (options.enableFileCheckpointing()) {
             env.put("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");
         }
+
+        injectTraceContext(options, env);
+    }
+
+    /**
+     * Best-effort propagation of the active OpenTelemetry W3C trace context
+     * (TRACEPARENT/TRACESTATE) to the CLI subprocess so its spans parent
+     * under the caller's distributed trace.
+     *
+     * <p>Uses reflection to avoid taking a hard dependency on
+     * {@code opentelemetry-api}. No-op when the API is not on the
+     * classpath or when there's no active span. Explicit values from
+     * {@link ClaudeAgentOptions#env()} always win.
+     */
+    @SuppressWarnings("unchecked")
+    private static void injectTraceContext(ClaudeAgentOptions options, Map<String, String> env) {
+        try {
+            // GlobalOpenTelemetry.get() returns a package-private
+            // ObfuscatedOpenTelemetry wrapper, so reflect through the public
+            // OpenTelemetry / ContextPropagators / TextMapPropagator
+            // interfaces to avoid IllegalAccessException.
+            Class<?> globalOtelClass = Class.forName("io.opentelemetry.api.GlobalOpenTelemetry");
+            Object openTelemetry = globalOtelClass.getMethod("get").invoke(null);
+
+            Class<?> openTelemetryIface = Class.forName("io.opentelemetry.api.OpenTelemetry");
+            Object propagators = openTelemetryIface.getMethod("getPropagators").invoke(openTelemetry);
+
+            Class<?> propagatorsIface = Class.forName("io.opentelemetry.context.propagation.ContextPropagators");
+            Object textMapPropagator = propagatorsIface.getMethod("getTextMapPropagator").invoke(propagators);
+
+            Class<?> contextClass = Class.forName("io.opentelemetry.context.Context");
+            Object currentContext = contextClass.getMethod("current").invoke(null);
+
+            Class<?> setterClass = Class.forName("io.opentelemetry.context.propagation.TextMapSetter");
+            Map<String, String> carrier = new HashMap<>();
+            Object setter = java.lang.reflect.Proxy.newProxyInstance(
+                    setterClass.getClassLoader(),
+                    new Class<?>[] { setterClass },
+                    (proxy, method, args) -> {
+                        if ("set".equals(method.getName()) && args != null && args.length == 3) {
+                            ((Map<String, String>) args[0]).put((String) args[1], (String) args[2]);
+                        }
+                        return null;
+                    });
+
+            Class<?> textMapPropagatorIface = Class.forName(
+                    "io.opentelemetry.context.propagation.TextMapPropagator");
+            textMapPropagatorIface
+                    .getMethod("inject", contextClass, Object.class, setterClass)
+                    .invoke(textMapPropagator, currentContext, carrier, setter);
+
+            if (carrier.containsKey("traceparent")) {
+                // Active span present: scrub stale inherited W3C context
+                // before writing the fresh values, so an inherited
+                // TRACESTATE isn't paired with a new TRACEPARENT.
+                // ClaudeAgentOptions.env always wins.
+                for (String key : List.of("TRACEPARENT", "TRACESTATE")) {
+                    if (!options.env().containsKey(key)) {
+                        env.remove(key);
+                    }
+                }
+                for (Map.Entry<String, String> entry : carrier.entrySet()) {
+                    String upperKey = entry.getKey().toUpperCase();
+                    if (!options.env().containsKey(upperKey)) {
+                        env.put(upperKey, entry.getValue());
+                    }
+                }
+            }
+        } catch (ClassNotFoundException e) {
+            // OpenTelemetry not on classpath — no-op.
+        } catch (Exception e) {
+            // Best-effort tracing must never break connect().
+            logger.fine("OTEL trace context injection failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Result of applying {@code skills} defaults to {@code allowed_tools}
+     * and {@code setting_sources}. Mirrors Python SDK's
+     * {@code _apply_skills_defaults} return tuple.
+     */
+    record SkillsDefaultsResult(List<String> allowedTools, @Nullable List<SettingSource> settingSources) {
+    }
+
+    /**
+     * Computes the effective allowedTools and settingSources after applying
+     * the {@code skills} option. When {@code skills} is {@code "all"},
+     * injects the bare {@code Skill} tool; when it is a list, injects
+     * {@code Skill(name)} for each entry. In either case
+     * {@code settingSources} defaults to {@code [user, project]} when unset
+     * so the CLI discovers installed skills without the caller having to
+     * wire up both options manually. {@code null} is a no-op.
+     *
+     * <p>Does not mutate the original options.
+     */
+    @SuppressWarnings("unchecked")
+    SkillsDefaultsResult applySkillsDefaults() {
+        List<String> allowedTools = new ArrayList<>(options.allowedTools());
+        List<SettingSource> settingSources = (options.settingSources() != null)
+                ? new ArrayList<>(options.settingSources())
+                : null;
+
+        Object skills = options.skills();
+        if (skills == null) {
+            return new SkillsDefaultsResult(allowedTools, settingSources);
+        }
+
+        if ("all".equals(skills)) {
+            if (!allowedTools.contains("Skill")) {
+                allowedTools.add("Skill");
+            }
+        } else if (skills instanceof List<?> skillList) {
+            for (Object name : skillList) {
+                String pattern = "Skill(" + name + ")";
+                if (!allowedTools.contains(pattern)) {
+                    allowedTools.add(pattern);
+                }
+            }
+        }
+
+        if (settingSources == null) {
+            settingSources = List.of(SettingSource.USER, SettingSource.PROJECT);
+        }
+
+        return new SkillsDefaultsResult(allowedTools, settingSources);
     }
 
     @SuppressWarnings({ "unchecked", "null" })
@@ -423,9 +548,13 @@ public class SubprocessCLITransport implements Transport {
             }
         }
 
-        if (!options.allowedTools().isEmpty()) {
+        SkillsDefaultsResult skillsDefaults = applySkillsDefaults();
+        List<String> effectiveAllowedTools = skillsDefaults.allowedTools();
+        List<SettingSource> effectiveSettingSources = skillsDefaults.settingSources();
+
+        if (!effectiveAllowedTools.isEmpty()) {
             cmd.add("--allowedTools");
-            cmd.add(String.join(",", options.allowedTools()));
+            cmd.add(String.join(",", effectiveAllowedTools));
         }
 
         if (options.maxTurns() != null) {
@@ -534,10 +663,11 @@ public class SubprocessCLITransport implements Transport {
         // This avoids platform-specific command-line argument length limits (ARG_MAX)
         // No --agents CLI flag needed
 
-        // Setting sources
-        if (options.settingSources() != null && !options.settingSources().isEmpty()) {
-            cmd.add("--setting-sources");
-            cmd.add(String.join(",", options.settingSources().stream().map(SettingSource::getValue).toList()));
+        // Setting sources — pass even when empty so the CLI knows to disable
+        // all filesystem settings (matches Python SDK fix #822).
+        if (effectiveSettingSources != null) {
+            cmd.add("--setting-sources=" + String.join(",",
+                    effectiveSettingSources.stream().map(SettingSource::getValue).toList()));
         }
 
         // Plugins

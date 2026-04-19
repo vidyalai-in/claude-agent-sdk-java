@@ -144,11 +144,13 @@ public class SessionMutations {
     }
 
     /**
-     * Delete a session by removing its JSONL file.
+     * Delete a session by removing its JSONL file and subagent transcripts.
      *
      * <p>
-     * This is a hard delete — the file is removed permanently. SDK users who
-     * need soft-delete semantics can use
+     * This is a hard delete — the {@code {sessionId}.jsonl} file is removed
+     * permanently, along with the sibling {@code {sessionId}/} subdirectory
+     * that holds subagent transcripts (if it exists). SDK users who need
+     * soft-delete semantics can use
      * {@code tagSession(id, "__hidden", directory)} and filter on listing
      * instead.
      *
@@ -176,6 +178,27 @@ public class SessionMutations {
             Files.delete(path);
         } catch (java.nio.file.NoSuchFileException e) {
             throw new FileNotFoundException("Session " + sessionId + " not found");
+        }
+        // Subagent transcripts live in a sibling {sessionId}/ dir; often absent.
+        Path subagentDir = path.resolveSibling(sessionId);
+        deleteRecursivelyIgnoreErrors(subagentDir);
+    }
+
+    private static void deleteRecursivelyIgnoreErrors(Path root) {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(root)) {
+            walk.sorted(java.util.Comparator.reverseOrder())
+                    .forEach(p -> {
+                        try {
+                            Files.deleteIfExists(p);
+                        } catch (IOException ignored) {
+                            // best-effort
+                        }
+                    });
+        } catch (IOException ignored) {
+            // best-effort
         }
     }
 

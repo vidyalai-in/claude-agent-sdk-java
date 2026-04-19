@@ -259,6 +259,15 @@ public class QueryHandler implements AutoCloseable {
     private final Map<String, AgentDefinition> agents;
     @Nullable
     private final Boolean excludeDynamicSections;
+    /**
+     * Skills allowlist sent on the initialize control request. Either
+     * {@code null}, the string {@code "all"}, or a {@code List<String>} of
+     * skill names. Only explicit lists are forwarded over the wire — both
+     * {@code null} and {@code "all"} omit the field (the CLI treats omission
+     * as "no filter").
+     */
+    @Nullable
+    private final Object skills;
     private final Duration initializeTimeout;
 
     // Control protocol state
@@ -299,7 +308,7 @@ public class QueryHandler implements AutoCloseable {
             ClaudeAgentOptions.CanUseTool canUseTool, // may be null
             @Nullable Map<HookEvent, List<HookMatcher>> hooks,
             Duration initializeTimeout) {
-        this(transport, isStreamingMode, canUseTool, hooks, null, null, null, initializeTimeout, DEFAULT_MSG_Q_SIZE);
+        this(transport, isStreamingMode, canUseTool, hooks, null, null, null, null, initializeTimeout, DEFAULT_MSG_Q_SIZE);
     }
 
     /**
@@ -315,6 +324,9 @@ public class QueryHandler implements AutoCloseable {
      * @param agents                   optional agent definitions to send via initialize
      *                                 request
      * @param excludeDynamicSections   optional preset-prompt flag for cross-user caching
+     * @param skills                   optional skill allowlist sent via initialize so the CLI can
+     *                                 filter which skills are loaded into the system prompt
+     *                                 ({@code null}, the string {@code "all"}, or a {@code List<String>})
      * @param initializeTimeout        timeout for the initialize request
      * @param maxMsgQSize              max message queue size
      */
@@ -326,6 +338,7 @@ public class QueryHandler implements AutoCloseable {
             @Nullable Map<String, SdkMcpServer> sdkMcpServers,
             @Nullable Map<String, AgentDefinition> agents,
             @Nullable Boolean excludeDynamicSections,
+            @Nullable Object skills,
             Duration initializeTimeout,
             @Nullable Integer maxMsgQSize) {
         this.transport = transport;
@@ -335,6 +348,7 @@ public class QueryHandler implements AutoCloseable {
         this.sdkMcpServers = sdkMcpServers;
         this.agents = agents;
         this.excludeDynamicSections = excludeDynamicSections;
+        this.skills = skills;
         this.initializeTimeout = initializeTimeout;
         this.messageQueue = new LinkedBlockingQueue<>((maxMsgQSize != null) ? maxMsgQSize : DEFAULT_MSG_Q_SIZE);
 
@@ -407,10 +421,18 @@ public class QueryHandler implements AutoCloseable {
             // Send initialize request with agents (sent via stdin, no size limit)
             // This matches the Python SDK behavior where agents are always sent via
             // the initialize request instead of CLI flags to avoid ARG_MAX limits
+            // 'all' and omitted are equivalent at the wire level (no
+            // filter), so only send the field when it's an explicit list.
+            @SuppressWarnings("unchecked")
+            List<String> skillsForWire = (skills instanceof List<?>)
+                    ? (List<String>) skills
+                    : null;
+
             SDKControlInitializeRequest request = new SDKControlInitializeRequest(
                     hooksConfig.isEmpty() ? null : hooksConfig,
                     ((agents == null) || agents.isEmpty()) ? null : agents,
-                    excludeDynamicSections);
+                    excludeDynamicSections,
+                    skillsForWire);
 
             initializationResult = sendControlRequest(request, initializeTimeout);
             return initializationResult;

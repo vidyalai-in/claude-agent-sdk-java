@@ -242,6 +242,7 @@ public final class ClaudeSDK {
                     sdkMcpServers,
                     effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
                     excludeDynamicSections,
+                    effectiveOptions.skills(),
                     initializeTimeout,
                     effectiveOptions.maxMsgQSize());
 
@@ -664,6 +665,83 @@ public final class ClaudeSDK {
                 directory != null ? directory.toString() : null,
                 limit,
                 offset);
+    }
+
+    /**
+     * Lists subagent IDs for a given session by scanning the session's
+     * subagents directory under {@code ~/.claude/projects/}.
+     *
+     * @param sessionId UUID of the parent session
+     * @return list of subagent IDs; empty when the session is not found or
+     *         has no subagents
+     */
+    public static List<String> listSubagents(String sessionId) {
+        return Sessions.listSubagents(sessionId, null);
+    }
+
+    /**
+     * Lists subagent IDs for a given session in a specific project directory.
+     *
+     * @param sessionId UUID of the parent session
+     * @param directory project working directory to find the session in
+     * @return list of subagent IDs; empty when the session is not found or
+     *         has no subagents
+     */
+    public static List<String> listSubagents(String sessionId, Path directory) {
+        return Sessions.listSubagents(
+                sessionId, directory != null ? directory.toString() : null);
+    }
+
+    /**
+     * Reads a subagent's conversation messages from its JSONL transcript
+     * file.
+     *
+     * @param sessionId UUID of the parent session
+     * @param agentId   ID of the subagent (as returned by
+     *                  {@link #listSubagents(String)})
+     * @return ordered list of subagent user/assistant messages; empty when
+     *         the session or subagent is not found
+     */
+    public static List<SessionMessage> getSubagentMessages(String sessionId, String agentId) {
+        return Sessions.getSubagentMessages(sessionId, agentId, null, null, 0);
+    }
+
+    /**
+     * Reads a subagent's conversation messages within a specific project.
+     *
+     * @param sessionId UUID of the parent session
+     * @param agentId   ID of the subagent
+     * @param directory project working directory to find the session in
+     * @return ordered list of subagent user/assistant messages
+     */
+    public static List<SessionMessage> getSubagentMessages(
+            String sessionId, String agentId, Path directory) {
+        return Sessions.getSubagentMessages(
+                sessionId, agentId,
+                directory != null ? directory.toString() : null,
+                null, 0);
+    }
+
+    /**
+     * Reads subagent messages with full control over filtering and pagination.
+     *
+     * @param sessionId UUID of the parent session
+     * @param agentId   ID of the subagent
+     * @param directory project working directory to find the session in (null = all projects)
+     * @param limit     maximum messages to return (null = no limit)
+     * @param offset    number of messages to skip from the start
+     * @return ordered list of subagent user/assistant messages
+     */
+    public static List<SessionMessage> getSubagentMessages(
+            String sessionId,
+            String agentId,
+            @Nullable Path directory,
+            @Nullable Integer limit,
+            int offset) {
+        return Sessions.getSubagentMessages(
+                sessionId, agentId,
+                directory != null ? directory.toString() : null,
+                limit, offset);
     }
 
     /**

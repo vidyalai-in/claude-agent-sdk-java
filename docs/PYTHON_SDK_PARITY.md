@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-04-13 (Updated)
-**Java SDK Version:** 0.1.11
-**Python SDK Version:** [0.1.58](https://github.com/anthropics/claude-agent-sdk-python/commit/c26fd628ef82c6d3371099e4980cf6f2498a07d8) (latest)
+**Analysis Date:** 2026-04-19 (Updated)
+**Java SDK Version:** 0.1.12
+**Python SDK Version:** [0.1.63](https://github.com/anthropics/claude-agent-sdk-python/commit/7ca64f67812f5b18d6df0b0762af2a69e6308dac) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,12 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.58):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.58. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.63):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.63. These updates include:
+- **v0.1.63** - CLI update to 2.1.114 (no API changes)
+- **v0.1.62** - CLI update to 2.1.113; top-level `skills` option on `ClaudeAgentOptions` for enabling skills on the main session without manually configuring `allowed_tools` and `setting_sources`
+- **v0.1.61** - CLI update to 2.1.112 (no API changes)
+- **v0.1.60** - CLI update to 2.1.111; `list_subagents()` and `get_subagent_messages()` session helpers; W3C trace context (`TRACEPARENT`/`TRACESTATE`) propagation to CLI subprocess; `delete_session()` cascades subagent transcript directory; fix: pass `--setting-sources=` for empty list to disable filesystem settings
+- **v0.1.59** - CLI update to 2.1.105 (no API changes)
 - **v0.1.58** - CLI update to 2.1.97 (no API changes)
 - **v0.1.57** - `exclude_dynamic_sections` on `SystemPromptPreset` for cross-user prompt caching; fix: pass `--thinking` flag for adaptive/disabled instead of `--max-thinking-tokens`; `auto` permission mode; forward `maxResultSizeChars` via `_meta` to bypass Zod annotation stripping; CLI 2.1.91-2.1.96
 - **v0.1.56** - CLI update to 2.1.92 (no API changes)
@@ -92,6 +97,16 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - ✅ `maxResultSizeChars` field on `ToolAnnotations` for large MCP result support (v0.1.55)
 - ✅ Forward `maxResultSizeChars` via `_meta` in tools/list JSONRPC response to bypass Zod stripping (v0.1.55)
 
+✅ **All new features from Python SDK v0.1.63 are now implemented in Java SDK v0.1.12**. This includes:
+- ✅ Top-level `skills` option on `ClaudeAgentOptions` (`builder().skills(List)` and `.skillsAll()`) — auto-injects `Skill(name)` entries into `allowedTools` and defaults `settingSources` to user/project (v0.1.62)
+- ✅ `skills` allowlist propagated via initialize control request so the CLI can filter loaded skills; older CLIs ignore the field (v0.1.62)
+- ✅ `ClaudeSDK.listSubagents()` and `ClaudeSDK.getSubagentMessages()` helpers for reading subagent transcripts under `<project>/<sessionId>/subagents/` (v0.1.60)
+- ✅ Recursive scan of nested subagent dirs (e.g. `subagents/workflows/<runId>/`) (v0.1.60)
+- ✅ W3C distributed-trace context (`TRACEPARENT`/`TRACESTATE`) propagation to CLI subprocess — best-effort via reflection so OpenTelemetry remains an optional dependency (v0.1.60)
+- ✅ `deleteSession()` cascades the sibling `<sessionId>/` subagent transcript directory (v0.1.60)
+- ✅ Fix: pass `--setting-sources=` for empty list to disable filesystem settings (regression of v0.1.53 omit-when-empty behavior) (v0.1.60)
+- ✅ N/A: bundled CLI version constant — Java SDK uses the system-installed CLI, no bundled-version constant to track
+
 All features from Python SDK v0.1.49 and earlier were already implemented. This includes:
 - ✅ `stop_reason` field added to `ResultMessage` (v0.1.45)
 - ✅ Typed `McpServerStatus`, `McpServerInfo`, `McpToolInfo`, `McpToolAnnotations`, `McpStatusResponse` types (v0.1.45)
@@ -130,6 +145,8 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | Client creation | `ClaudeSDKClient(options)` | `ClaudeSDK.createClient(options)` | ✅ Full parity |
 | List sessions | `list_sessions()` | `ClaudeSDK.listSessions()` (3 overloads) | ✅ Full parity |
 | Get session messages | `get_session_messages()` | `ClaudeSDK.getSessionMessages()` (3 overloads) | ✅ Full parity |
+| List subagents | `list_subagents()` | `ClaudeSDK.listSubagents()` (2 overloads) | ✅ Full parity |
+| Get subagent messages | `get_subagent_messages()` | `ClaudeSDK.getSubagentMessages()` (3 overloads) | ✅ Full parity |
 | Rename session | `rename_session()` | `ClaudeSDK.renameSession()` (2 overloads) | ✅ Full parity |
 | Tag session | `tag_session()` | `ClaudeSDK.tagSession()` (2 overloads) | ✅ Full parity |
 | Convenience methods | N/A | `queryForText()`, `queryForResult()` | ✅ Java enhancement |
@@ -347,11 +364,13 @@ All 37+ configuration options are implemented with 100% parity:
 | Filesystem agents | ✅ `filesystem_agents.py` | ✅ `FilesystemAgentsExample.java` | ✅ |
 | Include partial messages | ✅ `include_partial_messages.py` | ✅ `IncludePartialMessagesExample.java` | ✅ |
 | **Large agents** | ✅ e2e tests in `test_agents_and_settings.py` | ✅ `LargeAgentsExample.java` | ✅ **NEW** |
+| **Skills option** | ✅ Documented in `types.py` | ✅ `SkillsExample.java` | ✅ **NEW** |
+| **Subagent transcripts** | ✅ Public helpers in `__init__.py` | ✅ `SubagentTranscriptExample.java` | ✅ **NEW** |
 | Trio async | ✅ `streaming_mode_trio.py` | N/A (Java uses threads) | N/A |
 | IPython interactive | ✅ `streaming_mode_ipython.py` | N/A (Java nature) | N/A |
 
 **Python Examples: 16 files**
-**Java Examples: 20 files** (covers all functionality plus additional examples)
+**Java Examples: 22 files** (covers all functionality plus additional examples)
 **Coverage: 100%** - All Python SDK features have Java examples, plus additional Java-specific examples
 
 ---
@@ -703,7 +722,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-04-13
-**Python SDK Version:** 0.1.58 (commit c26fd628ef82c6d3371099e4980cf6f2498a07d8)
-**Java SDK Version:** 0.1.11
+**Latest Verification:** 2026-04-19
+**Python SDK Version:** 0.1.63 (commit 7ca64f67812f5b18d6df0b0762af2a69e6308dac)
+**Java SDK Version:** 0.1.12
 **Status:** ✅ 100% Feature Parity Maintained

@@ -144,6 +144,24 @@ public final class ClaudeAgentOptions {
     @Nullable
     private final List<SettingSource> settingSources;
 
+    // Skills to enable for the main session. The value is sent on the
+    // ``initialize`` control request so a supporting CLI can filter which
+    // skills are loaded into the system prompt (older CLIs ignore the
+    // field). When set, the SDK also wires up ``allowed_tools`` and
+    // ``setting_sources`` automatically so callers don't have to.
+    //   * ``null`` (default): no SDK auto-configuration. The CLI's own
+    //     defaults still apply, so this is **not** "skills off" — to
+    //     suppress every skill from the listing, use an empty list.
+    //   * ``"all"``: enable every discovered skill.
+    //   * ``[name, ...]``: enable only the listed skills.
+    //
+    // <p><b>Note:</b> This is a context filter, not a sandbox. Unlisted
+    // skills are hidden from the model's listing and cannot be invoked
+    // via the Skill tool, but their files remain on disk.
+    // Stored as either a {@code List<String>} or the string {@code "all"}.
+    @Nullable
+    private final Object skills;
+
     // Sandbox configuration for bash command isolation.
     // Filesystem and network restrictions are derived from permission rules
     // (Read/Edit/WebFetch), not from these sandbox settings.
@@ -209,6 +227,7 @@ public final class ClaudeAgentOptions {
         this.includePartialMessages = builder.includePartialMessages;
         this.agents = ((builder.agents != null) ? Map.copyOf(builder.agents) : null);
         this.settingSources = builder.settingSources;
+        this.skills = builder.skills;
         this.sandbox = builder.sandbox;
         // Default to empty list (matching Python SDK)
         this.plugins = ((builder.plugins != null) ? List.copyOf(builder.plugins) : List.of());
@@ -277,6 +296,7 @@ public final class ClaudeAgentOptions {
         builder.includePartialMessages = this.includePartialMessages;
         builder.agents = ((this.agents != null) ? new HashMap<>(this.agents) : null);
         builder.settingSources = this.settingSources;
+        builder.skills = this.skills;
         builder.sandbox = this.sandbox;
         builder.plugins = ((!this.plugins.isEmpty()) ? new ArrayList<>(this.plugins) : null);
         builder.outputFormat = this.outputFormat;
@@ -532,6 +552,23 @@ public final class ClaudeAgentOptions {
     }
 
     /**
+     * Returns the skills configuration.
+     *
+     * <p>The returned value is one of:
+     * <ul>
+     *   <li>{@code null} — no SDK auto-configuration (CLI defaults apply)</li>
+     *   <li>The string {@code "all"} — every discovered skill is enabled</li>
+     *   <li>A {@code List<String>} of skill names</li>
+     * </ul>
+     *
+     * @return the skills configuration, or null if not set
+     */
+    @Nullable
+    public Object skills() {
+        return skills;
+    }
+
+    /**
      * Returns the sandbox configuration for bash command isolation.
      *
      * @return the sandbox settings, or null if not configured
@@ -696,6 +733,8 @@ public final class ClaudeAgentOptions {
         private Map<String, AgentDefinition> agents;
         @Nullable
         private List<SettingSource> settingSources;
+        @Nullable
+        private Object skills;
         @Nullable
         private SandboxSettings sandbox;
         @Nullable
@@ -1125,6 +1164,34 @@ public final class ClaudeAgentOptions {
          */
         public Builder settingSources(List<SettingSource> settingSources) {
             this.settingSources = settingSources;
+            return this;
+        }
+
+        /**
+         * Sets the skills allowlist for the main session. Pass an empty list to
+         * suppress every skill from the listing, or use {@link #skillsAll()} to
+         * enable every discovered skill.
+         *
+         * <p>When set, the SDK auto-injects {@code Skill(name)} entries into
+         * {@code allowedTools} and defaults {@code settingSources} to user/project
+         * so the CLI discovers installed skills without extra wiring.
+         *
+         * @param skills list of skill names (empty list disables all skills)
+         * @return this builder
+         */
+        public Builder skills(List<String> skills) {
+            this.skills = skills;
+            return this;
+        }
+
+        /**
+         * Enables every discovered skill (equivalent to Python SDK's
+         * {@code skills="all"}).
+         *
+         * @return this builder
+         */
+        public Builder skillsAll() {
+            this.skills = "all";
             return this;
         }
 

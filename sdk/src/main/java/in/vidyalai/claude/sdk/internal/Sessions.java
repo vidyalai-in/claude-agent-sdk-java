@@ -999,4 +999,284 @@ public class Sessions {
             return null;
         }
     }
+
+    // -------------------------------------------------------------------------
+    // listSubagents / getSubagentMessages — subagent transcript reading
+    // -------------------------------------------------------------------------
+
+    /**
+     * Resolves the on-disk path of a session JSONL file, matching
+     * {@link #readSessionFile} semantics (worktree-aware when
+     * {@code directory} is provided; full project scan otherwise).
+     *
+     * @return path of the first non-empty match, or {@code null}.
+     */
+    static @Nullable Path resolveSessionFilePath(String sessionId, @Nullable String directory) {
+        String filename = sessionId + ".jsonl";
+
+        if (directory != null) {
+            Path projectDir = findProjectDir(directory);
+            Path found = statCandidate(projectDir, filename);
+            if (found != null) {
+                return found;
+            }
+
+            List<String> worktreePaths = getWorktreePaths(directory);
+            for (String worktreePath : worktreePaths) {
+                if (!worktreePath.equals(directory)) {
+                    Path worktreeDir = findProjectDir(worktreePath);
+                    Path wtFound = statCandidate(worktreeDir, filename);
+                    if (wtFound != null) {
+                        return wtFound;
+                    }
+                }
+            }
+            return null;
+        }
+
+        Path projectsDir = getProjectsDir();
+        if (!Files.exists(projectsDir)) {
+            return null;
+        }
+        try (Stream<Path> dirs = Files.list(projectsDir)) {
+            return dirs
+                    .filter(Files::isDirectory)
+                    .map(dir -> statCandidate(dir, filename))
+                    .filter(java.util.Objects::nonNull)
+                    .findFirst()
+                    .orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static @Nullable Path statCandidate(@Nullable Path projectDir, String filename) {
+        if (projectDir == null) {
+            return null;
+        }
+        Path candidate = projectDir.resolve(filename);
+        try {
+            if (Files.size(candidate) > 0) {
+                return candidate;
+            }
+        } catch (IOException ignored) {
+            // file missing or unreadable
+        }
+        return null;
+    }
+
+    /**
+     * Resolves the subagents directory for a given session. The session
+     * file lives at {@code <projectDir>/<sessionId>.jsonl} and the
+     * subagents directory at
+     * {@code <projectDir>/<sessionId>/subagents/}.
+     */
+    static @Nullable Path resolveSubagentsDir(String sessionId, @Nullable String directory) {
+        Path resolved = resolveSessionFilePath(sessionId, directory);
+        if (resolved == null) {
+            return null;
+        }
+        String name = resolved.getFileName().toString();
+        // Strip the .jsonl suffix to derive the session directory.
+        String sessionDirName = name.endsWith(".jsonl")
+                ? name.substring(0, name.length() - ".jsonl".length())
+                : name;
+        return resolved.resolveSibling(sessionDirName).resolve("subagents");
+    }
+
+    /**
+     * Recursively collects {@code agent-*.jsonl} files. Subagent
+     * transcripts may live directly in {@code subagents/} or in nested
+     * subdirectories such as {@code subagents/workflows/<runId>/}.
+     */
+    static List<AgentFile> collectAgentFiles(Path baseDir) {
+        List<AgentFile> results = new ArrayList<>();
+        if (!Files.isDirectory(baseDir)) {
+            return results;
+        }
+        walkAgentDir(baseDir, results);
+        return results;
+    }
+
+    private static void walkAgentDir(Path currentDir, List<AgentFile> results) {
+        try (Stream<Path> children = Files.list(currentDir)) {
+            List<Path> sorted = children
+                    .sorted(Comparator.comparing(p -> p.getFileName().toString()))
+                    .toList();
+            for (Path entry : sorted) {
+                String name = entry.getFileName().toString();
+                if (Files.isRegularFile(entry)
+                        && name.startsWith("agent-")
+                        && name.endsWith(".jsonl")) {
+                    String agentId = name.substring("agent-".length(),
+                            name.length() - ".jsonl".length());
+                    results.add(new AgentFile(agentId, entry));
+                } else if (Files.isDirectory(entry)) {
+                    walkAgentDir(entry, results);
+                }
+            }
+        } catch (IOException ignored) {
+            // best-effort
+        }
+    }
+
+    record AgentFile(String agentId, Path filePath) {
+    }
+
+    /**
+     * Builds the conversation chain for a subagent transcript. Subagent
+     * transcripts are simpler than main sessions — no compaction, no
+     * sidechains, no preserved segments. Find the last user/assistant
+     * entry and walk {@code parentUuid} links back to the root.
+     */
+    static List<Map<String, Object>> buildSubagentChain(List<Map<String, Object>> entries) {
+        if (entries.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, Map<String, Object>> byUuid = new HashMap<>();
+        for (Map<String, Object> entry : entries) {
+            String uuid = (String) entry.get("uuid");
+            if (uuid != null) {
+                byUuid.put(uuid, entry);
+            }
+        }
+
+        // Subagent transcripts are linear — the last user/assistant entry
+        // is the leaf.
+        Map<String, Object> leaf = null;
+        for (int i = entries.size() - 1; i >= 0; i--) {
+            String type = (String) entries.get(i).get("type");
+            if ("user".equals(type) || "assistant".equals(type)) {
+                leaf = entries.get(i);
+                break;
+            }
+        }
+        if (leaf == null) {
+            return List.of();
+        }
+
+        List<Map<String, Object>> chain = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        Map<String, Object> current = leaf;
+        while (current != null) {
+            String uuid = (String) current.get("uuid");
+            if (uuid == null || !seen.add(uuid)) {
+                break;
+            }
+            chain.add(current);
+            String parentUuid = (String) current.get("parentUuid");
+            current = parentUuid != null ? byUuid.get(parentUuid) : null;
+        }
+        Collections.reverse(chain);
+        return chain;
+    }
+
+    /**
+     * Lists subagent IDs for a given session by scanning the subagents
+     * directory.
+     *
+     * <p>Subagent transcripts are stored at
+     * {@code ~/.claude/projects/<project>/<sessionId>/subagents/agent-<agentId>.jsonl}
+     * (and may be nested in subdirectories such as
+     * {@code workflows/<runId>/}).
+     *
+     * @param sessionId UUID of the parent session
+     * @param directory project directory to find the session in. When null,
+     *                  searches all project directories under
+     *                  {@code ~/.claude/projects/}.
+     * @return list of subagent ID strings; empty list when the session is
+     *         not found, the {@code sessionId} is not a valid UUID, or the
+     *         session has no subagents.
+     */
+    public static List<String> listSubagents(String sessionId, @Nullable String directory) {
+        if (!UUID_RE.matcher(sessionId).matches()) {
+            return List.of();
+        }
+        Path subagentsDir = resolveSubagentsDir(sessionId, directory);
+        if (subagentsDir == null) {
+            return List.of();
+        }
+        List<String> ids = new ArrayList<>();
+        for (AgentFile af : collectAgentFiles(subagentsDir)) {
+            ids.add(af.agentId());
+        }
+        return ids;
+    }
+
+    /**
+     * Reads a subagent's conversation messages from its JSONL transcript
+     * file.
+     *
+     * @param sessionId UUID of the parent session
+     * @param agentId   ID of the subagent (as returned by
+     *                  {@link #listSubagents})
+     * @param directory project directory to find the session in
+     * @param limit     maximum number of messages to return (null = no
+     *                  limit)
+     * @param offset    number of messages to skip from the start
+     * @return ordered list of subagent user/assistant messages; empty when
+     *         the session or subagent is not found, the {@code sessionId}
+     *         is not a valid UUID, or the transcript contains no
+     *         user/assistant entries.
+     */
+    public static List<SessionMessage> getSubagentMessages(
+            String sessionId,
+            String agentId,
+            @Nullable String directory,
+            @Nullable Integer limit,
+            int offset) {
+        if (!UUID_RE.matcher(sessionId).matches()) {
+            return List.of();
+        }
+        if (agentId == null || agentId.isEmpty()) {
+            return List.of();
+        }
+
+        Path subagentsDir = resolveSubagentsDir(sessionId, directory);
+        if (subagentsDir == null) {
+            return List.of();
+        }
+
+        Path match = null;
+        for (AgentFile af : collectAgentFiles(subagentsDir)) {
+            if (agentId.equals(af.agentId())) {
+                match = af.filePath();
+                break;
+            }
+        }
+        if (match == null) {
+            return List.of();
+        }
+
+        String content = readFileContent(match);
+        if (content == null || content.isEmpty()) {
+            return List.of();
+        }
+
+        List<Map<String, Object>> entries = parseTranscriptEntries(content);
+        List<Map<String, Object>> chain = buildSubagentChain(entries);
+        List<SessionMessage> messages = new ArrayList<>();
+        for (Map<String, Object> entry : chain) {
+            String type = (String) entry.get("type");
+            if ("user".equals(type) || "assistant".equals(type)) {
+                messages.add(toSessionMessage(entry));
+            }
+        }
+
+        if (limit != null && limit > 0) {
+            int end = Math.min(messages.size(), offset + limit);
+            if (offset >= messages.size()) {
+                return List.of();
+            }
+            return Collections.unmodifiableList(messages.subList(offset, end));
+        }
+        if (offset > 0) {
+            if (offset >= messages.size()) {
+                return List.of();
+            }
+            return Collections.unmodifiableList(messages.subList(offset, messages.size()));
+        }
+        return Collections.unmodifiableList(messages);
+    }
 }

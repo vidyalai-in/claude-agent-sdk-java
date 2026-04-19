@@ -99,9 +99,11 @@ mvn exec:java -Dexec.mainClass="examples.PluginsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SessionListingExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SettingSourcesExample" -Dexec.args="all" -pl examples
+mvn exec:java -Dexec.mainClass="examples.SkillsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.StderrCallbackExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.StreamingEvents" -pl examples
 mvn exec:java -Dexec.mainClass="examples.StructuredOutputExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.SubagentTranscriptExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SystemPromptExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolsConfigurationExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolUsage" -pl examples
@@ -305,6 +307,8 @@ Static methods for common operations:
 - `createSdkMcpServer(String name, List<SdkMcpTool> tools)` - Create MCP server from tools
 - `createSdkMcpServer(String name, String version, List<SdkMcpTool> tools)` - Create MCP server with version
 - `createSdkMcpServer(String name, Object instance)` - Create MCP server from @Tool annotations
+- `listSubagents(String sessionId)` / `listSubagents(String, Path)` - List subagent IDs for a session
+- `getSubagentMessages(String sessionId, String agentId, ...)` - Read a subagent's transcript
 - `getVersion()` - Get SDK version
 
 ## ClaudeSDKClient

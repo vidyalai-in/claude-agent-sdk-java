@@ -699,6 +699,318 @@ class SessionsTest {
         });
     }
 
+    // -------------------------------------------------------------------------
+    // listSubagents / getSubagentMessages
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testListSubagents_invalidSessionIdReturnsEmpty() {
+        assertThat(Sessions.listSubagents("not-a-uuid", null)).isEmpty();
+    }
+
+    @Test
+    void testListSubagents_missingSessionReturnsEmpty(@TempDir Path tempDir) {
+        withClaudeHome(tempDir, () -> {
+            String sid = "12345678-1234-1234-1234-123456789abc";
+            assertThat(Sessions.listSubagents(sid, null)).isEmpty();
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testListSubagents_returnsAgentIds(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hello") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        Files.writeString(subagentsDir.resolve("agent-abc123.jsonl"), "{}\n");
+        Files.writeString(subagentsDir.resolve("agent-def456.jsonl"), "{}\n");
+
+        // Nested subagent file under workflows/<runId>/
+        Path nested = subagentsDir.resolve("workflows").resolve("run1");
+        Files.createDirectories(nested);
+        Files.writeString(nested.resolve("agent-nested789.jsonl"), "{}\n");
+
+        withClaudeHome(claudeHome, () -> {
+            List<String> ids = Sessions.listSubagents(sessionId, null);
+            assertThat(ids).containsExactlyInAnyOrder("abc123", "def456", "nested789");
+        });
+    }
+
+    @Test
+    void testGetSubagentMessages_invalidSessionIdReturnsEmpty() {
+        assertThat(Sessions.getSubagentMessages("not-a-uuid", "abc", null, null, 0))
+                .isEmpty();
+    }
+
+    @Test
+    void testGetSubagentMessages_emptyAgentIdReturnsEmpty(@TempDir Path tempDir) {
+        withClaudeHome(tempDir, () -> {
+            String sid = "12345678-1234-1234-1234-123456789abc";
+            assertThat(Sessions.getSubagentMessages(sid, "", null, null, 0)).isEmpty();
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSubagentMessages_readsAgentTranscript(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hello") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        String agentJsonl = makeUserLine(sessionId, "a1", null, "Run the task") + "\n"
+                + makeAssistantLine(sessionId, "a2", "a1", "Done.") + "\n";
+        Files.writeString(subagentsDir.resolve("agent-xyz.jsonl"), agentJsonl);
+
+        withClaudeHome(claudeHome, () -> {
+            List<SessionMessage> messages = Sessions.getSubagentMessages(
+                    sessionId, "xyz", null, null, 0);
+            assertThat(messages).hasSize(2);
+            assertThat(messages.get(0).type()).isEqualTo("user");
+            assertThat(messages.get(1).type()).isEqualTo("assistant");
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testListSubagents_sessionExistsButNoSubagentsDir(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hi") + "\n");
+
+        withClaudeHome(claudeHome, () -> {
+            assertThat(Sessions.listSubagents(sessionId, null)).isEmpty();
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testListSubagents_emptySubagentsDir(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hi") + "\n");
+        Files.createDirectories(projectDir.resolve(sessionId).resolve("subagents"));
+
+        withClaudeHome(claudeHome, () -> {
+            assertThat(Sessions.listSubagents(sessionId, null)).isEmpty();
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testListSubagents_ignoresNonAgentFiles(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hi") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        Files.writeString(subagentsDir.resolve("agent-keep.jsonl"), "{}\n");
+        Files.writeString(subagentsDir.resolve("agent-keep.meta.json"), "{}");
+        Files.writeString(subagentsDir.resolve("other.jsonl"), "{}\n");
+        Files.writeString(subagentsDir.resolve("agent-noext"), "{}");
+
+        withClaudeHome(claudeHome, () -> {
+            assertThat(Sessions.listSubagents(sessionId, null)).containsExactly("keep");
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testListSubagents_searchesAllProjectsWithoutDirectory(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("some-project");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hi") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        Files.writeString(subagentsDir.resolve("agent-x.jsonl"), "{}\n");
+
+        withClaudeHome(claudeHome, () -> {
+            assertThat(Sessions.listSubagents(sessionId, null)).containsExactly("x");
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSubagentMessages_nonexistentAgentReturnsEmpty(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hi") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        Files.writeString(subagentsDir.resolve("agent-other.jsonl"), "{}\n");
+
+        withClaudeHome(claudeHome, () -> {
+            assertThat(Sessions.getSubagentMessages(sessionId, "missing", null, null, 0))
+                    .isEmpty();
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSubagentMessages_findsAgentInNestedSubdirectory(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hi") + "\n");
+
+        Path nested = projectDir.resolve(sessionId).resolve("subagents")
+                .resolve("workflows").resolve("run-1");
+        Files.createDirectories(nested);
+        String jsonl = makeUserLine(sessionId, "n1", null, "hi") + "\n"
+                + makeAssistantLine(sessionId, "n2", "n1", "hello") + "\n";
+        Files.writeString(nested.resolve("agent-deep.jsonl"), jsonl);
+
+        withClaudeHome(claudeHome, () -> {
+            List<SessionMessage> messages = Sessions.getSubagentMessages(
+                    sessionId, "deep", null, null, 0);
+            assertThat(messages).hasSize(2);
+            assertThat(messages.get(0).uuid()).isEqualTo("n1");
+            assertThat(messages.get(1).uuid()).isEqualTo("n2");
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSubagentMessages_skipsCorruptLines(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hi") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        String jsonl = makeUserLine(sessionId, "a1", null, "hi") + "\n"
+                + "not valid json {\n"
+                + "\n"
+                + makeAssistantLine(sessionId, "a2", "a1", "ok") + "\n";
+        Files.writeString(subagentsDir.resolve("agent-x.jsonl"), jsonl);
+
+        withClaudeHome(claudeHome, () -> {
+            List<SessionMessage> messages = Sessions.getSubagentMessages(
+                    sessionId, "x", null, null, 0);
+            assertThat(messages).hasSize(2);
+            assertThat(messages.get(0).uuid()).isEqualTo("a1");
+            assertThat(messages.get(1).uuid()).isEqualTo("a2");
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSubagentMessages_emptyAgentFileReturnsEmpty(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hi") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        Files.writeString(subagentsDir.resolve("agent-empty.jsonl"), "");
+
+        withClaudeHome(claudeHome, () -> {
+            assertThat(Sessions.getSubagentMessages(sessionId, "empty", null, null, 0))
+                    .isEmpty();
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSubagentMessages_limitZeroReturnsAll(@TempDir Path tempDir) throws IOException {
+        // Python SDK semantics: limit=0 (or negative) is treated as no-limit.
+        // Java overload uses Integer; @Nullable null = no limit. limit=0 also
+        // returns all to match Python behavior.
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hi") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        String jsonl = makeUserLine(sessionId, "a1", null, "first") + "\n"
+                + makeAssistantLine(sessionId, "a2", "a1", "second") + "\n"
+                + makeUserLine(sessionId, "a3", "a2", "third") + "\n";
+        Files.writeString(subagentsDir.resolve("agent-p.jsonl"), jsonl);
+
+        withClaudeHome(claudeHome, () -> {
+            assertThat(Sessions.getSubagentMessages(sessionId, "p", null, 0, 0))
+                    .hasSize(3);
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSubagentMessages_appliesLimitAndOffset(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hello") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        String agentJsonl = makeUserLine(sessionId, "a1", null, "first") + "\n"
+                + makeAssistantLine(sessionId, "a2", "a1", "second") + "\n"
+                + makeUserLine(sessionId, "a3", "a2", "third") + "\n"
+                + makeAssistantLine(sessionId, "a4", "a3", "fourth") + "\n";
+        Files.writeString(subagentsDir.resolve("agent-xyz.jsonl"), agentJsonl);
+
+        withClaudeHome(claudeHome, () -> {
+            List<SessionMessage> sliced = Sessions.getSubagentMessages(
+                    sessionId, "xyz", null, 2, 1);
+            assertThat(sliced).hasSize(2);
+            assertThat(sliced.get(0).uuid()).isEqualTo("a2");
+            assertThat(sliced.get(1).uuid()).isEqualTo("a3");
+        });
+    }
+
     @Test
     void testListSessions_includesTagAndCreatedAt(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
