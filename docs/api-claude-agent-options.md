@@ -49,6 +49,8 @@ options.toBuilder()
 - `continueConversation(boolean)` - Continue last session
 - `resume(String)` - Resume specific session
 - `forkSession(boolean)` - Fork resumed session
+- `sessionStore(SessionStore)` - Mirror transcripts to an external store and resume from it (see [Session Store](./feature-session-store.md)). When set, the SDK forwards `--session-mirror` to the CLI and routes `transcript_mirror` frames to `store.appendAsync(...)`. Pre-flight validation rejects `continueConversation + sessionStore` without `listSessions()` support and `sessionStore + enableFileCheckpointing`.
+- `loadTimeoutMs(long)` - Per-call timeout for `store.loadAsync()` / `listSubkeysAsync()` during resume materialization, in milliseconds (default `60_000`). A value of `0` means immediate timeout; large values effectively disable.
 
 ### Limits
 - `maxTurns(Integer)` - Max conversation turns

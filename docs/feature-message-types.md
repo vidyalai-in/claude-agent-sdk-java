@@ -10,6 +10,7 @@ Understanding the message type system for processing Claude conversations.
 - [AssistantMessage](#assistantmessage)
 - [SystemMessage](#systemmessage)
 - [Task Messages](#task-messages)
+- [MirrorErrorMessage](#mirrorerrormessage)
 - [ResultMessage](#resultmessage)
 - [StreamEvent](#streamevent)
 - [RateLimitEvent](#ratelimitevent)
@@ -24,7 +25,8 @@ The SDK uses a sealed interface hierarchy for type-safe message handling. All me
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
-    TaskNotificationMessage, ResultMessage, StreamEvent, RateLimitEvent {}
+    TaskNotificationMessage, MirrorErrorMessage, ResultMessage,
+    StreamEvent, RateLimitEvent {}
 ```
 
 ## Forward Compatibility
@@ -49,12 +51,15 @@ Message (sealed interface)
 │   └── content: List<ContentBlock>
 │       ├── TextBlock - Plain text
 │       ├── ThinkingBlock - Claude's reasoning (extended thinking)
-│       ├── ToolUseBlock - Tool invocation
-│       └── ToolResultBlock - Tool results
+│       ├── ToolUseBlock - Tool invocation (caller executes)
+│       ├── ToolResultBlock - Tool results
+│       ├── ServerToolUseBlock - Server-side tool invocation (advisor, web_search, etc.)
+│       └── ServerToolResultBlock - Server-side tool result
 ├── SystemMessage (record) - System notifications
 ├── TaskStartedMessage (record) - Task lifecycle: task started
 ├── TaskProgressMessage (record) - Task lifecycle: task in progress
 ├── TaskNotificationMessage (record) - Task lifecycle: task completed/failed/stopped
+├── MirrorErrorMessage (record) - Non-fatal SessionStore.append() failure
 ├── ResultMessage (record) - Final result with cost/usage/timing
 ├── StreamEvent (record) - Partial streaming updates
 └── RateLimitEvent (record) - Rate limit status change notifications
@@ -330,6 +335,44 @@ for (Message msg : client.receiveMessages()) {
 }
 ```
 
+## MirrorErrorMessage
+
+Non-fatal system message emitted when a `SessionStore.append()` call fails after retries are exhausted (`MIRROR_APPEND_MAX_ATTEMPTS=3`). The local-disk transcript is already durable, so the session continues unaffected — the mirrored copy in the external store will be missing the failed batch.
+
+```java
+record MirrorErrorMessage(
+    String subtype,                    // always "mirror_error"
+    Map<String, Object> data,          // raw payload
+    @Nullable SessionKey key,          // store key the failed append targeted (null if pre-resolution)
+    String error                       // failure description
+) implements Message
+```
+
+Modeled as a top-level `Message` sealed-interface member (Java records can't extend records). `subtype` is always `"mirror_error"`; the base `data` field carries the raw payload for `SystemMessage`-style downcasts.
+
+### Example: Recovering from a mirror error
+
+```java
+import in.vidyalai.claude.sdk.types.message.MirrorErrorMessage;
+
+for (Message msg : ClaudeSDK.query(prompt, options)) {
+    switch (msg) {
+        case MirrorErrorMessage err -> {
+            String sid = err.key() != null ? err.key().sessionId() : "<unknown>";
+            log.warn("Session {} mirror gap: {}. Will catch up via importSessionToStore.",
+                     sid, err.error());
+            // Optional: schedule a one-shot import to backfill from the local file
+            //   ClaudeSDK.importSessionToStore(sid, store, null);
+        }
+        case AssistantMessage a -> System.out.println(a.getTextContent());
+        // ... other cases
+        default -> { }
+    }
+}
+```
+
+See [Session Store](./feature-session-store.md) for the full mirror flow and retry semantics.
+
 ## ResultMessage
 
 Final result sent at the end of each conversation turn with timing, cost, and usage information.
@@ -523,7 +566,8 @@ Assistant messages (and structured user messages) contain content blocks.
 
 ```java
 sealed interface ContentBlock permits TextBlock, ThinkingBlock,
-    ToolUseBlock, ToolResultBlock {}
+    ToolUseBlock, ToolResultBlock,
+    ServerToolUseBlock, ServerToolResultBlock {}
 ```
 
 ### TextBlock
@@ -571,6 +615,51 @@ record ToolResultBlock(
 ) implements ContentBlock
 ```
 
+### ServerToolUseBlock
+
+Server-side tool invocation that the API executes on the model's behalf — the caller never returns a result. Used for `advisor`, `web_search`, `web_fetch`, `code_execution`, `bash_code_execution`, `text_editor_code_execution`, `tool_search_tool_regex`, and `tool_search_tool_bm25`.
+
+```java
+record ServerToolUseBlock(
+    String id,                  // Server tool use ID
+    String name,                // One of ServerToolName values (kept as raw String for forward compat)
+    Map<String, Object> input   // Tool input parameters
+) implements ContentBlock
+```
+
+The `name` field is a discriminator — branch on it to know which server tool was invoked. The `ServerToolName` enum lists the recognized values:
+
+```java
+public enum ServerToolName {
+    ADVISOR("advisor"),
+    WEB_SEARCH("web_search"),
+    WEB_FETCH("web_fetch"),
+    CODE_EXECUTION("code_execution"),
+    BASH_CODE_EXECUTION("bash_code_execution"),
+    TEXT_EDITOR_CODE_EXECUTION("text_editor_code_execution"),
+    TOOL_SEARCH_TOOL_REGEX("tool_search_tool_regex"),
+    TOOL_SEARCH_TOOL_BM25("tool_search_tool_bm25");
+}
+```
+
+### ServerToolResultBlock
+
+Result block returned for a server-side tool call. Mirrors `ToolResultBlock`'s shape; `content` is the raw map from the API, opaque to this layer — callers that care about a specific server tool's result schema can inspect `content.get("type")`.
+
+The CLI emits these as `advisor_tool_result` content blocks (the only currently shipped server-tool result type); they parse into `ServerToolResultBlock`.
+
+```java
+record ServerToolResultBlock(
+    String toolUseId,            // Matches the corresponding ServerToolUseBlock.id
+    Map<String, Object> content  // Raw result content (e.g. {"type":"advisor_result", ...})
+) implements ContentBlock
+```
+
+For the advisor tool specifically, the `content` map's `type` field will be one of:
+- `"advisor_result"` — text result with a `text` field
+- `"advisor_redacted_result"` — encrypted blob with an `encrypted_content` field
+- `"advisor_tool_result_error"` — error payload
+
 ## Pattern Matching
 
 Java's pattern matching makes message handling elegant and type-safe.
@@ -585,6 +674,7 @@ String result = switch (message) {
     case TaskStartedMessage t -> "Task started: " + t.taskId();
     case TaskProgressMessage t -> "Task progress: " + t.taskId();
     case TaskNotificationMessage t -> "Task done: " + t.status();
+    case MirrorErrorMessage m -> "Mirror error: " + m.error();
     case ResultMessage r -> "Cost: $" + r.totalCostUsd();
     case StreamEvent e -> "Streaming: " + e.eventType();
     case RateLimitEvent rle -> "Rate limit: " + rle.rateLimitInfo().status();
@@ -606,9 +696,15 @@ switch (message) {
                     System.out.println("[Tool] " + tool.name() + ": " + tool.input());
                 case ToolResultBlock result ->
                     System.out.println("[Result] " + result.content());
+                case ServerToolUseBlock stu ->
+                    System.out.println("[Server Tool] " + stu.name() + ": " + stu.input());
+                case ServerToolResultBlock str ->
+                    System.out.println("[Server Tool Result] " + str.content());
             }
         }
     }
+    case MirrorErrorMessage err ->
+        System.err.println("Mirror error: " + err.error());
     case ResultMessage result ->
         System.out.println("Done in " + result.durationMs() + "ms, cost: $" + result.totalCostUsd());
     default -> {}

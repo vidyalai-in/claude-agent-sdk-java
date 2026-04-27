@@ -251,6 +251,32 @@ Fork resumed session into new session (keeps context, new ID).
 .forkSession(true)
 ```
 
+### sessionStore()
+
+Mirror session transcripts to an external store (S3, Postgres, Redis, custom backend). When set, the SDK adds `--session-mirror` to the CLI invocation and forwards every transcript line to `store.appendAsync(...)`. Resume + `sessionStore` materializes from the store into a temp `CLAUDE_CONFIG_DIR` so the CLI can pick up the conversation locally. See the [Session Store guide](./feature-session-store.md) for the full feature.
+
+```java
+import in.vidyalai.claude.sdk.types.session.InMemorySessionStore;
+
+InMemorySessionStore store = new InMemorySessionStore();
+
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .sessionStore(store)
+    .build();
+```
+
+**Validation guards** (rejected with `IllegalArgumentException` before subprocess spawn):
+- `continueConversation + sessionStore` requires `store.implementsListSessions()`.
+- `sessionStore + enableFileCheckpointing` is rejected — checkpoints are local-disk only.
+
+### loadTimeoutMs()
+
+Per-call timeout for `store.loadAsync()` and `listSubkeysAsync()` during resume materialization, in milliseconds. Defaults to `60_000`. If an adapter doesn't settle within this window, the query fails with a clear error rather than hanging the iterator.
+
+```java
+.loadTimeoutMs(30_000)  // 30 seconds
+```
+
 ## Limits
 
 ### maxTurns()

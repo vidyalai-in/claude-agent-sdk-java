@@ -27,6 +27,8 @@ All reading is done directly from disk, independent of the CLI. No process is sp
 
 **Performance:** For listing, only the first and last 64 KB of each session file are read (no full JSONL parse). Full parsing is done only when retrieving messages with `getSessionMessages`.
 
+> **Looking for a remote/multi-host backend?** See [Session Store](./feature-session-store.md). Every method on this page has a `*FromStore` (read) or `*ViaStore` (mutation) counterpart on `ClaudeSDK` that operates against a `SessionStore` adapter (S3, Postgres, Redis, custom). The local-disk APIs documented here remain the canonical path; SessionStore APIs are additive and target the same on-disk layout for portability.
+
 ## Session Metadata
 
 `SDKSessionInfo` holds metadata for a single session:
@@ -479,5 +481,6 @@ List<SDKSessionInfo> recent = ClaudeSDK.listSessions(null, 20, false);
 ## See Also
 
 - [API Reference: ClaudeSDK](./api-claude-sdk.md#session-history-methods) - Method signatures
+- [Session Store](./feature-session-store.md) - External-store backed equivalents (`*FromStore`/`*ViaStore`) plus mirror-on-write integration
 - [Session Listing Example](../examples/src/main/java/examples/SessionListingExample.java) - Complete runnable example
 - [Interactive Conversations](./feature-interactive-conversations.md) - Managing live sessions

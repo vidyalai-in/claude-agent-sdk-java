@@ -83,6 +83,16 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - SDKSessionInfo (with tag, createdAt, nullable fileSize) and SessionMessage types
   - Pagination with offset and worktree support
 
+- **[Session Store](./feature-session-store.md)** - Mirror transcripts to S3 / Postgres / Redis / custom backends
+  - `SessionStore` adapter protocol with sync + async (`CompletableFuture`) variants
+  - Configurable virtual-thread executor via `SessionStoreExecutor`
+  - Bundled `InMemorySessionStore` reference adapter + `filePathToSessionKey` helper
+  - Read APIs: `listSessionsFromStore`, `getSessionInfoFromStore`, `getSessionMessagesFromStore`, `listSubagentsFromStore`, `getSubagentMessagesFromStore`
+  - Mutation APIs: `renameSessionViaStore`, `tagSessionViaStore`, `deleteSessionViaStore`, `forkSessionViaStore`
+  - `importSessionToStore` for local→store replay; `MirrorErrorMessage` for non-fatal append failures
+  - Public `SessionStoreConformance` test harness (14 contracts, framework-agnostic)
+  - Resume from a store (subprocess gets a temp `CLAUDE_CONFIG_DIR`); transcript mirror batcher
+
 - **[Skills](./feature-skills.md)** - Top-level `skills` option for the main session
   - Three modes: `skillsAll()`, `skills(List)`, `skills(List.of())`
   - Auto-injects `Skill(name)` into `allowedTools` and defaults `settingSources`
@@ -194,7 +204,7 @@ Add to your `pom.xml`:
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.12</version>
+    <version>0.1.13</version>
 </dependency>
 
 <repositories>
@@ -272,21 +282,22 @@ See the `examples/` directory in the repository.
 
 ### ✅ Completed - All Core Documentation
 - Main README with quick start and overview
-- Architecture overview (comprehensive with diagrams)
-- All feature guides (13 comprehensive guides):
+- Architecture overview (comprehensive with diagrams; SessionStore subsystem)
+- All feature guides:
   - Simple Queries
   - Interactive Conversations
-  - Configuration Options
-  - Message Types (including task message types)
+  - Configuration Options (including `sessionStore` and `loadTimeoutMs`)
+  - Message Types (task messages, server tool blocks, MirrorErrorMessage)
   - MCP Servers (with ToolAnnotations, tool titles, and status types)
   - Agent Definitions
-  - Extended Thinking Configuration
+  - Extended Thinking Configuration (with `ThinkingDisplay`)
   - Hooks System (with agentId/agentType fields)
   - Permission System
   - Streaming Events
-  - Transport Layer
+  - Transport Layer (with `--session-mirror`, `--thinking-display`, drop `--debug-to-stderr`)
   - Plugin System
   - Session History (listSessions / getSessionMessages)
+  - Session Store (mirror transcripts to S3/Postgres/Redis/custom)
 - Complete API Reference (5 documents):
   - ClaudeSDK (including session history methods)
   - ClaudeSDKClient
@@ -337,6 +348,6 @@ Contributions are welcome! Please see the repository for contribution guidelines
 
 ## Version
 
-Current version: 0.1.11
+Current version: 0.1.13
 
 See [CHANGELOG.md](../docs/CHANGELOG.md) for version history and release notes.

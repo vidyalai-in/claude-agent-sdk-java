@@ -97,7 +97,7 @@ The SDK follows a layered architecture with clear separation of concerns:
 - **Key Configuration Areas**:
   - Tools: `tools()`, `allowedTools()`, `disallowedTools()`
   - Permissions: `permissionMode()`, `canUseTool()`
-  - Sessions: `continueConversation()`, `resume()`, `forkSession()`
+  - Sessions: `continueConversation()`, `resume()`, `forkSession()`, `sessionStore()`, `loadTimeoutMs()`
   - Limits: `maxTurns()`, `maxBudgetUsd()`, `maxThinkingTokens()`
   - Model: `model()`, `fallbackModel()`, `betas()`
   - Environment: `cwd()`, `env()`, `cliPath()`
@@ -200,6 +200,53 @@ The SDK follows a layered architecture with clear separation of concerns:
 
 **Design Pattern**: Command + Factory + Annotation Processing
 
+### 6. SessionStore Subsystem
+
+#### SessionStore (Adapter Protocol)
+- **Purpose**: Mirror session transcripts to external storage (S3, Postgres, Redis, custom backends) so sessions are durable beyond local disk and resumable across hosts.
+- **Required methods**: `append(SessionKey, List<SessionStoreEntry>)`, `load(SessionKey)`.
+- **Optional methods** (with `implements*()` capability probes): `listSessions`, `listSessionSummaries`, `delete`, `listSubkeys`.
+- **Sync + Async API**: every method has a `*Async` (`CompletableFuture`) variant. Adapters with native non-blocking clients (AWS SDK v2 async, R2DBC, Lettuce reactive) override the `*Async` methods directly to avoid a thread hop. The default executor is configured via `SessionStoreExecutor` (per-task virtual threads by default).
+
+**Design Pattern**: Adapter + Capability Negotiation + Dual-API (Sync/Async)
+
+#### TranscriptMirrorBatcher (internal)
+- **Purpose**: Buffer `transcript_mirror` frames the CLI emits on stdout and flush them to `store.appendAsync(...)`.
+- **Key behaviors**:
+  - Eager flush thresholds: `MAX_PENDING_ENTRIES=500`, `MAX_PENDING_BYTES=1 MiB`.
+  - Explicit flush before each `result` message and at end-of-stream / close.
+  - Coalesces frames per `filePath` so each unique file gets one `append` call per flush.
+  - Bounded retry: `MIRROR_APPEND_MAX_ATTEMPTS=3` attempts with `[200ms, 800ms]` backoff. Timeouts are not retried (in-flight call may still land).
+  - Frames whose path falls outside the configured `projectsDir` are dropped with a warning.
+  - Failures surface as `MirrorErrorMessage` in the consumer's stream — never block the conversation.
+
+**Design Pattern**: Producer-Consumer Buffer + Retry with Exponential Backoff
+
+#### SessionResume (internal)
+- **Purpose**: Materialize a stored session into a temp `CLAUDE_CONFIG_DIR` so the CLI subprocess can resume from local disk.
+- **Flow**:
+  1. Load entries via `store.loadAsync()` (or pick the most-recently-modified non-sidechain session for `continueConversation`).
+  2. Write JSONL to a temp directory laid out like `~/.claude/`.
+  3. Copy `.credentials.json` (with `refreshToken` redacted to prevent token consumption from the temp dir) and `.claude.json`.
+  4. Materialize subagent transcripts and `.meta.json` sidecars when the store implements `listSubkeys`.
+  5. Spawn the CLI with `CLAUDE_CONFIG_DIR=<temp dir>`.
+  6. Cleanup on disconnect with retry on transient Windows AV/indexer locks.
+
+**Design Pattern**: Materialized View + Retry Cleanup
+
+#### SessionStoreValidation (internal)
+- **Purpose**: Pre-flight option checks before subprocess spawn. Rejects invalid combinations with `IllegalArgumentException`:
+  - `continueConversation + sessionStore` requires `store.implementsListSessions()`.
+  - `sessionStore + enableFileCheckpointing` is rejected (checkpoints are local-only).
+
+**Design Pattern**: Fail-Fast Validation
+
+#### SessionStoreConformance (public testing helper)
+- **Location**: `in.vidyalai.claude.sdk.testing.SessionStoreConformance`
+- **Purpose**: Framework-agnostic 14-contract behavioral test suite for `SessionStore` adapters. Uses plain `AssertionError` so it works under any test framework (JUnit, TestNG, Spock, plain `main`).
+
+**Design Pattern**: Contract Testing
+
 ## Design Patterns
 
 ### 1. Sealed Interfaces (Pattern Matching)
@@ -207,15 +254,19 @@ Used extensively for type-safe message handling:
 
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
-    SystemMessage, ResultMessage, StreamEvent {}
+    SystemMessage, TaskStartedMessage, TaskProgressMessage,
+    TaskNotificationMessage, MirrorErrorMessage,
+    ResultMessage, StreamEvent, RateLimitEvent {}
 
 // Usage with pattern matching
 switch (message) {
     case UserMessage u -> handleUser(u);
     case AssistantMessage a -> handleAssistant(a);
     case ResultMessage r -> handleResult(r);
+    case MirrorErrorMessage m -> handleMirrorError(m);
     case SystemMessage s -> handleSystem(s);
     case StreamEvent e -> handleStreamEvent(e);
+    // ... task and rate-limit cases
 }
 ```
 

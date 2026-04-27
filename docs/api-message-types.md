@@ -21,7 +21,8 @@ Unknown message types return `null` instead of throwing an exception, allowing t
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
-    TaskNotificationMessage, ResultMessage, StreamEvent, RateLimitEvent {
+    TaskNotificationMessage, MirrorErrorMessage,
+    ResultMessage, StreamEvent, RateLimitEvent {
     String type();
 }
 ```
@@ -141,7 +142,8 @@ record StreamEvent(
 
 ```java
 sealed interface ContentBlock permits TextBlock,
-    ThinkingBlock, ToolUseBlock, ToolResultBlock
+    ThinkingBlock, ToolUseBlock, ToolResultBlock,
+    ServerToolUseBlock, ServerToolResultBlock
 ```
 
 ### TextBlock
@@ -177,6 +179,46 @@ record ToolResultBlock(
     @Nullable Object content,  // Result content
     @Nullable Boolean isError  // Whether this is an error result
 ) implements ContentBlock
+```
+
+### ServerToolUseBlock
+
+Server-side tool invocation (advisor, web_search, web_fetch, code_execution, etc.). The API executes these on the model's behalf — the caller never returns a result.
+
+```java
+record ServerToolUseBlock(
+    String id,                  // Server tool use ID
+    String name,                // ServerToolName value (raw String for forward compat)
+    Map<String, Object> input   // Tool input parameters
+) implements ContentBlock
+```
+
+`ServerToolName` enum values: `ADVISOR`, `WEB_SEARCH`, `WEB_FETCH`, `CODE_EXECUTION`, `BASH_CODE_EXECUTION`, `TEXT_EDITOR_CODE_EXECUTION`, `TOOL_SEARCH_TOOL_REGEX`, `TOOL_SEARCH_TOOL_BM25`.
+
+### ServerToolResultBlock
+
+Result block returned for a server-side tool call. The CLI emits these as `advisor_tool_result` content blocks; `content` is opaque (advisor result types include `advisor_result`, `advisor_redacted_result`, `advisor_tool_result_error`).
+
+```java
+record ServerToolResultBlock(
+    String toolUseId,            // Matches the corresponding ServerToolUseBlock.id
+    Map<String, Object> content  // Raw result content
+) implements ContentBlock
+```
+
+## MirrorErrorMessage
+
+Non-fatal SessionStore append failure. Surfaces after the batcher's retry budget is exhausted; the local-disk transcript is already durable.
+
+```java
+record MirrorErrorMessage(
+    String subtype,                    // always "mirror_error"
+    Map<String, Object> data,          // raw payload
+    @Nullable SessionKey key,          // store key the failed append targeted
+    String error                       // failure description
+) implements Message {
+    String type();                      // returns "system"
+}
 ```
 
 ## RateLimitEvent

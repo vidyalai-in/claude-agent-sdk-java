@@ -534,6 +534,145 @@ List sessions with offset pagination support.
 - `offset` - Number of sessions to skip (for pagination)
 - `includeWorktrees` - Include sessions from git worktrees
 
+## SessionStore-Backed Methods
+
+These methods read/write sessions through a `SessionStore` adapter rather than the local `~/.claude/projects/` filesystem. See the [Session Store guide](./feature-session-store.md) for the full feature documentation.
+
+### projectKeyForDirectory(Path directory)
+
+```java
+public static String projectKeyForDirectory(@Nullable Path directory)
+```
+
+Compute the `SessionStore` `project_key` for a directory using the same realpath + NFC normalization + djb2-hashed sanitization the CLI uses. Defaults to the current working directory when `directory == null`.
+
+**Returns**: Sanitized project key string suitable for `SessionKey.projectKey()`.
+
+### listSessionsFromStore(SessionStore, Path, Integer, int)
+
+```java
+public static List<SDKSessionInfo> listSessionsFromStore(
+    SessionStore sessionStore,
+    @Nullable Path directory,
+    @Nullable Integer limit,
+    int offset)
+```
+
+List sessions from a `SessionStore`. Uses the fast path when `store.implementsListSessionSummaries()` returns `true`; falls back to bounded-concurrency (16) per-session loads otherwise.
+
+**Throws**: `IllegalStateException` if the store implements neither `listSessionSummaries()` nor `listSessions()`.
+
+### getSessionInfoFromStore(SessionStore, String, Path)
+
+```java
+public static @Nullable SDKSessionInfo getSessionInfoFromStore(
+    SessionStore sessionStore, String sessionId, @Nullable Path directory)
+```
+
+Read metadata for a single session from a store. Returns `null` for invalid UUIDs, missing sessions, sidechain sessions, or sessions with no extractable summary.
+
+### getSessionMessagesFromStore(SessionStore, String, Path, Integer, int)
+
+```java
+public static List<SessionMessage> getSessionMessagesFromStore(
+    SessionStore sessionStore, String sessionId,
+    @Nullable Path directory, @Nullable Integer limit, int offset)
+```
+
+Read a session's full conversation transcript from a store. Returns an empty list for invalid UUIDs or missing sessions.
+
+### listSubagentsFromStore(SessionStore, String, Path)
+
+```java
+public static List<String> listSubagentsFromStore(
+    SessionStore sessionStore, String sessionId, @Nullable Path directory)
+```
+
+List subagent IDs for a session by enumerating store subkeys under `subagents/agent-<id>`.
+
+**Throws**: `IllegalStateException` if the store doesn't implement `listSubkeys()`.
+
+### getSubagentMessagesFromStore(SessionStore, String, String, Path, Integer, int)
+
+```java
+public static List<SessionMessage> getSubagentMessagesFromStore(
+    SessionStore sessionStore, String sessionId, String agentId,
+    @Nullable Path directory, @Nullable Integer limit, int offset)
+```
+
+Read a subagent's transcript from a store. Filters out synthetic `agent_metadata` entries.
+
+### renameSessionViaStore(SessionStore, String, String, Path)
+
+```java
+public static void renameSessionViaStore(
+    SessionStore sessionStore, String sessionId, String title,
+    @Nullable Path directory)
+```
+
+Append a `custom-title` entry to the session in the store.
+
+**Throws**: `IllegalArgumentException` if `sessionId` is not a valid UUID or `title` is empty/whitespace-only.
+
+### tagSessionViaStore(SessionStore, String, String, Path)
+
+```java
+public static void tagSessionViaStore(
+    SessionStore sessionStore, String sessionId, @Nullable String tag,
+    @Nullable Path directory)
+```
+
+Append a `tag` entry. Pass `null` for `tag` to clear; tags are Unicode-sanitized before storing.
+
+**Throws**: `IllegalArgumentException` for invalid UUID or empty-after-sanitization tag.
+
+### deleteSessionViaStore(SessionStore, String, Path)
+
+```java
+public static void deleteSessionViaStore(
+    SessionStore sessionStore, String sessionId, @Nullable Path directory)
+```
+
+Delete a session from the store. No-op if the store doesn't implement `delete()` (appropriate for WORM/append-only backends).
+
+### forkSessionViaStore(SessionStore, String, Path, String, String)
+
+```java
+public static ForkSessionResult forkSessionViaStore(
+    SessionStore sessionStore, String sessionId, @Nullable Path directory,
+    @Nullable String upToMessageId, @Nullable String title) throws java.io.IOException
+```
+
+Fork a session into a new branch with fresh UUIDs via the store. Runs the same UUID-remap transform as the on-disk fork — a storage-layer copy is NOT sufficient.
+
+**Throws**: `IllegalArgumentException` for invalid UUIDs; `FileNotFoundException` if the source session is not found in the store.
+
+### importSessionToStore(String, SessionStore, Path)
+
+```java
+public static void importSessionToStore(
+    String sessionId, SessionStore sessionStore, @Nullable Path directory)
+    throws java.io.IOException
+```
+
+Replay a local on-disk session transcript into a `SessionStore`. Convenience overload using `includeSubagents=true` and the default batch size (`TranscriptMirrorBatcher.MAX_PENDING_ENTRIES = 500`).
+
+### importSessionToStore(String, SessionStore, Path, boolean, int)
+
+```java
+public static void importSessionToStore(
+    String sessionId, SessionStore sessionStore, @Nullable Path directory,
+    boolean includeSubagents, int batchSize) throws java.io.IOException
+```
+
+Full version with explicit options.
+
+**Parameters**:
+- `includeSubagents` — recursively import `<sessionDir>/subagents/**/*.jsonl` and `.meta.json` sidecars
+- `batchSize` — entries per `store.append()` call; values `≤ 0` use the default
+
+**Throws**: `IllegalArgumentException` on invalid UUID; `NoSuchFileException` if the session file isn't found.
+
 ## Version Method
 
 ### getVersion()
@@ -550,3 +689,4 @@ Get SDK version string.
 - [Simple Queries Guide](./feature-simple-queries.md)
 - [MCP Servers Guide](./feature-mcp-servers.md)
 - [Session History Guide](./feature-session-history.md)
+- [Session Store Guide](./feature-session-store.md)

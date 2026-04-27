@@ -5,6 +5,7 @@ Control Claude's extended thinking behavior with fine-grained configuration opti
 ## Table of Contents
 - [Overview](#overview)
 - [ThinkingConfig Types](#thinkingconfig-types)
+- [Thinking Display](#thinking-display)
 - [Effort Levels](#effort-levels)
 - [Usage Examples](#usage-examples)
 - [Pattern Matching](#pattern-matching)
@@ -36,12 +37,19 @@ ThinkingConfig is a sealed interface with three variants:
 Use adaptive thinking where the system automatically determines how much thinking to use. Passes `--thinking adaptive` to the CLI.
 
 ```java
+// Default — no display override
 ThinkingConfig config = new ThinkingConfigAdaptive();
+
+// With explicit display
+ThinkingConfig display = new ThinkingConfigAdaptive(ThinkingDisplay.SUMMARIZED);
 
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .thinking(new ThinkingConfigAdaptive())
     .build();
 ```
+
+**Parameters**:
+- `display` (optional, may be `null`) — see [Thinking Display](#thinking-display) below. When set, forwarded as `--thinking-display <value>`.
 
 **Best for**:
 - Complex reasoning tasks
@@ -51,10 +59,14 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 ### ThinkingConfigEnabled
 
-Enable thinking with a specific token budget. Passes `--max-thinking-tokens <budgetTokens>` to the CLI.
+Enable thinking with a specific token budget. Passes `--max-thinking-tokens <budgetTokens>` to the CLI. When `display` is set, also passes `--thinking-display <value>`.
 
 ```java
+// Default — no display override
 ThinkingConfig config = new ThinkingConfigEnabled(10000);  // 10K tokens
+
+// With explicit display
+ThinkingConfig display = new ThinkingConfigEnabled(10000, ThinkingDisplay.OMITTED);
 
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .thinking(new ThinkingConfigEnabled(8000))  // 8K token budget
@@ -62,9 +74,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```
 
 **Parameters**:
-- `budgetTokens` (int) - Maximum thinking tokens (must be positive)
+- `budgetTokens` (int) — Maximum thinking tokens (must be positive)
+- `display` (optional, may be `null`) — see [Thinking Display](#thinking-display) below
 
-**Throws**: `IllegalArgumentException` if budgetTokens ≤ 0
+**Throws**: `IllegalArgumentException` if `budgetTokens ≤ 0`
 
 **Best for**:
 - Budget-conscious applications
@@ -89,6 +102,37 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - When latency is critical
 - Cost-sensitive operations
 - Straightforward tasks that don't require reasoning
+
+## Thinking Display
+
+`ThinkingDisplay` controls whether the model returns thinking text or only signature blocks. Forwarded to the CLI as `--thinking-display <value>`.
+
+```java
+public enum ThinkingDisplay {
+    SUMMARIZED("summarized"),  // Return thinking text in the assistant stream
+    OMITTED("omitted");        // Omit thinking text; return signature blocks only
+}
+```
+
+**When to set**:
+- Opus 4.7+ defaults to `omitted` (signature-only). Pass `SUMMARIZED` if you want the text in the stream.
+- Older models can pass either — adaptive/enabled both honor the `display` field.
+
+**Compatibility**:
+- Forwarded only for `ThinkingConfigAdaptive` and `ThinkingConfigEnabled`. `ThinkingConfigDisabled` never emits `--thinking-display`.
+- Leaving `display` as `null` (the no-arg constructors) means the CLI's model-specific default is used.
+
+```java
+// Force summarized output regardless of model default
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .thinking(new ThinkingConfigAdaptive(ThinkingDisplay.SUMMARIZED))
+    .build();
+
+// Suppress thinking text on a fixed budget
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .thinking(new ThinkingConfigEnabled(20000, ThinkingDisplay.OMITTED))
+    .build();
+```
 
 ## Effort Levels
 
@@ -355,21 +399,31 @@ String type()  // Returns "adaptive", "enabled", or "disabled"
 ### ThinkingConfigAdaptive Record
 
 ```java
-public record ThinkingConfigAdaptive() implements ThinkingConfig
+public record ThinkingConfigAdaptive(@Nullable ThinkingDisplay display) implements ThinkingConfig {
+    public ThinkingConfigAdaptive() { this(null); }   // convenience: no display override
+}
 ```
 
-CLI flag: `--thinking adaptive`
+CLI flags: `--thinking adaptive` (always); `--thinking-display <value>` (when `display != null`).
 
 ### ThinkingConfigEnabled Record
 
 ```java
-public record ThinkingConfigEnabled(int budgetTokens) implements ThinkingConfig
+public record ThinkingConfigEnabled(
+    int budgetTokens,
+    @Nullable ThinkingDisplay display
+) implements ThinkingConfig {
+    public ThinkingConfigEnabled(int budgetTokens) { this(budgetTokens, null); }
+}
 ```
 
 **Parameters**:
-- `budgetTokens` - Maximum thinking tokens (must be > 0)
+- `budgetTokens` — Maximum thinking tokens (must be > 0)
+- `display` (optional, may be `null`) — see `ThinkingDisplay` below
 
-**Throws**: `IllegalArgumentException` if budgetTokens ≤ 0
+**Throws**: `IllegalArgumentException` if `budgetTokens ≤ 0`
+
+CLI flags: `--max-thinking-tokens <budgetTokens>` (always); `--thinking-display <value>` (when `display != null`).
 
 ### ThinkingConfigDisabled Record
 
@@ -377,7 +431,18 @@ public record ThinkingConfigEnabled(int budgetTokens) implements ThinkingConfig
 public record ThinkingConfigDisabled() implements ThinkingConfig
 ```
 
-CLI flag: `--thinking disabled`
+CLI flag: `--thinking disabled`. `--thinking-display` is never emitted for the disabled variant.
+
+### ThinkingDisplay Enum
+
+```java
+public enum ThinkingDisplay {
+    SUMMARIZED("summarized"),
+    OMITTED("omitted");
+}
+```
+
+Forwarded as the value of `--thinking-display`.
 
 ### ClaudeAgentOptions Methods
 
