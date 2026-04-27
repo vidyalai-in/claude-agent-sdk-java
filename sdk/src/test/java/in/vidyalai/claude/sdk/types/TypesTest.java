@@ -25,7 +25,10 @@ import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.AssistantMessageError;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
 import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.message.MirrorErrorMessage;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
+import in.vidyalai.claude.sdk.types.message.ServerToolResultBlock;
+import in.vidyalai.claude.sdk.types.message.ServerToolUseBlock;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
@@ -255,6 +258,7 @@ class TypesTest {
             case TaskStartedMessage t -> "task_started: " + t.taskId();
             case TaskProgressMessage t -> "task_progress: " + t.taskId();
             case TaskNotificationMessage t -> "task_notification: " + t.status();
+            case MirrorErrorMessage m -> "mirror_error: " + m.error();
             case ResultMessage r -> "result: " + r.result();
             case StreamEvent e -> "event: " + e.eventType();
             case RateLimitEvent rle -> "rate_limit: " + rle.rateLimitInfo().status();
@@ -272,6 +276,8 @@ class TypesTest {
             case ThinkingBlock t -> "thinking: " + t.thinking();
             case ToolUseBlock t -> "tool: " + t.name();
             case ToolResultBlock t -> "result: " + t.toolUseId();
+            case ServerToolUseBlock s -> "server_tool: " + s.name();
+            case ServerToolResultBlock s -> "server_tool_result: " + s.toolUseId();
         };
 
         assertThat(result).isEqualTo("tool: Bash");

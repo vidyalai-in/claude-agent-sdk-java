@@ -17,6 +17,9 @@ import in.vidyalai.claude.sdk.types.message.RateLimitInfo;
 import in.vidyalai.claude.sdk.types.message.RateLimitStatus;
 import in.vidyalai.claude.sdk.types.message.RateLimitType;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
+import in.vidyalai.claude.sdk.types.message.ServerToolResultBlock;
+import in.vidyalai.claude.sdk.types.message.ServerToolUseBlock;
+import in.vidyalai.claude.sdk.types.message.MirrorErrorMessage;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
@@ -29,6 +32,7 @@ import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
 import in.vidyalai.claude.sdk.types.message.ToolResultBlock;
 import in.vidyalai.claude.sdk.types.message.ToolUseBlock;
 import in.vidyalai.claude.sdk.types.message.UserMessage;
+import in.vidyalai.claude.sdk.types.session.SessionKey;
 
 /**
  * Parser for converting raw JSON messages to typed Message objects.
@@ -187,6 +191,13 @@ public final class MessageParser {
                     (String) block.get("tool_use_id"),
                     block.get("content"),
                     (Boolean) block.get("is_error"));
+            case "server_tool_use" -> new ServerToolUseBlock(
+                    (String) block.get("id"),
+                    (String) block.get("name"),
+                    (Map<String, Object>) block.get("input"));
+            case "advisor_tool_result" -> new ServerToolResultBlock(
+                    (String) block.get("tool_use_id"),
+                    (Map<String, Object>) block.get("content"));
             default -> throw new MessageParseException("Unknown content block type: " + type, block);
         };
     }
@@ -229,6 +240,21 @@ public final class MessageParser {
                         getRequired(data, "session_id", String.class),
                         (String) data.get("tool_use_id"),
                         parseTaskUsageOptional((Map<String, Object>) data.get("usage")));
+                case "mirror_error" -> {
+                    // SDK-synthesized via Query.reportMirrorError — never emitted by the CLI subprocess.
+                    Object rawKey = data.get("key");
+                    SessionKey key = null;
+                    if (rawKey instanceof Map<?, ?> keyMap) {
+                        Object pk = ((Map<String, Object>) keyMap).get("project_key");
+                        Object sid = ((Map<String, Object>) keyMap).get("session_id");
+                        Object sp = ((Map<String, Object>) keyMap).get("subpath");
+                        if (pk instanceof String pkStr && sid instanceof String sidStr) {
+                            key = new SessionKey(pkStr, sidStr, sp instanceof String spStr ? spStr : null);
+                        }
+                    }
+                    String error = data.get("error") instanceof String s ? s : "";
+                    yield new MirrorErrorMessage(subtype, data, key, error);
+                }
                 default -> new SystemMessage(subtype, data);
             };
         } catch (ClassCastException e) {

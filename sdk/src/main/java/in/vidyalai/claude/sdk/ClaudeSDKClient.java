@@ -20,6 +20,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
 import in.vidyalai.claude.sdk.internal.QueryHandler;
+import in.vidyalai.claude.sdk.internal.SessionResume;
+import in.vidyalai.claude.sdk.internal.SessionStoreValidation;
+import in.vidyalai.claude.sdk.internal.TranscriptMirrorBatcher;
 import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.transport.Transport;
@@ -150,6 +153,12 @@ public class ClaudeSDKClient implements AutoCloseable {
     private volatile QueryHandler query;
 
     /**
+     * Materialized resume state when {@code sessionStore} + {@code resume}/
+     * {@code continueConversation} are combined. Cleaned up on disconnect.
+     */
+    private volatile SessionResume.@Nullable MaterializedResume materialized;
+
+    /**
      * Creates a new client with the specified options.
      *
      * @param options the agent options
@@ -219,6 +228,25 @@ public class ClaudeSDKClient implements AutoCloseable {
                         .name("ClaudeSDKClient-Streaming-", 0)
                         .factory());
 
+        // Fail fast on invalid sessionStore option combinations before
+        // spawning the subprocess.
+        SessionStoreValidation.validate(options);
+
+        // resume/continue + sessionStore: load the session from the store
+        // into a temp CLAUDE_CONFIG_DIR for the subprocess to resume from.
+        // Skipped when a custom transport was supplied — the materialized
+        // options never reach a pre-constructed transport, so loading the
+        // store and writing .credentials.json to a temp dir would be wasted
+        // work.
+        if (customTransport == null) {
+            try {
+                materialized = SessionResume.materializeResumeSession(options);
+            } catch (java.io.IOException | RuntimeException e) {
+                throw new CLIConnectionException(
+                        "Failed to materialize session from session store: " + e.getMessage(), e);
+            }
+        }
+
         // Validate permission settings
         ClaudeAgentOptions effectiveOptions = options;
         if (options.canUseTool() != null) {
@@ -231,6 +259,10 @@ public class ClaudeSDKClient implements AutoCloseable {
             effectiveOptions = options.withPermissionPromptToolName("stdio");
         }
 
+        if (materialized != null) {
+            effectiveOptions = SessionResume.applyMaterializedOptions(effectiveOptions, materialized);
+        }
+
         // Use provided custom transport or create subprocess transport
         if (customTransport != null) {
             transport = customTransport;
@@ -238,7 +270,19 @@ public class ClaudeSDKClient implements AutoCloseable {
             transport = new SubprocessCLITransport(effectiveOptions);
         }
 
-        transport.connect();
+        try {
+            transport.connect();
+        } catch (RuntimeException e) {
+            // If transport connect fails, clean up the materialized temp dir
+            // before propagating — disconnect() won't run because connected=false.
+            // CLIConnectionException extends ClaudeSDKException extends RuntimeException
+            // so a single catch covers both checked-style and unchecked failures.
+            if (materialized != null) {
+                materialized.cleanup();
+                materialized = null;
+            }
+            throw e;
+        }
 
         // Calculate initialize timeout
         long timeoutMs = Long.parseLong(System.getenv().getOrDefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "60000"));
@@ -263,6 +307,19 @@ public class ClaudeSDKClient implements AutoCloseable {
                 effectiveOptions.skills(),
                 initializeTimeout,
                 effectiveOptions.maxMsgQSize());
+
+        // Wire the SessionStore mirror batcher BEFORE starting the read
+        // loop so we don't miss any transcript_mirror frames the CLI emits
+        // immediately on init.
+        if (effectiveOptions.sessionStore() != null) {
+            QueryHandler q = query;
+            TranscriptMirrorBatcher batcher = SessionResume.buildMirrorBatcher(
+                    effectiveOptions.sessionStore(),
+                    materialized,
+                    effectiveOptions.env(),
+                    q::reportMirrorError);
+            q.setTranscriptMirrorBatcher(batcher);
+        }
 
         // Start reading messages and initialize
         query.start();
@@ -705,6 +762,17 @@ public class ClaudeSDKClient implements AutoCloseable {
 
         // Clear cached state
         transport = null;
+
+        // Clean up materialized resume temp dir AFTER the subprocess/reader
+        // have closed so we don't pull the rug out from under them.
+        if (materialized != null) {
+            try {
+                materialized.cleanup();
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Error cleaning up materialized resume temp dir", e);
+            }
+            materialized = null;
+        }
 
         // Reset connection flag
         connected.set(false);

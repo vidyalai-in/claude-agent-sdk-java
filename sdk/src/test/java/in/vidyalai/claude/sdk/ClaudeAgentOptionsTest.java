@@ -21,6 +21,7 @@ import in.vidyalai.claude.sdk.types.mcp.McpServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpStdioServerConfig;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;
 import in.vidyalai.claude.sdk.types.permission.PermissionResultAllow;
+import in.vidyalai.claude.sdk.types.session.InMemorySessionStore;
 
 class ClaudeAgentOptionsTest {
 
@@ -255,6 +256,29 @@ class ClaudeAgentOptionsTest {
 
         assertThatThrownBy(() -> options.env().put("NEW", "VALUE"))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void sessionStore_defaultsToNullAndDefaultLoadTimeout() {
+        ClaudeAgentOptions defaults = ClaudeAgentOptions.defaults();
+        assertThat(defaults.sessionStore()).isNull();
+        assertThat(defaults.loadTimeoutMs()).isEqualTo(60_000L);
+    }
+
+    @Test
+    void sessionStore_propagatedThroughBuilder() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .sessionStore(store)
+                .loadTimeoutMs(5_000L)
+                .build();
+
+        assertThat(options.sessionStore()).isSameAs(store);
+        assertThat(options.loadTimeoutMs()).isEqualTo(5_000L);
+
+        ClaudeAgentOptions copy = options.toBuilder().build();
+        assertThat(copy.sessionStore()).isSameAs(store);
+        assertThat(copy.loadTimeoutMs()).isEqualTo(5_000L);
     }
 
 }

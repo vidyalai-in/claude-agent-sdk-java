@@ -12,6 +12,7 @@ package in.vidyalai.claude.sdk.types.message;
  * <li>{@link TaskStartedMessage} - Task started system message</li>
  * <li>{@link TaskProgressMessage} - Task progress system message</li>
  * <li>{@link TaskNotificationMessage} - Task notification system message</li>
+ * <li>{@link MirrorErrorMessage} - Session-store mirror append failure</li>
  * <li>{@link ResultMessage} - Final result with cost/usage info</li>
  * <li>{@link StreamEvent} - Partial streaming events</li>
  * <li>{@link RateLimitEvent} - Rate limit status change events</li>
@@ -29,13 +30,14 @@ package in.vidyalai.claude.sdk.types.message;
  *     case TaskStartedMessage task -> System.out.println("Task started: " + task.taskId());
  *     case TaskProgressMessage task -> System.out.println("Task progress: " + task.taskId());
  *     case TaskNotificationMessage task -> System.out.println("Task done: " + task.status());
+ *     case MirrorErrorMessage mirror -> System.err.println("Mirror error: " + mirror.error());
  *     case StreamEvent event -> handleStreamEvent(event);
  *     case RateLimitEvent rle -> handleRateLimit(rle);
  * }
  * }</pre>
  */
 public sealed interface Message permits UserMessage, AssistantMessage, SystemMessage,
-        TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage,
+        TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage, MirrorErrorMessage,
         ResultMessage, StreamEvent, RateLimitEvent {
 
     /**

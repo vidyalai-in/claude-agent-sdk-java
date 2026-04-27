@@ -26,6 +26,9 @@ import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
 import in.vidyalai.claude.sdk.types.message.TaskUsage;
 import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
+import in.vidyalai.claude.sdk.types.message.MirrorErrorMessage;
+import in.vidyalai.claude.sdk.types.message.ServerToolResultBlock;
+import in.vidyalai.claude.sdk.types.message.ServerToolUseBlock;
 import in.vidyalai.claude.sdk.types.message.ToolResultBlock;
 import in.vidyalai.claude.sdk.types.message.ToolUseBlock;
 import in.vidyalai.claude.sdk.types.message.UserMessage;
@@ -1235,6 +1238,100 @@ class MessageParserTest {
         ResultMessage rm = (ResultMessage) message;
         assertThat(rm.errors()).isNull();
         assertThat(rm.result()).isEqualTo("Task completed successfully");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseAssistantMessage_withServerToolUseBlock() throws Exception {
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "model", "claude-sonnet-4-5",
+                        "content", List.of(Map.of(
+                                "type", "server_tool_use",
+                                "id", "stu-1",
+                                "name", "advisor",
+                                "input", Map.of("query", "How are markets?")))));
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(AssistantMessage.class);
+        AssistantMessage am = (AssistantMessage) message;
+        assertThat(am.content()).hasSize(1);
+        ContentBlock block = am.content().get(0);
+        assertThat(block).isInstanceOf(ServerToolUseBlock.class);
+        ServerToolUseBlock stu = (ServerToolUseBlock) block;
+        assertThat(stu.id()).isEqualTo("stu-1");
+        assertThat(stu.name()).isEqualTo("advisor");
+        assertThat(stu.type()).isEqualTo("server_tool_use");
+    }
+
+    @SuppressWarnings({ "null", "unchecked" })
+    @Test
+    void parseAssistantMessage_withAdvisorToolResultBlock() throws Exception {
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "model", "claude-sonnet-4-5",
+                        "content", List.of(Map.of(
+                                "type", "advisor_tool_result",
+                                "tool_use_id", "stu-1",
+                                "content", Map.of(
+                                        "type", "advisor_search_result",
+                                        "results", List.of(Map.of("url", "https://x")))))));
+
+        Message message = MessageParser.parse(data);
+        AssistantMessage am = (AssistantMessage) message;
+        ContentBlock block = am.content().get(0);
+        assertThat(block).isInstanceOf(ServerToolResultBlock.class);
+        ServerToolResultBlock str = (ServerToolResultBlock) block;
+        assertThat(str.toolUseId()).isEqualTo("stu-1");
+        assertThat(str.content()).containsKey("type");
+        assertThat(str.type()).isEqualTo("server_tool_result");
+    }
+
+    @SuppressWarnings({ "null", "unchecked" })
+    @Test
+    void parseAssistantMessage_withRedactedAdvisorResultBlock() throws Exception {
+        // External API users get advisor output as an encrypted blob in the content dict.
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of(
+                        "model", "claude-sonnet-4-5",
+                        "content", List.of(Map.of(
+                                "type", "advisor_tool_result",
+                                "tool_use_id", "stu-1",
+                                "content", Map.of(
+                                        "type", "advisor_redacted_result",
+                                        "encrypted_content", "EuYDCioIDhgC...")))));
+
+        Message message = MessageParser.parse(data);
+        AssistantMessage am = (AssistantMessage) message;
+        ContentBlock block = am.content().get(0);
+        assertThat(block).isInstanceOf(ServerToolResultBlock.class);
+        ServerToolResultBlock str = (ServerToolResultBlock) block;
+        assertThat(str.content()).containsEntry("type", "advisor_redacted_result");
+        assertThat(str.content()).containsEntry("encrypted_content", "EuYDCioIDhgC...");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseSystemMessage_mirrorErrorSubtype() throws Exception {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "system");
+        data.put("subtype", "mirror_error");
+        data.put("error", "S3 timeout");
+        data.put("key", Map.of(
+                "project_key", "my-project",
+                "session_id", "abc12345-1234-1234-1234-123456789012"));
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(MirrorErrorMessage.class);
+        MirrorErrorMessage mem = (MirrorErrorMessage) message;
+        assertThat(mem.subtype()).isEqualTo("mirror_error");
+        assertThat(mem.error()).isEqualTo("S3 timeout");
+        assertThat(mem.key()).isNotNull();
+        assertThat(mem.key().projectKey()).isEqualTo("my-project");
+        assertThat(mem.key().sessionId()).isEqualTo("abc12345-1234-1234-1234-123456789012");
     }
 
 }

@@ -293,6 +293,10 @@ public class QueryHandler implements AutoCloseable {
     private final CompletableFuture<Void> firstResultEvent = new CompletableFuture<>();
     private final Duration streamCloseTimeout;
 
+    // SessionStore mirroring (set via setTranscriptMirrorBatcher)
+    @Nullable
+    private volatile TranscriptMirrorBatcher transcriptMirrorBatcher;
+
     /**
      * Creates a new QueryHandler.
      *
@@ -452,6 +456,50 @@ public class QueryHandler implements AutoCloseable {
     }
 
     /**
+     * Attach a {@link TranscriptMirrorBatcher} that receives
+     * {@code transcript_mirror} frames.
+     *
+     * <p>When set, the read loop peels {@code transcript_mirror} frames off
+     * stdout (they are not yielded to consumers), enqueues them on the
+     * batcher, and flushes before yielding each {@code result} message.
+     */
+    public void setTranscriptMirrorBatcher(TranscriptMirrorBatcher batcher) {
+        this.transcriptMirrorBatcher = batcher;
+    }
+
+    /**
+     * Surface a {@link in.vidyalai.claude.sdk.types.session.SessionStore#append}
+     * failure as a {@code mirror_error} system message in the consumer stream.
+     *
+     * <p>Called from the batcher's {@code onError}; the dropped batch is not
+     * retried (at-most-once delivery), so this is the consumer's only signal.
+     * Non-blocking — if the message buffer is full the error is logged and
+     * dropped rather than back-pressuring the read loop.
+     */
+    public void reportMirrorError(in.vidyalai.claude.sdk.types.session.@Nullable SessionKey key, String error) {
+        Map<String, Object> msg = new HashMap<>();
+        msg.put("type", "system");
+        msg.put("subtype", "mirror_error");
+        msg.put("error", error);
+        if (key != null) {
+            Map<String, Object> keyMap = new HashMap<>();
+            keyMap.put("project_key", key.projectKey());
+            keyMap.put("session_id", key.sessionId());
+            if (key.subpath() != null) {
+                keyMap.put("subpath", key.subpath());
+            }
+            msg.put("key", keyMap);
+            msg.put("session_id", key.sessionId());
+        } else {
+            msg.put("session_id", "");
+        }
+        msg.put("uuid", java.util.UUID.randomUUID().toString());
+        if (!messageQueue.offer(msg)) {
+            logger.warning("Dropping mirror_error message (buffer full)");
+        }
+    }
+
+    /**
      * Starts reading messages from transport.
      *
      * @throws IllegalStateException if already closed or already started
@@ -497,10 +545,48 @@ public class QueryHandler implements AutoCloseable {
                     // executor handles each request in its own virtual thread and
                     // we currently don't track them individually for cancellation)
                     continue;
+                } else if ("transcript_mirror".equals(msgType)) {
+                    // SessionStore write path: peel mirror frames off stdout
+                    // and hand to the batcher; do NOT yield to consumers.
+                    TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
+                    if (batcher != null) {
+                        Object filePath = message.get("filePath");
+                        Object entriesObj = message.get("entries");
+                        if (filePath instanceof String fp && entriesObj instanceof List<?> entriesList) {
+                            List<in.vidyalai.claude.sdk.types.session.SessionStoreEntry> entries = new ArrayList<>();
+                            for (Object item : entriesList) {
+                                if (item instanceof Map<?, ?> m) {
+                                    @SuppressWarnings("unchecked")
+                                    Map<String, Object> em = (Map<String, Object>) m;
+                                    try {
+                                        entries.add(in.vidyalai.claude.sdk.types.session.SessionStoreEntry.of(em));
+                                    } catch (RuntimeException re) {
+                                        logger.fine("Skipping malformed transcript_mirror entry: " + re.getMessage());
+                                    }
+                                }
+                            }
+                            if (!entries.isEmpty()) {
+                                batcher.enqueue(fp, entries);
+                            }
+                        }
+                    }
+                    continue;
                 }
 
                 // Track results for proper stream closure
                 if ("result".equals(msgType)) {
+                    // Flush pending transcript mirror entries before yielding
+                    // result so consumers observing the result can rely on the
+                    // SessionStore being up to date for this turn.
+                    TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
+                    if (batcher != null) {
+                        try {
+                            batcher.flush().get(5, TimeUnit.SECONDS);
+                        } catch (Exception flushEx) {
+                            logger.fine("Mirror flush before result completed exceptionally: "
+                                    + flushEx.getMessage());
+                        }
+                    }
                     firstResultEvent.complete(null);
                 }
 
@@ -535,6 +621,17 @@ public class QueryHandler implements AutoCloseable {
                 }
             }
         } finally {
+            // Final flush before end-of-stream so an early stdout EOF or
+            // transport error doesn't drop entries batched this turn.
+            TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
+            if (batcher != null) {
+                try {
+                    batcher.flush().get(5, TimeUnit.SECONDS);
+                } catch (Exception flushEx) {
+                    logger.fine("Mirror flush at end-of-stream completed exceptionally: "
+                            + flushEx.getMessage());
+                }
+            }
             // Signal end of stream
             try {
                 Map<String, Object> endMessage = new HashMap<>();
@@ -997,6 +1094,17 @@ public class QueryHandler implements AutoCloseable {
         logger.fine("Closing QueryHandler");
 
         try {
+            // 0. Final-flush mirror entries before tearing down so .return()/break
+            // don't drop the current turn when the process exits immediately.
+            TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
+            if (batcher != null) {
+                try {
+                    batcher.close().get(5, TimeUnit.SECONDS);
+                } catch (Exception flushEx) {
+                    logger.fine("Mirror close flush completed exceptionally: " + flushEx.getMessage());
+                }
+            }
+
             // 1. Complete all pending futures exceptionally
             ClaudeSDKException closedException = new ClaudeSDKException("QueryHandler is closed");
             for (CompletableFuture<ControlResponse> future : pendingControlResponses.values()) {

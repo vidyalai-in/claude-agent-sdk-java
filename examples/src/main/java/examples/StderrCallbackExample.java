@@ -2,7 +2,6 @@ package examples;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Consumer;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
@@ -53,10 +52,13 @@ public class StderrCallbackExample {
             }
         };
 
-        // Create options with stderr callback and enable debug mode
+        // Create options with a stderr callback. The callback receives any
+        // stderr the CLI emits (warnings, errors). For verbose CLI debug
+        // logs, pass {@code extraArgs(Map.of("debug-file", "/path/to/log"))}
+        // and read that file instead — the legacy {@code --debug-to-stderr}
+        // flag was removed in upstream prep for the CLI flag's deprecation.
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .stderrCallback(stderrCallback)
-                .extraArgs(Map.of("debug-to-stderr", "")) // Enable debug output
                 .build();
 
         // Run a query
@@ -106,7 +108,6 @@ public class StderrCallbackExample {
 
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .stderrCallback(stderrCallback)
-                .extraArgs(Map.of("debug-to-stderr", ""))
                 .build();
 
         List<Message> messages = ClaudeSDK.query("Tell me one line joke", options);

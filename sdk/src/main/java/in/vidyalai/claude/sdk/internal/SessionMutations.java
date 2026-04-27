@@ -265,6 +265,54 @@ public class SessionMutations {
         List<Map<String, Object>> transcript = parsed.transcript;
         List<Object> contentReplacements = parsed.contentReplacements;
 
+        BuildForkLinesResult result = buildForkLines(
+                transcript, contentReplacements, sessionId, upToMessageId, title,
+                () -> deriveTitleFromBytes(contentBytes));
+
+        // Write new session file
+        Path forkPath = projectDir.resolve(result.forkedSessionId + ".jsonl");
+        String forkContent = String.join("\n", result.lines) + "\n";
+        Files.writeString(forkPath, forkContent,
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE);
+
+        return new ForkSessionResult(result.forkedSessionId);
+    }
+
+    /**
+     * Result of {@link #buildForkLines}. Package-private so {@link SessionStores} can
+     * reuse the fork transform without going through disk I/O.
+     */
+    static final class BuildForkLinesResult {
+        final String forkedSessionId;
+        final List<String> lines;
+
+        BuildForkLinesResult(String forkedSessionId, List<String> lines) {
+            this.forkedSessionId = forkedSessionId;
+            this.lines = lines;
+        }
+    }
+
+    /**
+     * Core fork transform — remap UUIDs and produce serialized JSONL lines.
+     *
+     * <p>Shared by the filesystem path ({@link #forkSession}) and the
+     * {@link SessionStore}-backed path ({@link SessionStores#forkSessionViaStore}).
+     * Each line is a compact JSON string without a trailing newline.
+     *
+     * @param deriveTitle invoked only when no explicit {@code title} is given,
+     *                    so callers don't pay for the derivation when not needed.
+     */
+    @SuppressWarnings("null")
+    static BuildForkLinesResult buildForkLines(
+            List<Map<String, Object>> transcript,
+            List<Object> contentReplacements,
+            String sessionId,
+            @Nullable String upToMessageId,
+            @Nullable String title,
+            java.util.function.Supplier<String> deriveTitle) throws IOException {
+
         // Filter out sidechains
         transcript = transcript.stream()
                 .filter(e -> !Boolean.TRUE.equals(e.get("isSidechain")))
@@ -290,14 +338,11 @@ public class SessionMutations {
             transcript = new ArrayList<>(transcript.subList(0, cutoff + 1));
         }
 
-        // Build UUID mapping for all entries (including progress, for parentUuid chain
-        // walk)
         Map<String, String> uuidMapping = new LinkedHashMap<>();
         for (Map<String, Object> entry : transcript) {
             uuidMapping.put((String) entry.get("uuid"), UUID.randomUUID().toString());
         }
 
-        // Filter out progress messages from written output
         List<Map<String, Object>> writable = transcript.stream()
                 .filter(e -> !"progress".equals(e.get("type")))
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
@@ -307,7 +352,6 @@ public class SessionMutations {
                     "Session " + sessionId + " has no messages to fork");
         }
 
-        // Build lookup by uuid for parentUuid chain walk
         Map<String, Map<String, Object>> byUuid = new LinkedHashMap<>();
         for (Map<String, Object> entry : transcript) {
             byUuid.put((String) entry.get("uuid"), entry);
@@ -323,7 +367,6 @@ public class SessionMutations {
             Map<String, Object> original = writable.get(i);
             String newUuid = uuidMapping.get(original.get("uuid"));
 
-            // Resolve parentUuid, skipping progress ancestors
             String newParentUuid = null;
             String parentId = (String) original.get("parentUuid");
             while (parentId != null) {
@@ -338,12 +381,10 @@ public class SessionMutations {
                 parentId = (String) parent.get("parentUuid");
             }
 
-            // Only update timestamp on the last message (leaf detection on resume)
             String timestamp = (i == writable.size() - 1)
                     ? now
                     : (String) original.getOrDefault("timestamp", now);
 
-            // Remap logicalParentUuid (compact-boundary backpointer)
             String logicalParent = (String) original.get("logicalParentUuid");
             String newLogicalParent = logicalParent != null
                     ? uuidMapping.get(logicalParent)
@@ -360,7 +401,6 @@ public class SessionMutations {
                     "sessionId", sessionId,
                     "messageUuid", original.get("uuid")));
 
-            // Remove fields that would leak state from the source session
             for (String key : List.of("teamName", "agentName", "slug", "sourceToolAssistantUUID")) {
                 forked.remove(key);
             }
@@ -368,38 +408,19 @@ public class SessionMutations {
             lines.add(MAPPER.writeValueAsString(forked));
         }
 
-        // Append content-replacement entry (if any) with the fork's sessionId
         if (!contentReplacements.isEmpty()) {
             Map<String, Object> crEntry = new LinkedHashMap<>();
             crEntry.put("type", "content-replacement");
             crEntry.put("sessionId", forkedSessionId);
             crEntry.put("replacements", contentReplacements);
+            crEntry.put("uuid", UUID.randomUUID().toString());
+            crEntry.put("timestamp", now);
             lines.add(MAPPER.writeValueAsString(crEntry));
         }
 
-        // Derive title: explicit > original customTitle/aiTitle > first prompt
         String forkTitle = (title != null) ? title.strip() : null;
         if (forkTitle == null || forkTitle.isEmpty()) {
-            int bufLen = contentBytes.length;
-            int headLen = Math.min(bufLen, Sessions.LITE_READ_BUF_SIZE);
-            String head = new String(contentBytes, 0, headLen, StandardCharsets.UTF_8);
-            int tailStart = Math.max(0, bufLen - Sessions.LITE_READ_BUF_SIZE);
-            String tail = new String(contentBytes, tailStart,
-                    bufLen - tailStart, StandardCharsets.UTF_8);
-
-            String base = Sessions.extractLastJsonStringField(tail, "customTitle");
-            if (base == null) {
-                base = Sessions.extractLastJsonStringField(head, "customTitle");
-            }
-            if (base == null) {
-                base = Sessions.extractLastJsonStringField(tail, "aiTitle");
-            }
-            if (base == null) {
-                base = Sessions.extractLastJsonStringField(head, "aiTitle");
-            }
-            if (base == null) {
-                base = Sessions.extractFirstPromptFromHead(head);
-            }
+            String base = deriveTitle.get();
             if (base == null || base.isEmpty()) {
                 base = "Forked session";
             }
@@ -410,17 +431,42 @@ public class SessionMutations {
         titleEntry.put("type", "custom-title");
         titleEntry.put("sessionId", forkedSessionId);
         titleEntry.put("customTitle", forkTitle);
+        titleEntry.put("uuid", UUID.randomUUID().toString());
+        titleEntry.put("timestamp", now);
         lines.add(MAPPER.writeValueAsString(titleEntry));
 
-        // Write new session file
-        Path forkPath = projectDir.resolve(forkedSessionId + ".jsonl");
-        String forkContent = String.join("\n", lines) + "\n";
-        Files.writeString(forkPath, forkContent,
-                StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE_NEW,
-                StandardOpenOption.WRITE);
+        return new BuildForkLinesResult(forkedSessionId, lines);
+    }
 
-        return new ForkSessionResult(forkedSessionId);
+    /**
+     * Title derivation for the disk path — head/tail byte scan over the
+     * source JSONL file. Mirrors the Python SDK's {@code _derive_title} closure.
+     */
+    private static @Nullable String deriveTitleFromBytes(byte[] contentBytes) {
+        int bufLen = contentBytes.length;
+        int headLen = Math.min(bufLen, Sessions.LITE_READ_BUF_SIZE);
+        String head = new String(contentBytes, 0, headLen, StandardCharsets.UTF_8);
+        int tailStart = Math.max(0, bufLen - Sessions.LITE_READ_BUF_SIZE);
+        String tail = new String(contentBytes, tailStart,
+                bufLen - tailStart, StandardCharsets.UTF_8);
+
+        String base = Sessions.extractLastJsonStringField(tail, "customTitle");
+        if (base == null) {
+            base = Sessions.extractLastJsonStringField(head, "customTitle");
+        }
+        if (base == null) {
+            base = Sessions.extractLastJsonStringField(tail, "aiTitle");
+        }
+        if (base == null) {
+            base = Sessions.extractLastJsonStringField(head, "aiTitle");
+        }
+        if (base == null) {
+            base = Sessions.extractFirstPromptFromHead(head);
+        }
+        if (base == null || base.isEmpty()) {
+            return null;
+        }
+        return base;
     }
 
     // -------------------------------------------------------------------------

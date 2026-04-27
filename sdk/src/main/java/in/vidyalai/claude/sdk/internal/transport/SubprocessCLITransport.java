@@ -658,6 +658,10 @@ public class SubprocessCLITransport implements Transport {
             cmd.add("--fork-session");
         }
 
+        if (options.sessionStore() != null) {
+            cmd.add("--session-mirror");
+        }
+
         // Agents are always sent via initialize request (matching TypeScript/Python
         // SDKs)
         // This avoids platform-specific command-line argument length limits (ARG_MAX)
@@ -690,19 +694,29 @@ public class SubprocessCLITransport implements Transport {
         // `thinking` takes precedence over the deprecated `max_thinking_tokens`
         ThinkingConfig thinking = options.thinking();
         if (thinking != null) {
+            in.vidyalai.claude.sdk.types.config.ThinkingDisplay display = null;
             switch (thinking) {
-                case ThinkingConfigAdaptive _ -> {
+                case ThinkingConfigAdaptive adaptive -> {
                     cmd.add("--thinking");
                     cmd.add("adaptive");
+                    display = adaptive.display();
                 }
                 case ThinkingConfigEnabled enabled -> {
                     cmd.add("--max-thinking-tokens");
                     cmd.add(String.valueOf(enabled.budgetTokens()));
+                    display = enabled.display();
                 }
                 case ThinkingConfigDisabled _ -> {
                     cmd.add("--thinking");
                     cmd.add("disabled");
                 }
+            }
+            // Forward --thinking-display only for adaptive/enabled (the
+            // disabled case has no display option). Mirrors the Python SDK
+            // mypy-narrowed branch.
+            if (display != null) {
+                cmd.add("--thinking-display");
+                cmd.add(display.getValue());
             }
         } else {
             @SuppressWarnings("deprecation")
@@ -768,9 +782,10 @@ public class SubprocessCLITransport implements Transport {
                 env.put("PWD", cwd.toString());
             }
 
-            // Configure stderr handling
-            boolean shouldPipeStderr = ((options.stderrCallback() != null)
-                    || options.extraArgs().containsKey("debug-to-stderr"));
+            // Pipe stderr only when the caller registered a callback. The
+            // legacy ``--debug-to-stderr`` flag detection was removed in
+            // upstream prep for the CLI flag's removal.
+            boolean shouldPipeStderr = options.stderrCallback() != null;
             pb.redirectErrorStream(false);
 
             logger.fine("Claude ENV:" + env);

@@ -213,6 +213,110 @@ class SubprocessCLITransportTest {
         transport.close();
     }
 
+    @Test
+    void testBuildCommandThinkingDisplay_adaptive() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigAdaptive(
+                        in.vidyalai.claude.sdk.types.config.ThinkingDisplay.SUMMARIZED))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        int idx = cmd.indexOf("--thinking-display");
+        assertThat(idx).isGreaterThanOrEqualTo(0);
+        assertThat(cmd.get(idx + 1)).isEqualTo("summarized");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandThinkingDisplay_enabled() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigEnabled(5000,
+                        in.vidyalai.claude.sdk.types.config.ThinkingDisplay.OMITTED))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        int idx = cmd.indexOf("--thinking-display");
+        assertThat(idx).isGreaterThanOrEqualTo(0);
+        assertThat(cmd.get(idx + 1)).isEqualTo("omitted");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandThinkingDisplay_adaptiveWithoutDisplay_omitsFlag() {
+        // Adaptive without display field => no --thinking-display in argv.
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigAdaptive())
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).doesNotContain("--thinking-display");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandThinkingDisplay_enabledEmitsBudgetAndDisplay() {
+        // Enabled + display => both --max-thinking-tokens AND --thinking-display.
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigEnabled(20000,
+                        in.vidyalai.claude.sdk.types.config.ThinkingDisplay.OMITTED))
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        int budgetIdx = cmd.indexOf("--max-thinking-tokens");
+        assertThat(budgetIdx).isGreaterThanOrEqualTo(0);
+        assertThat(cmd.get(budgetIdx + 1)).isEqualTo("20000");
+        int displayIdx = cmd.indexOf("--thinking-display");
+        assertThat(displayIdx).isGreaterThanOrEqualTo(0);
+        assertThat(cmd.get(displayIdx + 1)).isEqualTo("omitted");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandThinkingDisplay_disabledNeverEmitted() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .thinking(new ThinkingConfigDisabled())
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).doesNotContain("--thinking-display");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandSessionMirrorFlag_addedWhenSessionStorePresent() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .sessionStore(new in.vidyalai.claude.sdk.types.session.InMemorySessionStore())
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).contains("--session-mirror");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandSessionMirrorFlag_omittedWhenSessionStoreNull() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).doesNotContain("--session-mirror");
+        transport.close();
+    }
+
     @SuppressWarnings("deprecation")
     @Test
     void testBuildCommandThinkingPrecedenceOverMaxThinkingTokens() {

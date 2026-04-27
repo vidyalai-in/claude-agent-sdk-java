@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-04-19 (Updated)
-**Java SDK Version:** 0.1.12
-**Python SDK Version:** [0.1.63](https://github.com/anthropics/claude-agent-sdk-python/commit/7ca64f67812f5b18d6df0b0762af2a69e6308dac) (latest)
+**Analysis Date:** 2026-04-27 (Updated)
+**Java SDK Version:** 0.1.13
+**Python SDK Version:** [0.1.68](https://github.com/anthropics/claude-agent-sdk-python/commit/8348d1f882bc9033aba5d85ac005a2075f812389) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,12 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.63):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.63. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.68):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.68. These updates include:
+- **v0.1.68** - Added docstrings to `ClaudeAgentOptions` fields; CLI update to 2.1.119 (no API changes)
+- **v0.1.67** - CLI update to 2.1.120 (no API changes)
+- **v0.1.66** - CLI update to 2.1.119 (no API changes); fix(query): restore trio compatibility via sniffio dispatch (Python-only — N/A for Java)
+- **v0.1.65** - CLI update to 2.1.118 (no API changes); `import_session_to_store()` for local→store replay; `SessionStore.append()` bounded retry on mirror append + uuid idempotency docs; `ThinkingDisplay` (`display` field on `ThinkingConfigAdaptive`/`ThinkingConfigEnabled`) with `--thinking-display` CLI flag forwarding; `dontAsk`/`auto` permission_mode docs corrected; transport: drop `--debug-to-stderr` detection (prep for CLI flag removal); CLI 2.1.117; fix: parse `server_tool_use` and `advisor_tool_result` content blocks; `SessionStore.list_session_summaries` for batch summary fetch
+- **v0.1.64** - CLI update to 2.1.116 (no API changes); examples: S3, Redis, Postgres `SessionStore` reference adapters; `SessionStore` adapter — TS parity (protocol, mirror, resume, helpers including `*_via_store` mutations and `*_from_store` listing variants)
 - **v0.1.63** - CLI update to 2.1.114 (no API changes)
 - **v0.1.62** - CLI update to 2.1.113; top-level `skills` option on `ClaudeAgentOptions` for enabling skills on the main session without manually configuring `allowed_tools` and `setting_sources`
 - **v0.1.61** - CLI update to 2.1.112 (no API changes)
@@ -96,6 +101,34 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - ✅ Fix: pass `--thinking` flag for adaptive/disabled instead of `--max-thinking-tokens` (v0.1.57)
 - ✅ `maxResultSizeChars` field on `ToolAnnotations` for large MCP result support (v0.1.55)
 - ✅ Forward `maxResultSizeChars` via `_meta` in tools/list JSONRPC response to bypass Zod stripping (v0.1.55)
+
+✅ **All new features from Python SDK v0.1.68 are now implemented in Java SDK v0.1.13**. This includes:
+- ✅ **`SessionStore` adapter protocol** (v0.1.64): `SessionStore` interface with required `append`/`load` and optional `listSessions`/`listSessionSummaries`/`delete`/`listSubkeys` methods, plus probe flags (`implementsListSessions()`, etc.) so callers can detect optional capabilities without `instanceof`. Java exposes both synchronous and asynchronous (`CompletableFuture`) variants — adapters can override either; the unimplemented variant defaults to wrapping the implemented one (sync→async via configurable executor, async→sync via `.join()`).
+- ✅ **Async SessionStore variants** with **configurable executor**: `appendAsync`/`loadAsync`/`listSessionsAsync`/`listSessionSummariesAsync`/`deleteAsync`/`listSubkeysAsync` default methods. Each has overloads that take an explicit `Executor` for per-call control. The default executor is configured globally via `SessionStoreExecutor.setDefault(Executor)`; the built-in default is a per-task virtual thread (`Thread.ofVirtual()`). Adapters with native async clients (AWS SDK v2 async, R2DBC, Lettuce reactive) should override the `*Async` methods directly to avoid a thread hop. The mirror batcher and resume materializer call the `*Async` variants so async adapters preserve parallelism end-to-end.
+- ✅ **SessionStore types** (v0.1.64): `SessionKey`, `SessionListSubkeysKey`, `SessionStoreEntry` (map-backed structural supertype), `SessionStoreListEntry`, `SessionSummaryEntry`, all in `in.vidyalai.claude.sdk.types.session`.
+- ✅ **`InMemorySessionStore`** reference implementation for tests/dev with full conformance coverage (v0.1.64). Includes `InMemorySessionStore.filePathToSessionKey(filePath, projectsDir)` static helper for resolving paths back to keys.
+- ✅ **`SessionSummary`** helpers — `foldSessionSummary()` and `summaryEntryToSdkInfo()` for incremental sidecar maintenance (v0.1.64).
+- ✅ **SessionStore-backed APIs** (v0.1.64): `ClaudeSDK.listSessionsFromStore()`, `getSessionInfoFromStore()`, `getSessionMessagesFromStore()`, `listSubagentsFromStore()`, `getSubagentMessagesFromStore()`. Mirrors Python's `*_from_store` async functions as synchronous methods.
+- ✅ **SessionStore-backed mutations** (v0.1.64): `ClaudeSDK.renameSessionViaStore()`, `tagSessionViaStore()`, `deleteSessionViaStore()`, `forkSessionViaStore()`. Internal fork transform refactored into `SessionMutations.buildForkLines()` so disk and store paths share the UUID-remap logic.
+- ✅ **`projectKeyForDirectory()`** helper for deriving the SessionStore project key from a directory (v0.1.64).
+- ✅ **`sessionStore` and `loadTimeoutMs` options** on `ClaudeAgentOptions` (v0.1.64). When `sessionStore` is set, the transport adds `--session-mirror` to the CLI command.
+- ✅ **`MirrorErrorMessage`** message type for non-fatal `SessionStore.append()` failures (v0.1.64). Added to the `Message` sealed interface; the message parser dispatches the `mirror_error` subtype.
+- ✅ **Runtime mirror integration** — `TranscriptMirrorBatcher` ports the Python batcher 1:1 (~100ms cadence, `MAX_PENDING_ENTRIES=500` / `MAX_PENDING_BYTES=1 MiB` thresholds, `MIRROR_APPEND_MAX_ATTEMPTS=3` retries with `[200ms, 800ms]` backoff, no retry on timeout). It coalesces frames per `filePath`, drops frames whose path falls outside `projectsDir` with a warning, and surfaces final-attempt failures via `onError` → `MirrorErrorMessage` (v0.1.64).
+- ✅ **`SessionResume.materializeResumeSession()`** — loads from store, writes to a temp `CLAUDE_CONFIG_DIR` so the CLI subprocess can resume from local disk; copies `.credentials.json` (with `refreshToken` redacted) and `.claude.json`; cleans up on disconnect with retry on transient Windows AV/indexer locks. Subagent transcripts and `.meta.json` sidecars are reconstructed when the store implements `listSubkeys`. Subpath safety check rejects empty / absolute / `..`-containing keys (v0.1.64).
+- ✅ **`SessionResume.applyMaterializedOptions()`** — copies options with `CLAUDE_CONFIG_DIR` injected into env, `resume` set, `continueConversation` cleared (v0.1.64).
+- ✅ **`SessionResume.buildMirrorBatcher()`** — constructs the batcher with the right `projectsDir` (temp dir if materialized, otherwise the effective config dir from env). Wired into both `ClaudeSDKClient.connect()` and the static `ClaudeSDK.query(stream)` path (v0.1.64).
+- ✅ **`SessionStoreValidation.validate()`** — fail-fast pre-flight check called before subprocess spawn. Rejects `continueConversation + sessionStore` without `listSessions()`, and `sessionStore + enableFileCheckpointing` (v0.1.64).
+- ✅ **`QueryHandler.setTranscriptMirrorBatcher()` / `reportMirrorError()`** — peels `transcript_mirror` frames off stdout (never yielded to consumers), enqueues them on the batcher, flushes before yielding `result` and again at end-of-stream / close. `reportMirrorError` enqueues a `mirror_error` system message into the consumer stream (v0.1.64).
+- ✅ **`SessionImport.importSessionToStore()`** — local→store replay helper (Python's `import_session_to_store`). Streams the on-disk JSONL line-by-line and calls `store.append` in batches of 500 entries / 1 MiB. Recursively imports subagent transcripts and `.meta.json` sidecars when `includeSubagents=true`. Exposed via `ClaudeSDK.importSessionToStore()`.
+- ✅ **`SessionStoreConformance` test harness** (Python's `session_store_conformance`) — public, framework-agnostic 14-contract suite at `in.vidyalai.claude.sdk.testing.SessionStoreConformance`. Runs against the bundled `InMemorySessionStore` in `SessionStoreConformanceTest` and is the recommended way for adapter authors to validate their own implementations. Uses plain `AssertionError` so it works under JUnit, TestNG, Spock, or a smoke `main()`.
+- ✅ **`ServerToolUseBlock` / `ServerToolResultBlock` / `ServerToolName`** content blocks for server-side tools (advisor, web_search, web_fetch, code_execution, etc.) (v0.1.65). Added to the `ContentBlock` sealed interface; parser handles `server_tool_use` and `advisor_tool_result` types.
+- ✅ **`ThinkingDisplay`** enum (`SUMMARIZED` / `OMITTED`) with `display` field on `ThinkingConfigAdaptive` and `ThinkingConfigEnabled`; transport forwards `--thinking-display` CLI flag (v0.1.65).
+- ✅ **Drop `--debug-to-stderr` detection** in the transport stderr-pipe condition — prep for the CLI flag's removal (v0.1.65). The `StderrCallbackExample` was updated to drop the flag.
+- ✅ **Permission mode docstrings** updated for `dontAsk` ("Deny anything not pre-approved by allow rules") and `auto` ("A model classifier approves or denies each tool call") (v0.1.65).
+- ✅ **`ClaudeAgentOptions` field documentation** — Javadoc already present per Java conventions (v0.1.68).
+- ✅ N/A: trio/sniffio dispatch — Python-asyncio specific (v0.1.66).
+- ✅ N/A: bundled CLI version constant — Java SDK uses the system-installed CLI, no bundled-version constant to track.
+- ✅ N/A: `s3_session_store.py`, `redis_session_store.py`, `postgres_session_store.py` reference adapters — these depend on heavyweight external Python clients (`boto3`, `redis-py`, `asyncpg`); the Java SDK ships only `InMemorySessionStore` and the `SessionStore` interface so adapter implementations remain external. The protocol shape is fully compatible — users can wrap AWS SDK / Lettuce / JDBC adapters at the call site, validate them with the bundled `SessionStoreConformance` harness, and override the `*Async` methods to plug in native non-blocking clients.
 
 ✅ **All new features from Python SDK v0.1.63 are now implemented in Java SDK v0.1.12**. This includes:
 - ✅ Top-level `skills` option on `ClaudeAgentOptions` (`builder().skills(List)` and `.skillsAll()`) — auto-injects `Skill(name)` entries into `allowedTools` and defaults `settingSources` to user/project (v0.1.62)
@@ -722,7 +755,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-04-19
-**Python SDK Version:** 0.1.63 (commit 7ca64f67812f5b18d6df0b0762af2a69e6308dac)
-**Java SDK Version:** 0.1.12
+**Latest Verification:** 2026-04-27
+**Python SDK Version:** 0.1.68 (commit 8348d1f882bc9033aba5d85ac005a2075f812389)
+**Java SDK Version:** 0.1.13
 **Status:** ✅ 100% Feature Parity Maintained

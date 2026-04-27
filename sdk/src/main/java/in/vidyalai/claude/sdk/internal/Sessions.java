@@ -82,6 +82,24 @@ public class Sessions {
         return getClaudeConfigHomeDir().resolve("projects");
     }
 
+    /**
+     * Resolves the projects directory honoring {@code env} overrides before
+     * the process environment.
+     *
+     * <p>Mirrors Python's {@code _get_projects_dir(env_override)} so callers
+     * that pass {@code CLAUDE_CONFIG_DIR} via {@code options.env} resolve to
+     * the same directory the subprocess will write to.
+     */
+    public static Path getProjectsDirForEnv(@Nullable Map<String, String> env) {
+        if (env != null) {
+            String override = env.get("CLAUDE_CONFIG_DIR");
+            if (override != null && !override.isBlank()) {
+                return Path.of(override).resolve("projects");
+            }
+        }
+        return getProjectsDir();
+    }
+
     static Path getProjectDir(String path) {
         return getProjectsDir().resolve(sanitizePath(path));
     }
@@ -1011,7 +1029,7 @@ public class Sessions {
      *
      * @return path of the first non-empty match, or {@code null}.
      */
-    static @Nullable Path resolveSessionFilePath(String sessionId, @Nullable String directory) {
+    public static @Nullable Path resolveSessionFilePath(String sessionId, @Nullable String directory) {
         String filename = sessionId + ".jsonl";
 
         if (directory != null) {

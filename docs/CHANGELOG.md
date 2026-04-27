@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-04-27
+
+### Added
+- **`SessionStore` adapter protocol**: New `in.vidyalai.claude.sdk.types.session.SessionStore` interface for mirroring session transcripts to external storage (S3, Postgres, Redis, custom backends). Required: `append(SessionKey, List<SessionStoreEntry>)` and `load(SessionKey)`. Optional: `listSessions`, `listSessionSummaries`, `delete`, `listSubkeys` (with `implements*()` probe flags). Adapters can override either sync or async variants — the unimplemented one defaults to wrapping the implemented one. Matches Python SDK v0.1.64.
+- **Async SessionStore variants with configurable executor**: `appendAsync`/`loadAsync`/`listSessionsAsync`/`listSessionSummariesAsync`/`deleteAsync`/`listSubkeysAsync` default methods returning `CompletableFuture`. Each has overloads taking an explicit `Executor`. Default executor is configured globally via `SessionStoreExecutor.setDefault(Executor)`; built-in default is per-task virtual thread (`Thread.ofVirtual()`). Adapters with native async clients (AWS SDK v2 async, R2DBC, Lettuce reactive) should override the `*Async` methods directly to avoid a thread hop. The mirror batcher and resume materializer call `*Async` so async adapters preserve parallelism end-to-end.
+- **Runtime mirror integration**: `TranscriptMirrorBatcher` ports the Python batcher 1:1 (~100ms cadence, `MAX_PENDING_ENTRIES=500` / `MAX_PENDING_BYTES=1 MiB` thresholds, 3-attempt retry with `[200ms, 800ms]` backoff, no retry on timeout). Coalesces frames per `filePath`, drops frames whose path falls outside `projectsDir` with a warning, and surfaces final-attempt failures via `onError` → `MirrorErrorMessage`.
+- **`SessionResume.materializeResumeSession()`**: loads from store, writes to a temp `CLAUDE_CONFIG_DIR` so the CLI subprocess can resume from local disk; copies `.credentials.json` (with `refreshToken` redacted) and `.claude.json`; cleans up on disconnect with retry on transient Windows AV/indexer locks. Subagent transcripts and `.meta.json` sidecars are reconstructed when the store implements `listSubkeys`. Subpath safety check rejects empty/absolute/`..`-containing keys.
+- **`SessionResume.applyMaterializedOptions()` / `buildMirrorBatcher()`**: helpers wired into both `ClaudeSDKClient.connect()` and the static `ClaudeSDK.query(stream)` path. The batcher uses the temp dir's `projects/` when materialized, otherwise resolves from `options.env().CLAUDE_CONFIG_DIR` or the process environment.
+- **`SessionStoreValidation.validate()`**: fail-fast pre-flight check called before subprocess spawn. Rejects `continueConversation + sessionStore` without `listSessions()`, and `sessionStore + enableFileCheckpointing`.
+- **`QueryHandler.setTranscriptMirrorBatcher()` / `reportMirrorError()`**: peels `transcript_mirror` frames off stdout (never yielded to consumers), enqueues them on the batcher, flushes before yielding `result` and again at end-of-stream / close. `reportMirrorError` enqueues a `mirror_error` system message into the consumer stream.
+- **`ClaudeSDK.importSessionToStore()`**: local→store replay helper (Python's `import_session_to_store`). Streams the on-disk JSONL line-by-line and calls `store.append` in batches of 500 entries / 1 MiB. Recursively imports subagent transcripts and `.meta.json` sidecars when `includeSubagents=true`.
+- **`SessionStoreConformance` test harness**: public, framework-agnostic 14-contract suite at `in.vidyalai.claude.sdk.testing.SessionStoreConformance`. Runs against the bundled `InMemorySessionStore` in `SessionStoreConformanceTest` and is the recommended way for adapter authors to validate their own implementations. Uses plain `AssertionError` so it works under JUnit, TestNG, Spock, or a smoke `main()`.
+- **`InMemorySessionStore.filePathToSessionKey(filePath, projectsDir)`**: static helper for resolving an on-disk transcript path back to a `SessionKey`. Used internally by the mirror batcher; exposed for adapter implementations that need the same mapping.
+- **SessionStore types**: `SessionKey`, `SessionListSubkeysKey`, `SessionStoreEntry` (map-backed structural supertype), `SessionStoreListEntry`, `SessionSummaryEntry` in `in.vidyalai.claude.sdk.types.session`. Matches Python SDK v0.1.64.
+- **`InMemorySessionStore`**: Reference adapter for tests/dev with full `SessionStore` protocol coverage including incremental summary maintenance. Matches Python SDK v0.1.64.
+- **`SessionSummary` helpers**: `foldSessionSummary()` and `summaryEntryToSdkInfo()` for incremental sidecar maintenance inside `append()`. Matches Python SDK v0.1.64.
+- **SessionStore-backed APIs on `ClaudeSDK`**: `listSessionsFromStore()`, `getSessionInfoFromStore()`, `getSessionMessagesFromStore()`, `listSubagentsFromStore()`, `getSubagentMessagesFromStore()`. Mirrors Python's `*_from_store` functions as synchronous methods. Matches Python SDK v0.1.64.
+- **SessionStore-backed mutations on `ClaudeSDK`**: `renameSessionViaStore()`, `tagSessionViaStore()`, `deleteSessionViaStore()`, `forkSessionViaStore()`. Internal fork transform extracted to `SessionMutations.buildForkLines()` so disk and store paths share the UUID-remap logic. Matches Python SDK v0.1.64.
+- **`projectKeyForDirectory()`** on `ClaudeSDK` and `SessionStores`. Derives the SessionStore project key using the same realpath + NFC normalization + djb2-hashed sanitization the CLI uses for project directory names. Matches Python SDK v0.1.64.
+- **`sessionStore` and `loadTimeoutMs` options** on `ClaudeAgentOptions`. When `sessionStore` is set, the transport adds `--session-mirror` to the CLI command so the CLI emits transcript-mirror traffic. Default `loadTimeoutMs=60000`. Matches Python SDK v0.1.64.
+- **`MirrorErrorMessage`**: New `Message` sealed-interface member for non-fatal `SessionStore.append()` failures. Parser dispatches the `mirror_error` system-message subtype and decodes the associated `SessionKey`. Matches Python SDK v0.1.64.
+- **`ServerToolUseBlock`/`ServerToolResultBlock`/`ServerToolName`**: New `ContentBlock` sealed-interface members for server-side tools (advisor, web_search, web_fetch, code_execution, bash_code_execution, text_editor_code_execution, tool_search_tool_regex, tool_search_tool_bm25). Parser handles `server_tool_use` and `advisor_tool_result` content-block types. Matches Python SDK v0.1.65 (PR #836).
+- **`ThinkingDisplay`** enum (`SUMMARIZED`/`OMITTED`) with optional `display` field on `ThinkingConfigAdaptive` and `ThinkingConfigEnabled`. Transport forwards `--thinking-display` CLI flag for adaptive/enabled (never for disabled). Matches Python SDK v0.1.65 (PR #830).
+- **`SessionStoreExample.java`**: New example demonstrating the `SessionStore` protocol — direct usage, wiring into `ClaudeAgentOptions`, handling `MirrorErrorMessage`.
+
+### Changed
+- **Stderr piping condition** narrowed: the transport now pipes stderr only when `stderrCallback` is registered. The legacy `--debug-to-stderr` extra-arg detection was removed in upstream prep for the CLI flag's deprecation. The `StderrCallbackExample` was updated to drop `extraArgs(Map.of("debug-to-stderr", ""))`. Matches Python SDK v0.1.65 (PR #860).
+- **Permission mode docs** corrected: `dontAsk` is now described as "Deny anything not pre-approved by allow rules" and `auto` as "A model classifier approves or denies each tool call". Matches Python SDK v0.1.65 (PR #863).
+
+### Synced
+- Python SDK v0.1.63 → v0.1.68 (commits 7ca64f67..8348d1f8)
+- v0.1.64: `SessionStore` protocol + types, `InMemorySessionStore`, `*_from_store` listing APIs, `*_via_store` mutations, `MirrorErrorMessage`, `--session-mirror` CLI flag, S3/Redis/Postgres reference adapters (Java ports the protocol; external adapters left for users to wrap their preferred client); CLI 2.1.116
+- v0.1.65: `ThinkingDisplay` + `display` field on adaptive/enabled thinking configs with `--thinking-display` flag forwarding; `server_tool_use`/`advisor_tool_result` content blocks (`ServerToolUseBlock`/`ServerToolResultBlock`); `SessionStore.list_session_summaries` batch fetch; transport drops `--debug-to-stderr` detection; `dontAsk`/`auto` permission_mode docs corrected; `import_session_to_store` (Java callers can `store.append` directly); CLI 2.1.117-2.1.118
+- v0.1.66: CLI 2.1.119; trio compatibility fix (Python-only)
+- v0.1.67: CLI 2.1.120 (no API changes)
+- v0.1.68: Docstrings on `ClaudeAgentOptions` fields (Java already has Javadoc); CLI 2.1.119
+
+[0.1.13]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.13
+
 ## [0.1.12] - 2026-04-19
 
 ### Added

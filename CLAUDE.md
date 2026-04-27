@@ -98,6 +98,7 @@ mvn exec:java -Dexec.mainClass="examples.PermissionCallbacks" -pl examples
 mvn exec:java -Dexec.mainClass="examples.PluginsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SessionListingExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.SessionStoreExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SettingSourcesExample" -Dexec.args="all" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SkillsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.StderrCallbackExample" -pl examples
@@ -261,7 +262,40 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
     │   │   └── ...
     │   └── response/                   # Response types
     │       └── ...
+    ├── session/                    # SessionStore mirroring types
+    │   ├── SessionStore.java               # Adapter interface (sync + async variants)
+    │   ├── SessionStoreExecutor.java       # Configurable executor for async wrappers
+    │   ├── InMemorySessionStore.java       # Reference adapter + filePathToSessionKey helper
+    │   ├── SessionKey.java                 # Project key + session ID + optional subpath
+    │   ├── SessionListSubkeysKey.java      # Key arg for listSubkeys()
+    │   ├── SessionStoreEntry.java          # Map-backed structural supertype
+    │   ├── SessionStoreListEntry.java      # Listing entry (sessionId + mtime)
+    │   ├── SessionSummaryEntry.java        # Incremental summary sidecar
+    │   └── SessionSummary.java             # foldSessionSummary helper
     └── package-info.java           # Package documentation
+```
+
+### Public testing helpers (`sdk/src/main/java/in/vidyalai/claude/sdk/testing/`)
+
+```
+testing/
+└── SessionStoreConformance.java    # 14-contract behavioral suite for SessionStore adapters
+```
+
+### Internal runtime helpers (`sdk/src/main/java/in/vidyalai/claude/sdk/internal/`)
+
+The internal package contains the runtime SessionStore integration:
+
+```
+internal/
+├── TranscriptMirrorBatcher.java    # Buffers transcript_mirror frames + flushes to store
+├── SessionResume.java              # Materializes store→temp CLAUDE_CONFIG_DIR for CLI resume
+├── SessionImport.java              # Local JSONL → store replay (importSessionToStore)
+├── SessionStoreValidation.java     # Fail-fast pre-flight option checks
+├── SessionStores.java              # *_from_store and *_via_store APIs
+├── Sessions.java                   # Local-disk session listing/reading
+├── SessionMutations.java           # Local-disk session mutations + buildForkLines (shared)
+└── ...
 ```
 
 ## Examples Module (`examples/`)
@@ -289,6 +323,7 @@ examples/src/main/java/examples/
 ├── FilesystemAgentsExample.java    # Filesystem-based agent configuration
 ├── SystemPromptExample.java        # Custom system prompt usage
 ├── IncludePartialMessagesExample.java # Streaming with partial message updates
+├── SessionStoreExample.java        # Mirror transcripts to a custom SessionStore
 └── plugins/                        # Example plugin implementations
 ```
 
@@ -309,6 +344,17 @@ Static methods for common operations:
 - `createSdkMcpServer(String name, Object instance)` - Create MCP server from @Tool annotations
 - `listSubagents(String sessionId)` / `listSubagents(String, Path)` - List subagent IDs for a session
 - `getSubagentMessages(String sessionId, String agentId, ...)` - Read a subagent's transcript
+- `projectKeyForDirectory(Path)` - Compute the SessionStore project key for a directory
+- `listSessionsFromStore(SessionStore, Path, Integer, int)` - List sessions from a SessionStore
+- `getSessionInfoFromStore(SessionStore, String, Path)` - Read session metadata from a SessionStore
+- `getSessionMessagesFromStore(SessionStore, String, Path, Integer, int)` - Read messages from a SessionStore
+- `listSubagentsFromStore(SessionStore, String, Path)` - List subagents from a SessionStore
+- `getSubagentMessagesFromStore(SessionStore, String, String, Path, Integer, int)` - Read subagent transcript from a SessionStore
+- `renameSessionViaStore(SessionStore, String, String, Path)` - Append a custom-title entry via SessionStore
+- `tagSessionViaStore(SessionStore, String, String, Path)` - Append a tag entry via SessionStore (null clears)
+- `deleteSessionViaStore(SessionStore, String, Path)` - Delete a session via SessionStore
+- `forkSessionViaStore(SessionStore, String, Path, String, String)` - Fork a session via SessionStore
+- `importSessionToStore(String, SessionStore, Path, ...)` - Replay a local on-disk session into a SessionStore
 - `getVersion()` - Get SDK version
 
 ## ClaudeSDKClient

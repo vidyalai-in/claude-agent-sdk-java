@@ -1,5 +1,7 @@
 package in.vidyalai.claude.sdk.types.config;
 
+import org.jspecify.annotations.Nullable;
+
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
@@ -12,19 +14,25 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *
  * <p>
  * Example usage:
- * 
+ *
  * <pre>{@code
  * ThinkingConfig config = new ThinkingConfigEnabled(10000);
+ * // or with explicit display control:
+ * ThinkingConfig config = new ThinkingConfigEnabled(10000, ThinkingDisplay.SUMMARIZED);
  * }</pre>
  *
  * @param budgetTokens the maximum number of tokens to use for thinking (must be
  *                     positive)
+ * @param display      optional display mode forwarded to the CLI as
+ *                     {@code --thinking-display}; null leaves the model's
+ *                     default in place.
  * @see ThinkingConfig
  * @see ThinkingConfigAdaptive
  * @see ThinkingConfigDisabled
  */
 public record ThinkingConfigEnabled(
-        @JsonProperty("budget_tokens") int budgetTokens) implements ThinkingConfig {
+        @JsonProperty("budget_tokens") int budgetTokens,
+        @JsonProperty("display") @Nullable ThinkingDisplay display) implements ThinkingConfig {
 
     /**
      * Creates an enabled thinking config with the specified token budget.
@@ -36,6 +44,13 @@ public record ThinkingConfigEnabled(
         if (budgetTokens <= 0) {
             throw new IllegalArgumentException("budgetTokens must be positive, got: " + budgetTokens);
         }
+    }
+
+    /**
+     * Creates an enabled thinking config without a display override.
+     */
+    public ThinkingConfigEnabled(int budgetTokens) {
+        this(budgetTokens, null);
     }
 
     @Override

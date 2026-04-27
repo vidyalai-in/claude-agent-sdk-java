@@ -1,0 +1,505 @@
+package in.vidyalai.claude.sdk.internal;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.BiConsumer;
+import java.util.logging.Logger;
+import java.util.regex.Pattern;
+
+import org.jspecify.annotations.Nullable;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import in.vidyalai.claude.sdk.ClaudeAgentOptions;
+import in.vidyalai.claude.sdk.types.session.SessionKey;
+import in.vidyalai.claude.sdk.types.session.SessionListSubkeysKey;
+import in.vidyalai.claude.sdk.types.session.SessionStore;
+import in.vidyalai.claude.sdk.types.session.SessionStoreEntry;
+import in.vidyalai.claude.sdk.types.session.SessionStoreListEntry;
+
+/**
+ * Materialize a {@link SessionStore}-backed resume into a temp
+ * {@code CLAUDE_CONFIG_DIR}.
+ *
+ * <p>When {@link ClaudeAgentOptions#resume()} (or
+ * {@link ClaudeAgentOptions#continueConversation()}) is paired with
+ * {@link ClaudeAgentOptions#sessionStore()}, the session JSONL almost
+ * certainly does not exist on local disk — it lives in the external store.
+ * The CLI subprocess only knows how to resume from a local file. This class
+ * bridges the gap: it loads the session from the store, writes it to a
+ * temporary directory laid out exactly like {@code ~/.claude/}, and returns
+ * the path so the caller can point the subprocess at it via
+ * {@code CLAUDE_CONFIG_DIR}.
+ *
+ * <p>Mirrors Python SDK's {@code session_resume.py}.
+ */
+public final class SessionResume {
+
+    private static final Logger logger = Logger.getLogger(SessionResume.class.getName());
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final Pattern UUID_RE = Pattern.compile(
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            Pattern.CASE_INSENSITIVE);
+
+    private SessionResume() {
+    }
+
+    /**
+     * Result of {@link #materializeResumeSession(ClaudeAgentOptions)}.
+     */
+    public static final class MaterializedResume implements AutoCloseable {
+
+        private final Path configDir;
+        private final String resumeSessionId;
+
+        public MaterializedResume(Path configDir, String resumeSessionId) {
+            this.configDir = configDir;
+            this.resumeSessionId = resumeSessionId;
+        }
+
+        /**
+         * Temporary directory laid out like {@code ~/.claude/}; point the
+         * subprocess at it via {@code CLAUDE_CONFIG_DIR}.
+         */
+        public Path configDir() {
+            return configDir;
+        }
+
+        /**
+         * Session ID to pass as {@code --resume}. When the input was
+         * {@code continueConversation}, this is the most-recent session
+         * resolved via {@link SessionStore#listSessions(String)}.
+         */
+        public String resumeSessionId() {
+            return resumeSessionId;
+        }
+
+        /** Best-effort recursive removal. Never raises. */
+        public void cleanup() {
+            rmtreeWithRetry(configDir, 4, 100L);
+        }
+
+        @Override
+        public void close() {
+            cleanup();
+        }
+    }
+
+    /**
+     * Apply a {@link MaterializedResume} to {@link ClaudeAgentOptions} —
+     * sets {@code CLAUDE_CONFIG_DIR} in {@code env}, sets {@code resume} to
+     * the materialized session id, and clears {@code continueConversation}.
+     */
+    public static ClaudeAgentOptions applyMaterializedOptions(
+            ClaudeAgentOptions options, MaterializedResume materialized) {
+        Map<String, String> env = new HashMap<>(options.env());
+        env.put("CLAUDE_CONFIG_DIR", materialized.configDir().toString());
+        return options.toBuilder()
+                .env(env)
+                .resume(materialized.resumeSessionId())
+                .continueConversation(false)
+                .build();
+    }
+
+    /**
+     * Construct the {@link TranscriptMirrorBatcher} for a session.
+     *
+     * <p>Resolves {@code projectsDir} to the materialized temp dir when
+     * present (so file-path → key resolution matches what the subprocess
+     * writes), otherwise to the standard projects directory under the
+     * effective {@code CLAUDE_CONFIG_DIR}.
+     */
+    public static TranscriptMirrorBatcher buildMirrorBatcher(
+            SessionStore store,
+            @Nullable MaterializedResume materialized,
+            @Nullable Map<String, String> env,
+            BiConsumer<@Nullable SessionKey, String> onError) {
+        Path projectsDir;
+        if (materialized != null) {
+            projectsDir = materialized.configDir().resolve("projects");
+        } else {
+            projectsDir = Sessions.getProjectsDirForEnv(env);
+        }
+        return new TranscriptMirrorBatcher(store, projectsDir.toString(), onError);
+    }
+
+    /**
+     * Load a session from {@code options.sessionStore()} and write it to a
+     * temp dir.
+     *
+     * <p>Returns {@code null} when no materialization is needed (no store, no
+     * resume/continue, store has no entries, or the resolved session ID is
+     * not a valid UUID).
+     */
+    public static @Nullable MaterializedResume materializeResumeSession(ClaudeAgentOptions options)
+            throws IOException {
+        SessionStore store = options.sessionStore();
+        if (store == null) {
+            return null;
+        }
+        if (options.resume() == null && !options.continueConversation()) {
+            return null;
+        }
+
+        long timeoutMs = options.loadTimeoutMs();
+        String projectKey = SessionStores.projectKeyForDirectory(
+                options.cwd() != null ? options.cwd().toString() : null);
+
+        // Resolve the session ID — explicit resume wins; otherwise pick the
+        // most-recently-modified non-sidechain session from the store.
+        ResolvedSession resolved;
+        if (options.resume() != null) {
+            if (!UUID_RE.matcher(options.resume()).matches()) {
+                return null;
+            }
+            resolved = loadCandidate(store, projectKey, options.resume(), timeoutMs);
+        } else {
+            resolved = resolveContinueCandidate(store, projectKey, timeoutMs);
+        }
+        if (resolved == null) {
+            return null;
+        }
+
+        Path tmpBase = Files.createTempDirectory("claude-resume-");
+        try {
+            Path projectDir = tmpBase.resolve("projects").resolve(projectKey);
+            Files.createDirectories(projectDir);
+            writeJsonl(projectDir.resolve(resolved.sessionId() + ".jsonl"), resolved.entries());
+
+            // Copy auth config so the subprocess can authenticate.
+            copyAuthFiles(tmpBase, options.env());
+
+            if (store.implementsListSubkeys()) {
+                materializeSubkeys(store, projectDir, projectKey, resolved.sessionId(), timeoutMs);
+            }
+        } catch (RuntimeException | IOException e) {
+            // Any failure leaves tmpBase on disk with no path for the caller
+            // to clean it up. Remove it before rethrowing.
+            rmtreeWithRetry(tmpBase, 4, 100L);
+            throw e;
+        }
+
+        return new MaterializedResume(tmpBase, resolved.sessionId());
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    private record ResolvedSession(String sessionId, List<SessionStoreEntry> entries) {
+    }
+
+    private static @Nullable ResolvedSession loadCandidate(
+            SessionStore store, String projectKey, String sessionId, long timeoutMs) {
+        SessionKey key = new SessionKey(projectKey, sessionId, null);
+        List<SessionStoreEntry> entries = withTimeout(
+                () -> store.loadAsync(key).get(timeoutMs, TimeUnit.MILLISECONDS),
+                timeoutMs,
+                "SessionStore.load() for session " + sessionId);
+        if (entries == null || entries.isEmpty()) {
+            return null;
+        }
+        return new ResolvedSession(sessionId, entries);
+    }
+
+    private static @Nullable ResolvedSession resolveContinueCandidate(
+            SessionStore store, String projectKey, long timeoutMs) {
+        List<SessionStoreListEntry> sessions = withTimeout(
+                () -> store.listSessionsAsync(projectKey).get(timeoutMs, TimeUnit.MILLISECONDS),
+                timeoutMs,
+                "SessionStore.listSessions()");
+        if (sessions == null || sessions.isEmpty()) {
+            return null;
+        }
+        List<SessionStoreListEntry> sorted = new ArrayList<>(sessions);
+        sorted.sort(Comparator.comparingLong(SessionStoreListEntry::mtime).reversed());
+        for (SessionStoreListEntry cand : sorted) {
+            String sid = cand.sessionId();
+            if (!UUID_RE.matcher(sid).matches()) {
+                continue;
+            }
+            ResolvedSession loaded = loadCandidate(store, projectKey, sid, timeoutMs);
+            if (loaded == null) {
+                continue;
+            }
+            // Skip sidechain sessions — they often have the highest mtime
+            // (their append lands after the main session's).
+            Map<String, Object> first = loaded.entries().get(0).asMap();
+            if (Boolean.TRUE.equals(first.get("isSidechain"))) {
+                continue;
+            }
+            return loaded;
+        }
+        return null;
+    }
+
+    @FunctionalInterface
+    private interface ThrowingSupplier<T> {
+        T get() throws InterruptedException, ExecutionException, TimeoutException;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T withTimeout(ThrowingSupplier<T> task, long timeoutMs, String what) {
+        try {
+            return task.get();
+        } catch (TimeoutException e) {
+            throw new RuntimeException(
+                    what + " timed out after " + timeoutMs + "ms during resume materialization", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(what + " interrupted during resume materialization", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new RuntimeException(
+                    what + " failed during resume materialization: " + cause.getMessage(), cause);
+        }
+    }
+
+    private static void writeJsonl(Path path, List<SessionStoreEntry> entries) throws IOException {
+        Files.createDirectories(path.getParent());
+        try (var writer = Files.newBufferedWriter(path,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            for (SessionStoreEntry entry : entries) {
+                String line;
+                try {
+                    line = MAPPER.writeValueAsString(entry.asMap());
+                } catch (JsonProcessingException e) {
+                    throw new IOException("Failed to serialize entry", e);
+                }
+                writer.write(line);
+                writer.write('\n');
+            }
+        }
+        setOwnerOnlyPermissions(path);
+    }
+
+    private static void setOwnerOnlyPermissions(Path path) {
+        try {
+            Set<PosixFilePermission> perms = PosixFilePermissions.fromString("rw-------");
+            Files.setPosixFilePermissions(path, perms);
+        } catch (UnsupportedOperationException | IOException ignored) {
+            // Windows or unsupported filesystem — best effort.
+        }
+    }
+
+    private static void copyAuthFiles(Path tmpBase, Map<String, String> optEnv) {
+        String callerConfigDir = optEnv.get("CLAUDE_CONFIG_DIR");
+        if (callerConfigDir == null) {
+            callerConfigDir = System.getenv("CLAUDE_CONFIG_DIR");
+        }
+        Path sourceConfigDir = callerConfigDir != null
+                ? Path.of(callerConfigDir)
+                : Path.of(System.getProperty("user.home"), ".claude");
+
+        // Copy .credentials.json with refreshToken redacted.
+        Path credsSrc = sourceConfigDir.resolve(".credentials.json");
+        String credsJson = null;
+        try {
+            credsJson = Files.readString(credsSrc);
+        } catch (IOException ignored) {
+            // Missing file is fine.
+        }
+        writeRedactedCredentials(credsJson, tmpBase.resolve(".credentials.json"));
+
+        // Copy .claude.json from CLAUDE_CONFIG_DIR or ~/.claude.json (NOT ~/.claude/.claude.json).
+        Path claudeJsonSrc = callerConfigDir != null
+                ? Path.of(callerConfigDir).resolve(".claude.json")
+                : Path.of(System.getProperty("user.home"), ".claude.json");
+        copyIfPresent(claudeJsonSrc, tmpBase.resolve(".claude.json"));
+    }
+
+    private static void writeRedactedCredentials(@Nullable String credsJson, Path dst) {
+        if (credsJson == null) {
+            return;
+        }
+        String out = credsJson;
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = MAPPER.readValue(credsJson, Map.class);
+            Object oauth = data.get("claudeAiOauth");
+            if (oauth instanceof Map<?, ?> oauthMap) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> mutable = new LinkedHashMap<>((Map<String, Object>) oauthMap);
+                if (mutable.remove("refreshToken") != null) {
+                    data.put("claudeAiOauth", mutable);
+                    out = MAPPER.writeValueAsString(data);
+                }
+            }
+        } catch (JsonProcessingException ignored) {
+            // Unparseable — write through; subprocess will fail to parse it too.
+        }
+        try {
+            Files.writeString(dst, out, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                    StandardOpenOption.TRUNCATE_EXISTING);
+            setOwnerOnlyPermissions(dst);
+        } catch (IOException ignored) {
+            // Best effort.
+        }
+    }
+
+    private static void copyIfPresent(Path src, Path dst) {
+        try {
+            Files.copy(src, dst);
+        } catch (IOException ignored) {
+            // Missing is fine.
+        }
+    }
+
+    private static void materializeSubkeys(
+            SessionStore store,
+            Path projectDir,
+            String projectKey,
+            String sessionId,
+            long timeoutMs) throws IOException {
+        Path sessionDir = projectDir.resolve(sessionId);
+        SessionListSubkeysKey listKey = new SessionListSubkeysKey(projectKey, sessionId);
+        List<String> subkeys = withTimeout(
+                () -> store.listSubkeysAsync(listKey).get(timeoutMs, TimeUnit.MILLISECONDS),
+                timeoutMs,
+                "SessionStore.listSubkeys() for session " + sessionId);
+        if (subkeys == null) {
+            return;
+        }
+
+        for (String subpath : subkeys) {
+            if (!isSafeSubpath(subpath, sessionDir)) {
+                logger.warning("[SessionStore] skipping unsafe subpath from listSubkeys: "
+                        + subpath);
+                continue;
+            }
+
+            SessionKey subKey = new SessionKey(projectKey, sessionId, subpath);
+            List<SessionStoreEntry> subEntries = withTimeout(
+                    () -> store.loadAsync(subKey).get(timeoutMs, TimeUnit.MILLISECONDS),
+                    timeoutMs,
+                    "SessionStore.load() for session " + sessionId + " subpath " + subpath);
+            if (subEntries == null || subEntries.isEmpty()) {
+                continue;
+            }
+
+            // Partition: agent_metadata vs transcript lines.
+            List<Map<String, Object>> metadata = new ArrayList<>();
+            List<SessionStoreEntry> transcript = new ArrayList<>();
+            for (SessionStoreEntry e : subEntries) {
+                if ("agent_metadata".equals(e.type())) {
+                    metadata.add(new LinkedHashMap<>(e.asMap()));
+                } else {
+                    transcript.add(e);
+                }
+            }
+
+            Path subFile = sessionDir.resolve(subpath + ".jsonl");
+            if (!transcript.isEmpty()) {
+                writeJsonl(subFile, transcript);
+            }
+
+            if (!metadata.isEmpty()) {
+                Map<String, Object> metaContent = new LinkedHashMap<>(metadata.get(metadata.size() - 1));
+                metaContent.remove("type");
+                Path metaFile = subFile.resolveSibling(
+                        subFile.getFileName().toString().replaceAll("\\.jsonl$", "") + ".meta.json");
+                Files.createDirectories(metaFile.getParent());
+                try {
+                    Files.writeString(metaFile, MAPPER.writeValueAsString(metaContent),
+                            StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                            StandardOpenOption.TRUNCATE_EXISTING);
+                    setOwnerOnlyPermissions(metaFile);
+                } catch (JsonProcessingException ex) {
+                    throw new IOException("Failed to serialize agent_metadata", ex);
+                }
+            }
+        }
+    }
+
+    /** Reject empty, absolute, or {@code ..}-containing subpaths. */
+    static boolean isSafeSubpath(String subpath, Path sessionDir) {
+        if (subpath == null || subpath.isEmpty()) {
+            return false;
+        }
+        if (subpath.startsWith("/") || subpath.startsWith("\\")) {
+            return false;
+        }
+        // Drive-prefixed and UNC paths
+        if (subpath.length() >= 2 && Character.isLetter(subpath.charAt(0)) && subpath.charAt(1) == ':') {
+            return false;
+        }
+        for (String part : subpath.split("[\\\\/]")) {
+            if (".".equals(part) || "..".equals(part)) {
+                return false;
+            }
+        }
+        if (subpath.indexOf(' ') >= 0) {
+            return false;
+        }
+        try {
+            Path target = sessionDir.resolve(subpath + ".jsonl").toAbsolutePath().normalize();
+            Path normalizedSession = sessionDir.toAbsolutePath().normalize();
+            return target.startsWith(normalizedSession);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Best-effort recursive removal with retries on transient lock errors.
+     */
+    static void rmtreeWithRetry(Path path, int retries, long delayMs) {
+        if (path == null || !Files.exists(path)) {
+            return;
+        }
+        for (int i = 0; i < retries; i++) {
+            try {
+                deleteRecursive(path);
+                return;
+            } catch (IOException e) {
+                // Retry on Windows AV/indexer transient locks.
+            }
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                deleteRecursiveQuietly(path);
+                return;
+            }
+        }
+        deleteRecursiveQuietly(path);
+    }
+
+    private static void deleteRecursive(Path path) throws IOException {
+        if (Files.isDirectory(path)) {
+            try (var stream = Files.list(path)) {
+                List<Path> children = stream.toList();
+                for (Path child : children) {
+                    deleteRecursive(child);
+                }
+            }
+        }
+        Files.deleteIfExists(path);
+    }
+
+    private static void deleteRecursiveQuietly(Path path) {
+        try {
+            deleteRecursive(path);
+        } catch (IOException ignored) {
+            // Final fallback — give up.
+        }
+    }
+
+}

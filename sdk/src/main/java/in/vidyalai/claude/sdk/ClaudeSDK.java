@@ -15,8 +15,11 @@ import org.jspecify.annotations.Nullable;
 
 import in.vidyalai.claude.sdk.internal.QueryHandler;
 import in.vidyalai.claude.sdk.internal.SdkVersion;
+import in.vidyalai.claude.sdk.internal.SessionImport;
 import in.vidyalai.claude.sdk.internal.SessionMutations;
+import in.vidyalai.claude.sdk.internal.SessionStores;
 import in.vidyalai.claude.sdk.internal.Sessions;
+import in.vidyalai.claude.sdk.internal.TranscriptMirrorBatcher;
 import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.mcp.SdkMcpTool;
@@ -29,6 +32,7 @@ import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.SDKSessionInfo;
 import in.vidyalai.claude.sdk.types.message.SessionMessage;
+import in.vidyalai.claude.sdk.types.session.SessionStore;
 
 /**
  * Main facade for the Claude Agent SDK.
@@ -211,7 +215,24 @@ public final class ClaudeSDK {
         // Validate and configure options
         ClaudeAgentOptions effectiveOptions = validateAndConfigureOptions(options, promptStream);
 
+        // Fail fast on invalid sessionStore option combinations.
+        in.vidyalai.claude.sdk.internal.SessionStoreValidation.validate(effectiveOptions);
+
+        // Materialize a SessionStore-backed resume so the subprocess can resume
+        // from the temp CLAUDE_CONFIG_DIR. Skipped when a custom transport was
+        // supplied (the materialized options would never reach the transport).
+        in.vidyalai.claude.sdk.internal.SessionResume.MaterializedResume materialized = null;
         if (transport == null) {
+            try {
+                materialized = in.vidyalai.claude.sdk.internal.SessionResume.materializeResumeSession(effectiveOptions);
+            } catch (java.io.IOException e) {
+                throw new RuntimeException(
+                        "Failed to materialize session from session store: " + e.getMessage(), e);
+            }
+            if (materialized != null) {
+                effectiveOptions = in.vidyalai.claude.sdk.internal.SessionResume.applyMaterializedOptions(
+                        effectiveOptions, materialized);
+            }
             // Create transport in streaming mode
             transport = new SubprocessCLITransport(effectiveOptions);
         }
@@ -245,6 +266,20 @@ public final class ClaudeSDK {
                     effectiveOptions.skills(),
                     initializeTimeout,
                     effectiveOptions.maxMsgQSize());
+
+            // Wire SessionStore mirror batcher BEFORE starting the read loop
+            // so we don't miss any transcript_mirror frames the CLI emits
+            // immediately on init.
+            if (effectiveOptions.sessionStore() != null) {
+                final QueryHandler finalQh = qh;
+                in.vidyalai.claude.sdk.internal.TranscriptMirrorBatcher batcher =
+                        in.vidyalai.claude.sdk.internal.SessionResume.buildMirrorBatcher(
+                                effectiveOptions.sessionStore(),
+                                materialized,
+                                effectiveOptions.env(),
+                                finalQh::reportMirrorError);
+                qh.setTranscriptMirrorBatcher(batcher);
+            }
 
             // Start reader thread and initialize
             queryHandler = qh;
@@ -282,6 +317,12 @@ public final class ClaudeSDK {
             // Close QueryHandler
             if (queryHandler != null) {
                 queryHandler.close();
+            }
+
+            // Clean up materialized resume temp dir AFTER the subprocess and
+            // reader have finished so we don't pull the rug out from under them.
+            if (materialized != null) {
+                materialized.cleanup();
             }
         }
 
@@ -916,6 +957,158 @@ public final class ClaudeSDK {
         return SessionMutations.forkSession(sessionId,
                 directory != null ? directory.toString() : null,
                 upToMessageId, title);
+    }
+
+    // -------------------------------------------------------------------------
+    // SessionStore-backed APIs
+    // -------------------------------------------------------------------------
+
+    /**
+     * Compute the {@link SessionStore} {@code projectKey} for a directory.
+     *
+     * <p>Defaults to the current working directory. Uses the same realpath +
+     * NFC normalization + djb2-hashed sanitization the CLI uses for project
+     * directory names, so keys match between local-disk transcripts and
+     * store-mirrored transcripts.
+     */
+    public static String projectKeyForDirectory(@Nullable Path directory) {
+        return SessionStores.projectKeyForDirectory(
+                directory != null ? directory.toString() : null);
+    }
+
+    /**
+     * List sessions from a {@link SessionStore} (synchronous).
+     *
+     * @param sessionStore the store to read from. Must implement at least one
+     *                     of {@code listSessionSummaries()} or {@code listSessions()}.
+     * @param directory    project directory used to compute the {@code projectKey}.
+     *                     When null, defaults to the current working directory.
+     * @param limit        maximum number of sessions to return (null = no limit)
+     * @param offset       number of sessions to skip from the start of the
+     *                     sorted result set
+     * @return list of {@link SDKSessionInfo} sorted by {@code lastModified}
+     *         descending
+     */
+    public static List<SDKSessionInfo> listSessionsFromStore(
+            SessionStore sessionStore, @Nullable Path directory,
+            @Nullable Integer limit, int offset) {
+        return SessionStores.listSessionsFromStore(sessionStore,
+                directory != null ? directory.toString() : null, limit, offset);
+    }
+
+    /**
+     * Read metadata for a single session from a {@link SessionStore}.
+     */
+    @Nullable
+    public static SDKSessionInfo getSessionInfoFromStore(
+            SessionStore sessionStore, String sessionId, @Nullable Path directory) {
+        return SessionStores.getSessionInfoFromStore(sessionStore, sessionId,
+                directory != null ? directory.toString() : null);
+    }
+
+    /**
+     * Read a session's conversation messages from a {@link SessionStore}.
+     */
+    public static List<SessionMessage> getSessionMessagesFromStore(
+            SessionStore sessionStore, String sessionId, @Nullable Path directory,
+            @Nullable Integer limit, int offset) {
+        return SessionStores.getSessionMessagesFromStore(sessionStore, sessionId,
+                directory != null ? directory.toString() : null, limit, offset);
+    }
+
+    /**
+     * List subagent IDs for a session from a {@link SessionStore}.
+     */
+    public static List<String> listSubagentsFromStore(
+            SessionStore sessionStore, String sessionId, @Nullable Path directory) {
+        return SessionStores.listSubagentsFromStore(sessionStore, sessionId,
+                directory != null ? directory.toString() : null);
+    }
+
+    /**
+     * Read a subagent's conversation messages from a {@link SessionStore}.
+     */
+    public static List<SessionMessage> getSubagentMessagesFromStore(
+            SessionStore sessionStore, String sessionId, String agentId,
+            @Nullable Path directory, @Nullable Integer limit, int offset) {
+        return SessionStores.getSubagentMessagesFromStore(sessionStore, sessionId,
+                agentId, directory != null ? directory.toString() : null, limit, offset);
+    }
+
+    /**
+     * Rename a session by appending a custom-title entry to a {@link SessionStore}.
+     */
+    public static void renameSessionViaStore(
+            SessionStore sessionStore, String sessionId, String title,
+            @Nullable Path directory) {
+        SessionStores.renameSessionViaStore(sessionStore, sessionId, title,
+                directory != null ? directory.toString() : null);
+    }
+
+    /**
+     * Tag a session by appending a tag entry to a {@link SessionStore}. Pass
+     * {@code null} for {@code tag} to clear the tag.
+     */
+    public static void tagSessionViaStore(
+            SessionStore sessionStore, String sessionId, @Nullable String tag,
+            @Nullable Path directory) {
+        SessionStores.tagSessionViaStore(sessionStore, sessionId, tag,
+                directory != null ? directory.toString() : null);
+    }
+
+    /**
+     * Delete a session from a {@link SessionStore}. If the store does not
+     * implement {@code delete()}, deletion is a no-op (appropriate for
+     * WORM/append-only backends).
+     */
+    public static void deleteSessionViaStore(
+            SessionStore sessionStore, String sessionId, @Nullable Path directory) {
+        SessionStores.deleteSessionViaStore(sessionStore, sessionId,
+                directory != null ? directory.toString() : null);
+    }
+
+    /**
+     * Fork a session via a {@link SessionStore}.
+     */
+    public static ForkSessionResult forkSessionViaStore(
+            SessionStore sessionStore, String sessionId, @Nullable Path directory,
+            @Nullable String upToMessageId, @Nullable String title) throws java.io.IOException {
+        return SessionStores.forkSessionViaStore(sessionStore, sessionId,
+                directory != null ? directory.toString() : null,
+                upToMessageId, title);
+    }
+
+    /**
+     * Replay a local session transcript into a {@link SessionStore} (synchronous).
+     *
+     * <p>Streams the on-disk JSONL line-by-line and calls {@code store.append}
+     * in batches. Useful for migrating existing local sessions to a remote
+     * store, or for catching a store up after a {@code MirrorErrorMessage}
+     * indicated a live-mirror gap.
+     *
+     * @param sessionId         UUID of the session to import
+     * @param sessionStore      destination store
+     * @param directory         project directory, or {@code null} to search all projects
+     * @param includeSubagents  if {@code true}, also import subagent transcripts
+     * @param batchSize         entries per {@code append()} call (default
+     *                          {@link TranscriptMirrorBatcher#MAX_PENDING_ENTRIES})
+     */
+    public static void importSessionToStore(
+            String sessionId, SessionStore sessionStore, @Nullable Path directory,
+            boolean includeSubagents, int batchSize) throws java.io.IOException {
+        SessionImport.importSessionToStore(sessionId, sessionStore,
+                directory != null ? directory.toString() : null,
+                includeSubagents, batchSize);
+    }
+
+    /**
+     * Convenience overload — include subagents, default batch size.
+     */
+    public static void importSessionToStore(
+            String sessionId, SessionStore sessionStore, @Nullable Path directory)
+            throws java.io.IOException {
+        SessionImport.importSessionToStore(sessionId, sessionStore,
+                directory != null ? directory.toString() : null);
     }
 
     /**

@@ -25,6 +25,7 @@ import in.vidyalai.claude.sdk.types.mcp.McpServerConfig;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;
 import in.vidyalai.claude.sdk.types.permission.PermissionResult;
 import in.vidyalai.claude.sdk.types.permission.ToolPermissionContext;
+import in.vidyalai.claude.sdk.types.session.SessionStore;
 
 /**
  * Configuration options for Claude SDK queries and clients.
@@ -188,6 +189,19 @@ public final class ClaudeAgentOptions {
     @Nullable
     private final TaskBudget taskBudget;
 
+    // Mirror session transcripts to an external store. When set, every
+    // transcript line written locally is also passed to
+    // ``sessionStore.append()``, and ``resume`` can materialize from the
+    // store when the local file is absent.
+    @Nullable
+    private final SessionStore sessionStore;
+
+    // Timeout for each ``sessionStore.load()`` / ``listSubkeys()`` call
+    // during resume materialization, in milliseconds. If the adapter
+    // doesn't settle within this window the query fails with a clear
+    // error instead of hanging the iterator forever.
+    private final long loadTimeoutMs;
+
     private ClaudeAgentOptions(Builder builder) {
         this.tools = builder.tools;
         // Default to empty lists (matching Python SDK's field(default_factory=list))
@@ -234,6 +248,8 @@ public final class ClaudeAgentOptions {
         this.outputFormat = builder.outputFormat;
         this.enableFileCheckpointing = builder.enableFileCheckpointing;
         this.taskBudget = builder.taskBudget;
+        this.sessionStore = builder.sessionStore;
+        this.loadTimeoutMs = builder.loadTimeoutMs;
     }
 
     /**
@@ -302,6 +318,8 @@ public final class ClaudeAgentOptions {
         builder.outputFormat = this.outputFormat;
         builder.enableFileCheckpointing = this.enableFileCheckpointing;
         builder.taskBudget = this.taskBudget;
+        builder.sessionStore = this.sessionStore;
+        builder.loadTimeoutMs = this.loadTimeoutMs;
         return builder;
     }
 
@@ -612,6 +630,29 @@ public final class ClaudeAgentOptions {
     }
 
     /**
+     * Returns the session store configured for transcript mirroring.
+     *
+     * <p>When non-null, every transcript line written locally is also passed
+     * to {@code sessionStore.append()}, and {@code resume} can materialize
+     * from the store when the local file is absent.
+     *
+     * @return the session store, or null if mirroring is disabled
+     */
+    @Nullable
+    public SessionStore sessionStore() {
+        return sessionStore;
+    }
+
+    /**
+     * Returns the timeout for {@code sessionStore.load()} /
+     * {@code listSubkeys()} calls during resume materialization, in
+     * milliseconds. Defaults to 60000.
+     */
+    public long loadTimeoutMs() {
+        return loadTimeoutMs;
+    }
+
+    /**
      * Functional interface for tool permission callbacks.
      *
      * <p>
@@ -744,6 +785,9 @@ public final class ClaudeAgentOptions {
         private boolean enableFileCheckpointing;
         @Nullable
         private TaskBudget taskBudget;
+        @Nullable
+        private SessionStore sessionStore;
+        private long loadTimeoutMs = 60_000L;
 
         private Builder() {
         }
@@ -1241,6 +1285,33 @@ public final class ClaudeAgentOptions {
          */
         public Builder taskBudget(TaskBudget taskBudget) {
             this.taskBudget = taskBudget;
+            return this;
+        }
+
+        /**
+         * Sets the session store for transcript mirroring.
+         *
+         * <p>When set, every transcript line written locally is also passed
+         * to {@code sessionStore.append()}, and {@code resume} can
+         * materialize from the store when the local file is absent.
+         *
+         * @param sessionStore the session store, or {@code null} to disable mirroring
+         * @return this builder
+         */
+        public Builder sessionStore(@Nullable SessionStore sessionStore) {
+            this.sessionStore = sessionStore;
+            return this;
+        }
+
+        /**
+         * Sets the timeout for {@code sessionStore.load()} /
+         * {@code listSubkeys()} calls during resume materialization.
+         *
+         * @param loadTimeoutMs timeout in milliseconds (default 60000)
+         * @return this builder
+         */
+        public Builder loadTimeoutMs(long loadTimeoutMs) {
+            this.loadTimeoutMs = loadTimeoutMs;
             return this;
         }
 
