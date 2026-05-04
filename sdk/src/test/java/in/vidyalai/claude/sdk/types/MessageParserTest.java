@@ -1265,7 +1265,7 @@ class MessageParserTest {
         assertThat(stu.type()).isEqualTo("server_tool_use");
     }
 
-    @SuppressWarnings({ "null", "unchecked" })
+    @SuppressWarnings({ "null" })
     @Test
     void parseAssistantMessage_withAdvisorToolResultBlock() throws Exception {
         Map<String, Object> data = Map.of(
@@ -1289,7 +1289,7 @@ class MessageParserTest {
         assertThat(str.type()).isEqualTo("server_tool_result");
     }
 
-    @SuppressWarnings({ "null", "unchecked" })
+    @SuppressWarnings({ "null" })
     @Test
     void parseAssistantMessage_withRedactedAdvisorResultBlock() throws Exception {
         // External API users get advisor output as an encrypted blob in the content dict.

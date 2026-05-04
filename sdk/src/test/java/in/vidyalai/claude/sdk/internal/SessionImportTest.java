@@ -71,6 +71,7 @@ class SessionImportTest {
         return env != null && !env.isBlank();
     }
 
+    @SuppressWarnings("null")
     @Test
     void importsMainTranscript() throws Exception {
         if (hasEnvOverride()) {
@@ -146,6 +147,7 @@ class SessionImportTest {
         assertThat(store.load(new SessionKey(projectKey, sessionId, null))).hasSize(2);
     }
 
+    @SuppressWarnings("null")
     @Test
     void invalidUuidRaises() {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -211,6 +213,7 @@ class SessionImportTest {
         assertThat(store.load(new SessionKey(projectKey, sessionId, null))).hasSize(1);
     }
 
+    @SuppressWarnings("null")
     @Test
     void importsMetaJsonSidecarAsAgentMetadata() throws Exception {
         if (hasEnvOverride()) {

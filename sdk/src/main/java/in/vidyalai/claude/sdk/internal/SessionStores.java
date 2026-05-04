@@ -497,7 +497,7 @@ public final class SessionStores {
         for (String line : result.lines) {
             try {
                 @SuppressWarnings("unchecked")
-                Map<String, Object> parsed = MAPPER.readValue(line, Map.class);
+                Map<String, Object> parsed = (Map<String, Object>) MAPPER.readValue(line, Map.class);
                 outEntries.add(SessionStoreEntry.of(parsed));
             } catch (JsonProcessingException e) {
                 throw new IOException("Failed to re-parse fork line: " + line, e);

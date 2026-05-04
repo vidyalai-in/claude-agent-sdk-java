@@ -277,7 +277,8 @@ public final class ClaudeSDK {
                                 effectiveOptions.sessionStore(),
                                 materialized,
                                 effectiveOptions.env(),
-                                finalQh::reportMirrorError);
+                                finalQh::reportMirrorError,
+                                effectiveOptions.sessionStoreFlush());
                 qh.setTranscriptMirrorBatcher(batcher);
             }
 

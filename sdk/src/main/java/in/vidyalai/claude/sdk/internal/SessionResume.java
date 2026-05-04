@@ -30,6 +30,7 @@ import in.vidyalai.claude.sdk.types.session.SessionKey;
 import in.vidyalai.claude.sdk.types.session.SessionListSubkeysKey;
 import in.vidyalai.claude.sdk.types.session.SessionStore;
 import in.vidyalai.claude.sdk.types.session.SessionStoreEntry;
+import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
 import in.vidyalai.claude.sdk.types.session.SessionStoreListEntry;
 
 /**
@@ -125,19 +126,47 @@ public final class SessionResume {
      * present (so file-path → key resolution matches what the subprocess
      * writes), otherwise to the standard projects directory under the
      * effective {@code CLAUDE_CONFIG_DIR}.
+     *
+     * <p>Defaults the flush mode to {@link SessionStoreFlushMode#BATCHED}.
      */
     public static TranscriptMirrorBatcher buildMirrorBatcher(
             SessionStore store,
             @Nullable MaterializedResume materialized,
             @Nullable Map<String, String> env,
             BiConsumer<@Nullable SessionKey, String> onError) {
+        return buildMirrorBatcher(store, materialized, env, onError, SessionStoreFlushMode.BATCHED);
+    }
+
+    /**
+     * Construct the {@link TranscriptMirrorBatcher} for a session.
+     *
+     * <p>{@code flushMode = EAGER} zeroes the batcher's pending thresholds so
+     * every enqueued frame schedules a background flush; {@code BATCHED} keeps
+     * the defaults (flush on {@code result} or 500-entry / 1 MiB overflow).
+     */
+    public static TranscriptMirrorBatcher buildMirrorBatcher(
+            SessionStore store,
+            @Nullable MaterializedResume materialized,
+            @Nullable Map<String, String> env,
+            BiConsumer<@Nullable SessionKey, String> onError,
+            SessionStoreFlushMode flushMode) {
         Path projectsDir;
         if (materialized != null) {
             projectsDir = materialized.configDir().resolve("projects");
         } else {
             projectsDir = Sessions.getProjectsDirForEnv(env);
         }
-        return new TranscriptMirrorBatcher(store, projectsDir.toString(), onError);
+        boolean eager = flushMode == SessionStoreFlushMode.EAGER;
+        int maxEntries = eager ? 0 : TranscriptMirrorBatcher.MAX_PENDING_ENTRIES;
+        int maxBytes = eager ? 0 : TranscriptMirrorBatcher.MAX_PENDING_BYTES;
+        return new TranscriptMirrorBatcher(
+                store,
+                projectsDir.toString(),
+                onError,
+                TranscriptMirrorBatcher.SEND_TIMEOUT_MS,
+                maxEntries,
+                maxBytes,
+                in.vidyalai.claude.sdk.types.session.SessionStoreExecutor.getDefault());
     }
 
     /**
@@ -148,6 +177,7 @@ public final class SessionResume {
      * resume/continue, store has no entries, or the resolved session ID is
      * not a valid UUID).
      */
+    @SuppressWarnings("null")
     public static @Nullable MaterializedResume materializeResumeSession(ClaudeAgentOptions options)
             throws IOException {
         SessionStore store = options.sessionStore();
@@ -255,7 +285,6 @@ public final class SessionResume {
         T get() throws InterruptedException, ExecutionException, TimeoutException;
     }
 
-    @SuppressWarnings("unchecked")
     private static <T> T withTimeout(ThrowingSupplier<T> task, long timeoutMs, String what) {
         try {
             return task.get();
@@ -332,7 +361,7 @@ public final class SessionResume {
         String out = credsJson;
         try {
             @SuppressWarnings("unchecked")
-            Map<String, Object> data = MAPPER.readValue(credsJson, Map.class);
+            Map<String, Object> data = (Map<String, Object>) MAPPER.readValue(credsJson, Map.class);
             Object oauth = data.get("claudeAiOauth");
             if (oauth instanceof Map<?, ?> oauthMap) {
                 @SuppressWarnings("unchecked")

@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-04-27 (Updated)
-**Java SDK Version:** 0.1.13
-**Python SDK Version:** [0.1.68](https://github.com/anthropics/claude-agent-sdk-python/commit/8348d1f882bc9033aba5d85ac005a2075f812389) (latest)
+**Analysis Date:** 2026-05-04 (Updated)
+**Java SDK Version:** 0.1.14
+**Python SDK Version:** [0.1.72](https://github.com/anthropics/claude-agent-sdk-python/commit/0a69e9449b72328742431119132f399e8f30055b) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,11 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.68):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.68. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.72):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.72. These updates include:
+- **v0.1.72** - `session_store_flush` option on `ClaudeAgentOptions` (`"batched"` / `"eager"`) for eager mirroring of transcript entries to a custom `SessionStore` adapter; CLI update to 2.1.126
+- **v0.1.71** - Domain allowlist fields on `SandboxNetworkConfig` (`allowedDomains`, `deniedDomains`, `allowManagedDomainsOnly`, `allowMachLookup`); CLI update to 2.1.123
+- **v0.1.70** - CLI update to 2.1.122 (no API changes); fix(transport): use `spawn_detached` for stderr reader to avoid trio nursery corruption (Python-only — N/A for Java); fix(deps): require `mcp>=1.19.0` for in-process SDK MCP tools (Python package — N/A for Java)
+- **v0.1.69** - CLI update to 2.1.121 (no API changes); docs: added docstrings to `ClaudeAgentOptions` fields
 - **v0.1.68** - Added docstrings to `ClaudeAgentOptions` fields; CLI update to 2.1.119 (no API changes)
 - **v0.1.67** - CLI update to 2.1.120 (no API changes)
 - **v0.1.66** - CLI update to 2.1.119 (no API changes); fix(query): restore trio compatibility via sniffio dispatch (Python-only — N/A for Java)
@@ -101,6 +105,14 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - ✅ Fix: pass `--thinking` flag for adaptive/disabled instead of `--max-thinking-tokens` (v0.1.57)
 - ✅ `maxResultSizeChars` field on `ToolAnnotations` for large MCP result support (v0.1.55)
 - ✅ Forward `maxResultSizeChars` via `_meta` in tools/list JSONRPC response to bypass Zod stripping (v0.1.55)
+
+✅ **All new features from Python SDK v0.1.72 are now implemented in Java SDK v0.1.14**. This includes:
+- ✅ **`sessionStoreFlush` option** on `ClaudeAgentOptions` with `SessionStoreFlushMode` enum (`BATCHED` / `EAGER`) (v0.1.72). `EAGER` zeroes the `TranscriptMirrorBatcher` thresholds so every enqueued frame schedules a background drain; `BATCHED` keeps the defaults (flush on `result` or 500-entry / 1 MiB overflow). Wired through `SessionResume.buildMirrorBatcher()` from both `ClaudeSDK.query(stream)` and `ClaudeSDKClient.connect()`.
+- ✅ **Domain allowlist fields** on `SandboxNetworkConfig` (v0.1.71): `allowedDomains`, `deniedDomains`, `allowManagedDomainsOnly`, `allowMachLookup`. The pre-v0.1.71 5-arg constructor is preserved for backward compatibility (new fields default to `null`).
+- ✅ N/A: `spawn_detached` stderr reader fix — Python/trio-specific (v0.1.70).
+- ✅ N/A: `mcp>=1.19.0` dependency floor — Python package metadata only; Java SDK uses its own JSON-RPC implementation for in-process SDK MCP tools (v0.1.70).
+- ✅ N/A: `ClaudeAgentOptions` field docstrings — Java equivalents are Javadoc and have always been present (v0.1.69).
+- ✅ N/A: bundled CLI version constants — Java SDK uses the system-installed CLI (v0.1.69-0.1.72).
 
 ✅ **All new features from Python SDK v0.1.68 are now implemented in Java SDK v0.1.13**. This includes:
 - ✅ **`SessionStore` adapter protocol** (v0.1.64): `SessionStore` interface with required `append`/`load` and optional `listSessions`/`listSessionSummaries`/`delete`/`listSubkeys` methods, plus probe flags (`implementsListSessions()`, etc.) so callers can detect optional capabilities without `instanceof`. Java exposes both synchronous and asynchronous (`CompletableFuture`) variants — adapters can override either; the unimplemented variant defaults to wrapping the implemented one (sync→async via configurable executor, async→sync via `.join()`).
@@ -755,7 +767,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-04-27
-**Python SDK Version:** 0.1.68 (commit 8348d1f882bc9033aba5d85ac005a2075f812389)
-**Java SDK Version:** 0.1.13
+**Latest Verification:** 2026-05-04
+**Python SDK Version:** 0.1.72 (commit 0a69e9449b72328742431119132f399e8f30055b)
+**Java SDK Version:** 0.1.14
 **Status:** ✅ 100% Feature Parity Maintained

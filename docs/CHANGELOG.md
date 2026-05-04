@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.14] - 2026-05-04
+
+### Added
+- **`sessionStoreFlush` option on `ClaudeAgentOptions`**: New `SessionStoreFlushMode` enum (`BATCHED` / `EAGER`) controlling when transcript-mirror entries are flushed to the configured `SessionStore` adapter. `BATCHED` (default) coalesces entries and flushes once per turn or on buffer overflow; `EAGER` zeroes the `TranscriptMirrorBatcher` thresholds so every enqueued frame schedules a background drain for near-real-time delivery. Wired through `SessionResume.buildMirrorBatcher()` from both `ClaudeSDK.query(stream)` and `ClaudeSDKClient.connect()`. Matches Python SDK v0.1.72.
+- **Domain allowlist fields on `SandboxNetworkConfig`** (matching Python SDK v0.1.71): `allowedDomains` (domains sandboxed processes can access), `deniedDomains` (always-blocked overrides), `allowManagedDomainsOnly` (managed-settings exclusivity flag), and `allowMachLookup` (macOS XPC/Mach service names with trailing-wildcard support). The pre-v0.1.71 5-arg constructor is preserved for backward compatibility — existing callers continue to compile and the new fields default to `null`.
+
+### Synced
+- Python SDK v0.1.68 → v0.1.72 (commits 8348d1f8..0a69e944)
+- v0.1.69: Docstrings on `ClaudeAgentOptions` fields (Java already has Javadoc); CLI 2.1.121
+- v0.1.70: `spawn_detached` stderr reader fix (Python/trio-specific — N/A for Java); `mcp>=1.19.0` dependency floor (Python package metadata only — N/A for Java); CLI 2.1.122
+- v0.1.71: Domain allowlist fields on `SandboxNetworkConfig`; CLI 2.1.123
+- v0.1.72: `session_store_flush` option for eager `SessionStore` mirroring; CLI 2.1.126
+
+[0.1.14]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.14
+
 ## [0.1.13] - 2026-04-27
 
 ### Added

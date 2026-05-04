@@ -60,6 +60,7 @@ class SessionResumeTest {
         assertThat(SessionResume.materializeResumeSession(options)).isNull();
     }
 
+    @SuppressWarnings("null")
     @Test
     void materializeResumeSession_writesJsonlFromStoreEntries() throws IOException {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -107,6 +108,7 @@ class SessionResumeTest {
         assertThat(SessionResume.materializeResumeSession(options)).isNull();
     }
 
+    @SuppressWarnings("null")
     @Test
     void continueConversation_resolvesNonSidechainSession() throws IOException {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -139,6 +141,7 @@ class SessionResumeTest {
         }
     }
 
+    @SuppressWarnings("null")
     @Test
     void cleanup_removesTempDir() throws IOException {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -170,6 +173,7 @@ class SessionResumeTest {
         assertThat(SessionResume.isSafeSubpath("subagents/../../../etc/passwd", sessionDir)).isFalse();
     }
 
+    @SuppressWarnings("null")
     @Test
     void validateSessionStoreOptions_continueWithoutListSessions_throws() {
         // A minimal store with only the required append/load methods.
@@ -193,6 +197,7 @@ class SessionResumeTest {
                 .hasMessageContaining("listSessions");
     }
 
+    @SuppressWarnings("null")
     @Test
     void validateSessionStoreOptions_fileCheckpointing_throws() {
         InMemorySessionStore store = new InMemorySessionStore();

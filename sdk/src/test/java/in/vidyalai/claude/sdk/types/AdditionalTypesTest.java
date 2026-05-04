@@ -387,6 +387,40 @@ class AdditionalTypesTest {
         assertThat(sandbox.ignoreViolations().file()).containsExactly("/tmp");
     }
 
+    @Test
+    void testSandboxNetworkConfigDomainAllowlist() {
+        SandboxNetworkConfig network = new SandboxNetworkConfig(
+                List.of("api.example.com", "*.npmjs.org"),
+                List.of("evil.example.com"),
+                true,
+                List.of("/tmp/agent.sock"),
+                false,
+                true,
+                List.of("com.apple.PowerManagement.control"),
+                8080,
+                1080);
+
+        assertThat(network.allowedDomains()).containsExactly("api.example.com", "*.npmjs.org");
+        assertThat(network.deniedDomains()).containsExactly("evil.example.com");
+        assertThat(network.allowManagedDomainsOnly()).isTrue();
+        assertThat(network.allowMachLookup())
+                .containsExactly("com.apple.PowerManagement.control");
+        // Existing fields still resolve correctly.
+        assertThat(network.allowUnixSockets()).containsExactly("/tmp/agent.sock");
+        assertThat(network.httpProxyPort()).isEqualTo(8080);
+    }
+
+    @Test
+    void testSandboxNetworkConfigBackwardCompatibleConstructor() {
+        // 5-arg constructor (pre-v0.1.71) leaves new fields null.
+        SandboxNetworkConfig network = new SandboxNetworkConfig(
+                List.of("/tmp/sock"), false, true, 8080, 1080);
+        assertThat(network.allowedDomains()).isNull();
+        assertThat(network.deniedDomains()).isNull();
+        assertThat(network.allowManagedDomainsOnly()).isNull();
+        assertThat(network.allowMachLookup()).isNull();
+    }
+
     // ==================== PermissionUpdate Tests ====================
 
     @Test

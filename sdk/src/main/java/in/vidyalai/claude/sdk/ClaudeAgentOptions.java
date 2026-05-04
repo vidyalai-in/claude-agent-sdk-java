@@ -26,6 +26,7 @@ import in.vidyalai.claude.sdk.types.permission.PermissionMode;
 import in.vidyalai.claude.sdk.types.permission.PermissionResult;
 import in.vidyalai.claude.sdk.types.permission.ToolPermissionContext;
 import in.vidyalai.claude.sdk.types.session.SessionStore;
+import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
 
 /**
  * Configuration options for Claude SDK queries and clients.
@@ -196,6 +197,12 @@ public final class ClaudeAgentOptions {
     @Nullable
     private final SessionStore sessionStore;
 
+    // When to flush mirrored transcript entries to ``sessionStore``. Defaults
+    // to BATCHED (flush once per turn or on buffer overflow); EAGER triggers a
+    // background flush after every frame for near-real-time delivery. Ignored
+    // when ``sessionStore`` is null.
+    private final SessionStoreFlushMode sessionStoreFlush;
+
     // Timeout for each ``sessionStore.load()`` / ``listSubkeys()`` call
     // during resume materialization, in milliseconds. If the adapter
     // doesn't settle within this window the query fails with a clear
@@ -249,6 +256,7 @@ public final class ClaudeAgentOptions {
         this.enableFileCheckpointing = builder.enableFileCheckpointing;
         this.taskBudget = builder.taskBudget;
         this.sessionStore = builder.sessionStore;
+        this.sessionStoreFlush = builder.sessionStoreFlush;
         this.loadTimeoutMs = builder.loadTimeoutMs;
     }
 
@@ -319,6 +327,7 @@ public final class ClaudeAgentOptions {
         builder.enableFileCheckpointing = this.enableFileCheckpointing;
         builder.taskBudget = this.taskBudget;
         builder.sessionStore = this.sessionStore;
+        builder.sessionStoreFlush = this.sessionStoreFlush;
         builder.loadTimeoutMs = this.loadTimeoutMs;
         return builder;
     }
@@ -644,6 +653,21 @@ public final class ClaudeAgentOptions {
     }
 
     /**
+     * Returns when to flush mirrored transcript entries to {@code sessionStore}.
+     *
+     * <p>{@link SessionStoreFlushMode#BATCHED} (default) coalesces entries and
+     * flushes once per turn or when the buffer exceeds 500 entries / 1 MiB.
+     * {@link SessionStoreFlushMode#EAGER} triggers a background flush after
+     * every frame for near-real-time delivery (each flush still runs off the
+     * read loop, so a slow adapter does not stall message streaming).
+     *
+     * <p>Ignored when {@link #sessionStore()} is {@code null}.
+     */
+    public SessionStoreFlushMode sessionStoreFlush() {
+        return sessionStoreFlush;
+    }
+
+    /**
      * Returns the timeout for {@code sessionStore.load()} /
      * {@code listSubkeys()} calls during resume materialization, in
      * milliseconds. Defaults to 60000.
@@ -787,6 +811,7 @@ public final class ClaudeAgentOptions {
         private TaskBudget taskBudget;
         @Nullable
         private SessionStore sessionStore;
+        private SessionStoreFlushMode sessionStoreFlush = SessionStoreFlushMode.BATCHED;
         private long loadTimeoutMs = 60_000L;
 
         private Builder() {
@@ -1300,6 +1325,27 @@ public final class ClaudeAgentOptions {
          */
         public Builder sessionStore(@Nullable SessionStore sessionStore) {
             this.sessionStore = sessionStore;
+            return this;
+        }
+
+        /**
+         * Sets when transcript-mirror entries are flushed to
+         * {@code sessionStore}.
+         *
+         * <p>{@link SessionStoreFlushMode#BATCHED} (default) coalesces entries
+         * and flushes once per turn or on buffer overflow.
+         * {@link SessionStoreFlushMode#EAGER} schedules a background flush
+         * after every frame for near-real-time delivery. Ignored when
+         * {@link #sessionStore} is unset.
+         *
+         * @param sessionStoreFlush the flush mode (must not be null)
+         * @return this builder
+         */
+        public Builder sessionStoreFlush(SessionStoreFlushMode sessionStoreFlush) {
+            if (sessionStoreFlush == null) {
+                throw new IllegalArgumentException("sessionStoreFlush must not be null");
+            }
+            this.sessionStoreFlush = sessionStoreFlush;
             return this;
         }
 

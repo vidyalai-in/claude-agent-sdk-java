@@ -716,7 +716,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testListSubagents_returnsAgentIds(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -757,7 +756,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testGetSubagentMessages_readsAgentTranscript(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -783,7 +781,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testListSubagents_sessionExistsButNoSubagentsDir(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -799,7 +796,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testListSubagents_emptySubagentsDir(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -816,7 +812,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testListSubagents_ignoresNonAgentFiles(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -839,7 +834,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testListSubagents_searchesAllProjectsWithoutDirectory(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -859,7 +853,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testGetSubagentMessages_nonexistentAgentReturnsEmpty(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -880,7 +873,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testGetSubagentMessages_findsAgentInNestedSubdirectory(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -907,7 +899,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testGetSubagentMessages_skipsCorruptLines(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -935,7 +926,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testGetSubagentMessages_emptyAgentFileReturnsEmpty(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
@@ -956,7 +946,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testGetSubagentMessages_limitZeroReturnsAll(@TempDir Path tempDir) throws IOException {
         // Python SDK semantics: limit=0 (or negative) is treated as no-limit.
@@ -983,7 +972,6 @@ class SessionsTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void testGetSubagentMessages_appliesLimitAndOffset(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;

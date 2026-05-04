@@ -304,7 +304,6 @@ public class SessionMutations {
      * @param deriveTitle invoked only when no explicit {@code title} is given,
      *                    so callers don't pay for the derivation when not needed.
      */
-    @SuppressWarnings("null")
     static BuildForkLinesResult buildForkLines(
             List<Map<String, Object>> transcript,
             List<Object> contentReplacements,

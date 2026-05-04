@@ -107,7 +107,7 @@ public final class SessionImport {
             try {
                 String metaText = Files.readString(metaPath, StandardCharsets.UTF_8);
                 @SuppressWarnings("unchecked")
-                Map<String, Object> metaMap = MAPPER.readValue(metaText, Map.class);
+                Map<String, Object> metaMap = (Map<String, Object>) MAPPER.readValue(metaText, Map.class);
                 Map<String, Object> entry = new java.util.LinkedHashMap<>();
                 entry.put("type", "agent_metadata");
                 entry.putAll(metaMap);
@@ -154,7 +154,7 @@ public final class SessionImport {
                 }
                 try {
                     @SuppressWarnings("unchecked")
-                    Map<String, Object> map = MAPPER.readValue(line, Map.class);
+                    Map<String, Object> map = (Map<String, Object>) MAPPER.readValue(line, Map.class);
                     batch.add(SessionStoreEntry.of(map));
                     nbytes += line.length();
                 } catch (JsonProcessingException e) {

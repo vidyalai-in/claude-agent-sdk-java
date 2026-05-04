@@ -1029,6 +1029,7 @@ public class Sessions {
      *
      * @return path of the first non-empty match, or {@code null}.
      */
+    @SuppressWarnings("null")
     public static @Nullable Path resolveSessionFilePath(String sessionId, @Nullable String directory) {
         String filename = sessionId + ".jsonl";
 

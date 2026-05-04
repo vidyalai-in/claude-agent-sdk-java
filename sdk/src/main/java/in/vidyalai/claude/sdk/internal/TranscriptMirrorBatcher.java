@@ -85,9 +85,6 @@ public final class TranscriptMirrorBatcher {
     /** Serializes flushes and lets {@link #flush()} await any in-flight drain. */
     private final ReentrantLock drainLock = new ReentrantLock();
 
-    /** Most recently scheduled drain — {@link #flush()} awaits this. */
-    private volatile @Nullable CompletableFuture<Void> latestDrain;
-
     private volatile boolean closed = false;
 
     private record MirrorEntry(String filePath, List<SessionStoreEntry> entries, int size) {
@@ -163,9 +160,7 @@ public final class TranscriptMirrorBatcher {
     }
 
     private CompletableFuture<Void> scheduleDrain() {
-        CompletableFuture<Void> drain = CompletableFuture.runAsync(this::drainAndReport, executor);
-        latestDrain = drain;
-        return drain;
+        return CompletableFuture.runAsync(this::drainAndReport, executor);
     }
 
     /**
@@ -289,6 +284,25 @@ public final class TranscriptMirrorBatcher {
     /** Test helper — current pending byte estimate. */
     public synchronized int pendingBytes() {
         return pendingBytes;
+    }
+
+    /**
+     * Threshold above which a background drain is auto-scheduled by
+     * {@link #enqueue}. Mirrors Python's {@code batcher.max_pending_entries}
+     * public attribute. {@code 0} means every enqueue triggers a drain (eager
+     * mode).
+     */
+    public int maxPendingEntries() {
+        return maxPendingEntries;
+    }
+
+    /**
+     * Byte threshold above which a background drain is auto-scheduled by
+     * {@link #enqueue}. Mirrors Python's {@code batcher.max_pending_bytes}
+     * public attribute. {@code 0} means every enqueue triggers a drain.
+     */
+    public int maxPendingBytes() {
+        return maxPendingBytes;
     }
 
 }

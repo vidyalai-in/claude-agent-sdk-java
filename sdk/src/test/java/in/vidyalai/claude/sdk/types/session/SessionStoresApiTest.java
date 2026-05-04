@@ -73,6 +73,7 @@ class SessionStoresApiTest {
         assertThat(sessions.get(0).summary()).isEqualTo("What is the weather today?");
     }
 
+    @SuppressWarnings("null")
     @Test
     void getSessionInfoFromStore_returnsSummaryForExistingSession() {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -108,6 +109,7 @@ class SessionStoresApiTest {
         assertThat(messages).hasSize(2);
     }
 
+    @SuppressWarnings("null")
     @Test
     void renameSessionViaStore_appendsCustomTitleEntry() {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -133,6 +135,7 @@ class SessionStoresApiTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @SuppressWarnings("null")
     @Test
     void tagSessionViaStore_appendsTagEntry() {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -149,6 +152,7 @@ class SessionStoresApiTest {
         assertThat(tagEntry.<String>get("tag")).isEqualTo("important");
     }
 
+    @SuppressWarnings("null")
     @Test
     void tagSessionViaStore_clearsTagWithNull() {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -176,6 +180,7 @@ class SessionStoresApiTest {
         assertThat(store.load(main)).isNull();
     }
 
+    @SuppressWarnings("null")
     @Test
     void forkSessionViaStore_copiesTranscriptIntoNewSession() throws IOException {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -263,6 +268,7 @@ class SessionStoresApiTest {
         assertThat(page1.get(0).sessionId()).isNotEqualTo(page2.get(0).sessionId());
     }
 
+    @SuppressWarnings("null")
     @Test
     void listSessionsFromStore_throwsWhenStoreImplementsNeitherListing() {
         // Custom store implementing only append/load (no list_sessions, no list_session_summaries)
@@ -410,6 +416,7 @@ class SessionStoresApiTest {
         assertThat(ids).containsExactly("foo");
     }
 
+    @SuppressWarnings("null")
     @Test
     void listSubagentsFromStore_throwsWhenStoreLacksListSubkeys() {
         // Custom store without listSubkeys must raise.

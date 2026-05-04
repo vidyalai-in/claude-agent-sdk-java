@@ -88,6 +88,7 @@ class SessionSummaryTest {
         assertThat(SessionSummary.summaryEntryToSdkInfo(entry, null)).isNull();
     }
 
+    @SuppressWarnings("null")
     @Test
     void summaryEntryToSdkInfo_buildsExpectedShape() {
         Map<String, Object> data = new LinkedHashMap<>();
@@ -261,6 +262,7 @@ class SessionSummaryTest {
         assertThat(first.data()).isEqualTo(originalData);
     }
 
+    @SuppressWarnings("null")
     @Test
     void summaryEntryToSdkInfo_summaryPrecedenceChain() {
         // custom_title > ai_title > last_prompt > summary_hint > first_prompt

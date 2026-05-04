@@ -33,6 +33,7 @@ class SessionStoreAsyncTest {
         return new SessionKey("p", UUID.randomUUID().toString(), null);
     }
 
+    @SuppressWarnings("null")
     @Test
     void appendAsync_andLoadAsync_roundTripVirtualThreadDefault() throws Exception {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -160,6 +161,7 @@ class SessionStoreAsyncTest {
         assertThat(path.get()).isEqualTo("async-override");
     }
 
+    @SuppressWarnings("null")
     @Test
     void asyncException_propagatesViaCompletionException() {
         SessionStore failing = new SessionStore() {

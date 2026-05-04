@@ -281,4 +281,25 @@ class ClaudeAgentOptionsTest {
         assertThat(copy.loadTimeoutMs()).isEqualTo(5_000L);
     }
 
+    @Test
+    void sessionStoreFlush_defaultsToBatched() {
+        ClaudeAgentOptions defaults = ClaudeAgentOptions.defaults();
+        assertThat(defaults.sessionStoreFlush())
+                .isEqualTo(in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode.BATCHED);
+    }
+
+    @Test
+    void sessionStoreFlush_propagatedThroughBuilder() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .sessionStoreFlush(in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode.EAGER)
+                .build();
+
+        assertThat(options.sessionStoreFlush())
+                .isEqualTo(in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode.EAGER);
+
+        ClaudeAgentOptions copy = options.toBuilder().build();
+        assertThat(copy.sessionStoreFlush())
+                .isEqualTo(in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode.EAGER);
+    }
+
 }

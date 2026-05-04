@@ -475,7 +475,6 @@ public class SubprocessCLITransport implements Transport {
      *
      * <p>Does not mutate the original options.
      */
-    @SuppressWarnings("unchecked")
     SkillsDefaultsResult applySkillsDefaults() {
         List<String> allowedTools = new ArrayList<>(options.allowedTools());
         List<SettingSource> settingSources = (options.settingSources() != null)

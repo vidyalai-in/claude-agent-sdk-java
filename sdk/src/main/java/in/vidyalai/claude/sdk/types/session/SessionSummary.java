@@ -254,7 +254,6 @@ public final class SessionSummary {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static List<String> entryTextBlocks(@Nullable Object content) {
         if (content instanceof String s) {
             return List.of(s);

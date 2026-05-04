@@ -121,6 +121,7 @@ public class SessionStoreExample {
      * Wire a {@link SessionStore} into {@link ClaudeAgentOptions} so the SDK
      * mirrors every transcript line to the store as the conversation runs.
      */
+    @SuppressWarnings("null")
     static void wiredIntoOptions() {
         InMemorySessionStore store = new InMemorySessionStore();
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()

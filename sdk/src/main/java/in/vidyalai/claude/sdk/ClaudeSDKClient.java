@@ -317,7 +317,8 @@ public class ClaudeSDKClient implements AutoCloseable {
                     effectiveOptions.sessionStore(),
                     materialized,
                     effectiveOptions.env(),
-                    q::reportMirrorError);
+                    q::reportMirrorError,
+                    effectiveOptions.sessionStoreFlush());
             q.setTranscriptMirrorBatcher(batcher);
         }
 
