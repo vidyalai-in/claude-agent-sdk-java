@@ -50,6 +50,7 @@ options.toBuilder()
 - `resume(String)` - Resume specific session
 - `forkSession(boolean)` - Fork resumed session
 - `sessionStore(SessionStore)` - Mirror transcripts to an external store and resume from it (see [Session Store](./feature-session-store.md)). When set, the SDK forwards `--session-mirror` to the CLI and routes `transcript_mirror` frames to `store.appendAsync(...)`. Pre-flight validation rejects `continueConversation + sessionStore` without `listSessions()` support and `sessionStore + enableFileCheckpointing`.
+- `sessionStoreFlush(SessionStoreFlushMode)` - When transcript-mirror entries are flushed to `sessionStore`. `BATCHED` (default) coalesces entries and flushes once per turn or when the buffer exceeds 500 entries / 1 MiB; `EAGER` schedules a background flush after every frame for near-real-time delivery. Ignored when `sessionStore` is unset. See [Flush Mode](./feature-session-store.md#flush-mode-batched-vs-eager).
 - `loadTimeoutMs(long)` - Per-call timeout for `store.loadAsync()` / `listSubkeysAsync()` during resume materialization, in milliseconds (default `60_000`). A value of `0` means immediate timeout; large values effectively disable.
 
 ### Limits

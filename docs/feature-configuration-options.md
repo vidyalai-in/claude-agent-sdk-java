@@ -269,6 +269,21 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` requires `store.implementsListSessions()`.
 - `sessionStore + enableFileCheckpointing` is rejected — checkpoints are local-disk only.
 
+### sessionStoreFlush()
+
+Controls when transcript-mirror entries are flushed to the configured `sessionStore`. Defaults to `SessionStoreFlushMode.BATCHED` (flush once per turn or on buffer overflow). Use `SessionStoreFlushMode.EAGER` to schedule a background flush after every frame for near-real-time delivery — appends remain serialized in enqueue order, but a slow adapter will not stall the read loop. Ignored when `sessionStore` is unset.
+
+```java
+import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
+
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .sessionStore(store)
+    .sessionStoreFlush(SessionStoreFlushMode.EAGER)
+    .build();
+```
+
+See [Flush Mode (Batched vs Eager)](./feature-session-store.md#flush-mode-batched-vs-eager) for the trade-offs.
+
 ### loadTimeoutMs()
 
 Per-call timeout for `store.loadAsync()` and `listSubkeysAsync()` during resume materialization, in milliseconds. Defaults to `60_000`. If an adapter doesn't settle within this window, the query fails with a clear error rather than hanging the iterator.
@@ -635,12 +650,47 @@ Behavior details:
 Configure bash command sandboxing.
 
 ```java
-.sandbox(new SandboxSettings(
-    true,  // enabled
-    new SandboxNetworkConfig(true, List.of(), List.of()),
-    SandboxIgnoreViolations.NONE
-))
+// Minimal: just enable sandboxing.
+.sandbox(new SandboxSettings(true))
 ```
+
+For finer-grained control supply the full record:
+
+```java
+SandboxNetworkConfig network = new SandboxNetworkConfig(
+    List.of("api.example.com", "*.npmjs.org"),  // allowedDomains
+    List.of("malicious.example.com"),           // deniedDomains (always blocked)
+    /* allowManagedDomainsOnly */ false,
+    List.of("/tmp/ssh-agent.sock"),             // allowUnixSockets
+    /* allowAllUnixSockets */ false,
+    /* allowLocalBinding */ true,
+    List.of("com.apple.PowerManagement.control"),  // allowMachLookup (macOS only)
+    /* httpProxyPort */ null,
+    /* socksProxyPort */ null);
+
+SandboxSettings sandbox = new SandboxSettings(
+    /* enabled */ true,
+    /* autoAllowBashIfSandboxed */ true,
+    /* excludedCommands */ List.of("git"),
+    /* allowUnsandboxedCommands */ null,
+    network,
+    /* ignoreViolations */ null,
+    /* enableWeakerNestedSandbox */ false);
+
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .sandbox(sandbox)
+    .build();
+```
+
+`SandboxNetworkConfig` fields:
+
+- `allowedDomains` — domains sandboxed processes can reach.
+- `deniedDomains` — always-blocked overrides; deny wins over allow.
+- `allowManagedDomainsOnly` — when `true` in managed settings, only managed-settings `allowedDomains` are respected.
+- `allowMachLookup` — macOS-only XPC/Mach service names; supports trailing wildcard.
+- `allowUnixSockets`, `allowAllUnixSockets`, `allowLocalBinding`, `httpProxyPort`, `socksProxyPort` — pre-existing.
+
+A backward-compatible 5-arg constructor `(allowUnixSockets, allowAllUnixSockets, allowLocalBinding, httpProxyPort, socksProxyPort)` is preserved for callers that don't need the domain allowlist or Mach-lookup fields — those default to `null`.
 
 ### plugins()
 

@@ -14,6 +14,7 @@ Mirror Claude Code session transcripts to an external store (S3, Postgres, Redis
 - [SessionStore-Backed Mutations](#sessionstore-backed-mutations)
 - [Resume from a Store](#resume-from-a-store)
 - [Mirror Errors](#mirror-errors)
+- [Flush Mode (Batched vs Eager)](#flush-mode-batched-vs-eager)
 - [Importing Local Sessions Into a Store](#importing-local-sessions-into-a-store)
 - [Conformance Test Harness](#conformance-test-harness)
 - [Internal Runtime Pieces](#internal-runtime-pieces)
@@ -384,6 +385,28 @@ for (Message msg : ClaudeSDK.query("Hello", options)) {
 
 Timeouts are NOT retried (the in-flight call may still land — a retry would launch a concurrent duplicate). Adapters should dedupe on `entry.uuid()` so a partial-succeed retry is duplicate-safe.
 
+## Flush Mode (Batched vs Eager)
+
+By default the `TranscriptMirrorBatcher` buffers every `transcript_mirror` frame and flushes once per turn (on the `result` message) or when the pending buffer exceeds `MAX_PENDING_ENTRIES=500` entries / `MAX_PENDING_BYTES=1 MiB`. This keeps adapter latency off the streaming hot path and is the right choice for almost every deployment.
+
+The `sessionStoreFlush` option lets you switch to eager mirroring when you need entries to land in the store with sub-second latency:
+
+```java
+import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
+
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .sessionStore(store)
+    .sessionStoreFlush(SessionStoreFlushMode.EAGER)
+    .build();
+```
+
+| Mode | When entries are flushed | Use when |
+|---|---|---|
+| `BATCHED` (default) | Once per `result` message OR when pending exceeds 500 entries / 1 MiB | Almost all production workloads — keeps adapter latency off the streaming hot path |
+| `EAGER` | Background drain scheduled after every enqueued frame | Live transcript streaming to clients, real-time audit pipelines, very large turns where you can't wait until `result` |
+
+`EAGER` zeroes the batcher's pending thresholds — every enqueued frame schedules a background flush via the configured `SessionStoreExecutor` (named virtual thread per task by default). Appends remain serialized in enqueue order; a slow adapter will not stall the read loop but will see frames coalesced while it's busy. The option is ignored when `sessionStore` is unset.
+
 ## Importing Local Sessions Into a Store
 
 Migrate existing on-disk sessions into a store, or catch the store up after a `MirrorErrorMessage` exposed a gap:
@@ -460,11 +483,12 @@ These live in `in.vidyalai.claude.sdk.internal` and are not part of the public A
 
 Buffers `transcript_mirror` frames the CLI emits on stdout and flushes them to `store.appendAsync(...)`:
 
-- Eager-flush thresholds: `MAX_PENDING_ENTRIES=500`, `MAX_PENDING_BYTES=1 MiB`.
+- Eager-flush thresholds: `MAX_PENDING_ENTRIES=500`, `MAX_PENDING_BYTES=1 MiB`. With `sessionStoreFlush(EAGER)` both thresholds are zeroed so every enqueued frame schedules a background drain (see [Flush Mode](#flush-mode-batched-vs-eager)).
 - Explicit flush before each `result` message and again at end-of-stream / close.
 - Coalesces frames per `filePath` so each unique file gets one `append` call per flush.
 - Frames whose path falls outside `projectsDir` are dropped with a warning (would happen if `CLAUDE_CONFIG_DIR` differs between parent and subprocess).
 - `MIRROR_APPEND_MAX_ATTEMPTS=3` retries with `[200ms, 800ms]` backoff; timeouts are not retried.
+- `maxPendingEntries()` / `maxPendingBytes()` test accessors expose the configured thresholds (mirrors Python's public attributes).
 
 ### `SessionResume`
 
@@ -472,7 +496,7 @@ Materializes a stored session into a temp `CLAUDE_CONFIG_DIR` so the CLI can res
 
 - `materializeResumeSession(options)` — main entry point.
 - `applyMaterializedOptions(options, materialized)` — copies options with `CLAUDE_CONFIG_DIR` injected, `resume` set, `continueConversation` cleared.
-- `buildMirrorBatcher(store, materialized, env, onError)` — constructs the batcher with the right `projectsDir`.
+- `buildMirrorBatcher(store, materialized, env, onError)` — constructs the batcher with the right `projectsDir` (defaults to `BATCHED` flush mode). The 5-arg overload `buildMirrorBatcher(store, materialized, env, onError, flushMode)` zeroes the batcher's thresholds when `flushMode == EAGER`.
 - `MaterializedResume.cleanup()` — best-effort recursive removal with retry on transient Windows AV/indexer locks.
 
 ### `SessionStoreValidation`
