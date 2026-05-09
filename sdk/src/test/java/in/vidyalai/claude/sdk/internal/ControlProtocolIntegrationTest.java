@@ -222,7 +222,6 @@ public class ControlProtocolIntegrationTest {
         // Round-trip back through toMap (the @JsonValue serializer) — this is
         // what PermissionResultAllow.toMap echoes back to the CLI when callers
         // re-use the suggestions in updatedPermissions.
-        @SuppressWarnings("unchecked")
         Map<String, Object> echoed = (Map<String, Object>) suggestion.toMap();
         assertThat(echoed).containsEntry("type", "addRules");
         assertThat(echoed).containsEntry("destination", "localSettings");

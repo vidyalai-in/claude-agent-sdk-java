@@ -528,7 +528,6 @@ public class QueryHandler implements AutoCloseable {
         // generic "Command failed with exit code 1" ProcessException that
         // the CLI raises after emitting an error result. Mirrors the
         // TypeScript and Python SDKs' lastErrorResultText / _last_error_result_text.
-        @Nullable
         String[] lastErrorResultText = new String[1];
         try {
             Iterator<Map<String, Object>> messages = transport.readMessages();

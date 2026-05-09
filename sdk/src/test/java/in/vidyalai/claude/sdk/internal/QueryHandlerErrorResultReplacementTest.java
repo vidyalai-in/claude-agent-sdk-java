@@ -25,14 +25,16 @@ import in.vidyalai.claude.sdk.types.message.Message;
  * Regression tests for the post-error-result {@code ProcessException}
  * replacement in {@link QueryHandler#readMessages()} (Python SDK v0.1.77 #918).
  *
- * <p>When the CLI emits a {@code result} with {@code is_error=true} (e.g.
+ * <p>
+ * When the CLI emits a {@code result} with {@code is_error=true} (e.g.
  * {@code error_max_turns}, {@code error_during_execution}) it then exits
  * non-zero on purpose. The trailing {@code ProcessException} carries no
  * information beyond "exit code 1" — the SDK replaces it with the
  * structured error text the CLI already reported so the exception is
  * actionable.
  *
- * <p>The replacement surfaces to the consumer iterator as a
+ * <p>
+ * The replacement surfaces to the consumer iterator as a
  * {@link ClaudeSDKException} thrown from {@code hasNext()} with the
  * replaced text as the message.
  */
@@ -270,6 +272,7 @@ class QueryHandlerErrorResultReplacementTest {
         assertThat(ex.getMessage()).doesNotStartWith("Claude Code returned an error result");
     }
 
+    @SuppressWarnings("null")
     @Test
     void hasNextThrowsClaudeSDKException_notProcessException() {
         // The replaced exception type should still be raisable as a generic
