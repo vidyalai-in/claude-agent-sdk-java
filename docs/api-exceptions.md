@@ -71,6 +71,8 @@ public class ProcessException extends ClaudeSDKException {
 - Invalid arguments
 - Resource exhaustion
 
+**Actionable error after error-result exits**: when the CLI emits a `ResultMessage` with `isError=true` (for example `error_max_turns`, `error_during_execution`, or a `success` subtype with `apiErrorStatus` set) it then exits non-zero on purpose. The trailing `ProcessException` would carry only `"Command failed with exit code N"`, which is not actionable. Starting in v0.1.15, `QueryHandler.readMessages` replaces that synthetic `{"type":"error"}` payload with `"Claude Code returned an error result: <text>"`, where `<text>` is built from the result's `errors` array (joined by `"; "`) or from the result `subtype` when the array is empty. The reset is per-turn — a fresh crash later in the run keeps its original `ProcessException` message.
+
 ## CLIJSONDecodeException
 
 Failed to parse JSON from CLI.

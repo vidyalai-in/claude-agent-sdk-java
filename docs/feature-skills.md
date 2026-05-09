@@ -69,6 +69,8 @@ Skills also flow over the SDK control protocol via `SDKControlInitializeRequest.
 
 Older CLIs that don't recognize the `skills` initialize field ignore it — the auto-injected `allowedTools` entries are still respected.
 
+> **Deprecation:** Passing the bare `"Skill"` token in `allowedTools(...)` (or in `AgentDefinition.tools`) is **deprecated**. Use `skillsAll()` / `skills(List.of(...))` instead — they configure everything needed (including allowing the `Skill` tool) and avoid drift between `allowedTools` and the wire-level `skills` field.
+
 ## Examples
 
 ### Mixing with explicit `allowedTools`

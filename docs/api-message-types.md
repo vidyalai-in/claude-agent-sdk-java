@@ -21,7 +21,7 @@ Unknown message types return `null` instead of throwing an exception, allowing t
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
-    TaskNotificationMessage, MirrorErrorMessage,
+    TaskNotificationMessage, MirrorErrorMessage, HookEventMessage,
     ResultMessage, StreamEvent, RateLimitEvent {
     String type();
 }
@@ -113,14 +113,28 @@ record ResultMessage(
     @Nullable Object structuredOutput,            // Structured output if json_schema specified
     @Nullable Map<String, Object> modelUsage,     // Per-model usage breakdown
     @Nullable List<Object> permissionDenials,     // Permission denials during session
+    @Nullable DeferredToolUse deferredToolUse,    // Tool call deferred by a PreToolUse "defer" decision
     @Nullable List<String> errors,                // Error messages from the CLI
+    @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid                         // Unique message identifier in session
 ) implements Message {
     String type();  // Returns "result"
 }
 ```
 
-Backwards-compatible constructors are also available for code that does not need the newer fields. The original 10-parameter constructor (without `stopReason`, `modelUsage`, `permissionDenials`, `errors`, and `uuid`) continues to work.
+Backwards-compatible constructors are also available for code that does not need the newer fields. The original 10-parameter constructor (without `stopReason`, `modelUsage`, `permissionDenials`, `errors`, and `uuid`) continues to work; a 15-parameter overload (without `deferredToolUse` and `apiErrorStatus`) is also available for callers written against the earlier shape.
+
+### DeferredToolUse
+
+A tool call deferred by a `PreToolUse` hook returning `permissionDecision: "defer"`. The CLI stops the run and surfaces the deferred call here so the SDK consumer can decide whether to resume.
+
+```java
+record DeferredToolUse(
+    String id,                       // Unique identifier of the deferred tool call
+    String name,                     // Tool name
+    Map<String, Object> input        // Tool input arguments
+)
+```
 
 ## StreamEvent
 
@@ -220,6 +234,25 @@ record MirrorErrorMessage(
     String type();                      // returns "system"
 }
 ```
+
+## HookEventMessage
+
+Hook lifecycle event. Only emitted when `includeHookEvents(true)` is set on `ClaudeAgentOptions`.
+
+```java
+record HookEventMessage(
+    String subtype,                       // "hook_started" or "hook_response"
+    Map<String, Object> data,             // full raw event dict from the CLI
+    String hookEventName,                 // e.g. "PreToolUse", "PostToolUse", "Stop"
+    @Nullable String sessionId,           // session ID this event belongs to
+    @Nullable String uuid                 // unique event ID
+) implements Message {
+    String type();                        // returns "system"
+    <T> T get(String key);                // typed lookup into data
+}
+```
+
+`HookEventMessage` is a top-level sealed-interface member (it does not match `instanceof SystemMessage`). On a `hook_response` the `data` map carries `output`, `exit_code`, and `outcome` keys.
 
 ## RateLimitEvent
 

@@ -52,6 +52,8 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
 - **[Message Types](./feature-message-types.md)** - Understanding the message type system
   - UserMessage, AssistantMessage, SystemMessage, ResultMessage, StreamEvent, RateLimitEvent
   - Task lifecycle messages (TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage)
+  - HookEventMessage (when `includeHookEvents` is enabled)
+  - DeferredToolUse on ResultMessage; `apiErrorStatus` HTTP status field
   - Content blocks (Text, Thinking, ToolUse, ToolResult)
   - Pattern matching
   - Examples and best practices
@@ -114,11 +116,15 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
 - **[Hooks System](./feature-hooks.md)** - Intercepting and responding to lifecycle events
   - 10 hook events
   - HookMatcher and HookOutput
+  - PostToolUse `updatedToolOutput` (replace any tool's output) and `updatedMCPToolOutput`
+  - `PermissionDecision.DEFER` + `DeferredToolUse` on ResultMessage
+  - `includeHookEvents` + HookEventMessage stream
   - Examples for common use cases
 
 - **[Permission System](./feature-permissions.md)** - Custom permission callbacks and modes
   - Permission modes
-  - Custom permission callbacks
+  - Custom permission callbacks (fire only on `"ask"` decisions)
+  - Enriched `ToolPermissionContext` (`title`, `displayName`, `description`, `decisionReason`, `blockedPath`)
   - Path-based, time-based, and user confirmation examples
 
 - **[Streaming Events](./feature-streaming-events.md)** - Real-time partial message updates
@@ -204,7 +210,7 @@ Add to your `pom.xml`:
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.13</version>
+    <version>0.1.15</version>
 </dependency>
 
 <repositories>
@@ -348,6 +354,6 @@ Contributions are welcome! Please see the repository for contribution guidelines
 
 ## Version
 
-Current version: 0.1.13
+Current version: 0.1.15
 
 See [CHANGELOG.md](../docs/CHANGELOG.md) for version history and release notes.

@@ -119,6 +119,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Message streaming
   - Initialization handshake (includes hooks, agent definitions, and excludeDynamicSections)
   - MCP server lifecycle management
+  - **Actionable error replacement**: tracks the most recent error result's text while reading the stream; when a `ProcessException` follows a result with `is_error=true`, the synthetic `{"type":"error"}` payload carries `"Claude Code returned an error result: <text>"` (built from the result's `errors` array or `subtype`) instead of the generic `"Command failed with exit code N"`. Resets on any non-result, non-`session_state_changed` traffic.
 - **Thread Safety**: Fully thread-safe with atomic operations and synchronization
 - **Key Features**:
   - Async control protocol using CompletableFuture
@@ -163,6 +164,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Buffered reading with configurable limits
   - Stderr callback support
   - Automatic process cleanup
+  - **JVM shutdown hook**: a static `ConcurrentHashMap.newKeySet()` tracks every spawned `Process`; a `Runtime.addShutdownHook` registered at class init calls `destroy()` on each live child so stray `claude` subprocesses do not leak when the parent JVM exits before `close()`. Mirrors the Python SDK's `atexit` handler.
 - **Implementation Details**:
   - Uses ProcessBuilder for subprocess management
   - Virtual thread for stdout reading
@@ -255,7 +257,7 @@ Used extensively for type-safe message handling:
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
-    TaskNotificationMessage, MirrorErrorMessage,
+    TaskNotificationMessage, MirrorErrorMessage, HookEventMessage,
     ResultMessage, StreamEvent, RateLimitEvent {}
 
 // Usage with pattern matching
@@ -264,6 +266,7 @@ switch (message) {
     case AssistantMessage a -> handleAssistant(a);
     case ResultMessage r -> handleResult(r);
     case MirrorErrorMessage m -> handleMirrorError(m);
+    case HookEventMessage h -> handleHookEvent(h);
     case SystemMessage s -> handleSystem(s);
     case StreamEvent e -> handleStreamEvent(e);
     // ... task and rate-limit cases

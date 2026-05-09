@@ -618,6 +618,19 @@ var options = ClaudeAgentOptions.builder()
     .build();
 ```
 
+### Strict MCP Configuration
+
+By default the CLI loads MCP servers from the project `.mcp.json`, the user/global settings, and any plugins, in addition to whatever you pass via `mcpServers(...)`. Set `strictMcpConfig(true)` to ignore everything except the servers you pass in:
+
+```java
+var options = ClaudeAgentOptions.builder()
+    .mcpServers(Map.of("app", sdkServer))
+    .strictMcpConfig(true)   // ignore project / user / plugin MCP configs
+    .build();
+```
+
+Maps to the CLI's `--strict-mcp-config` flag. Useful for reproducible deployments or test isolation when you want exact control over which MCP servers are reachable.
+
 ## Examples
 
 ### Example 1: Calculator

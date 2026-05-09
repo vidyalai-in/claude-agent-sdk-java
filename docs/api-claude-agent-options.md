@@ -39,11 +39,12 @@ options.toBuilder()
 
 ### MCP Servers
 - `mcpServers(Object)` - Map, Path, or String
+- `strictMcpConfig(boolean)` - When `true`, the CLI ignores project `.mcp.json`, user/global settings, and plugin-provided MCP servers — only the servers passed via `mcpServers(...)` are loaded. Maps to `--strict-mcp-config`.
 
 ### Permissions
 - `permissionMode(PermissionMode)` - Permission mode
 - `permissionPromptToolName(String)` - Tool for prompts
-- `canUseTool(CanUseTool)` - Custom callback
+- `canUseTool(CanUseTool)` - Custom callback. **Fires only on `"ask"` decisions** — not for tool calls already permitted by `allowedTools`, `permissionMode`, or `permissions.allow` rules. Use a `PreToolUse` hook to gate every call regardless of decision.
 
 ### Sessions
 - `continueConversation(boolean)` - Continue last session
@@ -57,8 +58,8 @@ options.toBuilder()
 - `maxTurns(Integer)` - Max conversation turns
 - `maxBudgetUsd(Double)` - Max cost in USD
 - `maxBufferSize(Integer)` - Max stdout buffer bytes
-- `thinking(ThinkingConfig)` - **NEW** Extended thinking configuration
-- `effort(String)` - **NEW** Thinking depth level ("low", "medium", "high", "max")
+- `thinking(ThinkingConfig)` - Extended thinking configuration
+- `effort(String)` - Thinking depth level (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`). `"xhigh"` is Opus 4.7-specific and falls back to `"high"` on other models.
 - `maxThinkingTokens(Integer)` - **DEPRECATED** Use `thinking()` instead
 - `maxMsgQSize(Integer)` - Max message queue size
 
@@ -80,6 +81,7 @@ options.toBuilder()
 
 ### Hooks
 - `hooks(Map<HookEvent, List<HookMatcher>>)` - Hook callbacks
+- `includeHookEvents(boolean)` - When `true`, the CLI streams hook lifecycle events (`PreToolUse`, `PostToolUse`, `Stop`, …) into the message stream as `HookEventMessage` objects. Maps to `--include-hook-events`. See [Hooks → Hook Lifecycle Events on the Stream](./feature-hooks.md#hook-lifecycle-events-on-the-stream).
 
 ### Advanced
 - `user(String)` - User identity

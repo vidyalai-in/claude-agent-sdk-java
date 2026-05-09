@@ -140,18 +140,23 @@ The `effort` option controls thinking depth/intensity. Valid values:
 
 | Level | Description | Use Case |
 |-------|-------------|----------|
-| `"low"` | Minimal thinking | Simple queries, quick responses |
-| `"medium"` | Balanced thinking (default) | General-purpose tasks |
-| `"high"` | Deep thinking | Complex problems, detailed analysis |
-| `"max"` | Maximum thinking | Research, critical reasoning |
+| `"low"` | Minimal thinking, fastest responses | Simple queries, quick responses |
+| `"medium"` | Moderate thinking | General-purpose tasks |
+| `"high"` | Deep reasoning (default) | Complex problems, detailed analysis |
+| `"xhigh"` | Extended reasoning depth (Opus 4.7 only) | Hardest problems on Opus 4.7 |
+| `"max"` | Maximum effort | Research, critical reasoning |
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
-    .effort("high")
+    .effort("xhigh")        // Opus 4.7-specific; falls back to "high" on other models
+    .model("claude-opus-4-7")
     .build();
 ```
 
-**Note**: The effort level works in conjunction with ThinkingConfig. You can use effort without explicitly setting ThinkingConfig.
+**Notes**:
+
+- The effort level works in conjunction with ThinkingConfig. You can use effort without explicitly setting ThinkingConfig.
+- `"xhigh"` is **Opus 4.7-specific** and falls back to `"high"` on other models. The Java field stays a plain `String`, so future effort values can be passed without an SDK upgrade.
 
 ## Usage Examples
 

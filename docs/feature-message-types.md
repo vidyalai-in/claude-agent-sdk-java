@@ -11,6 +11,7 @@ Understanding the message type system for processing Claude conversations.
 - [SystemMessage](#systemmessage)
 - [Task Messages](#task-messages)
 - [MirrorErrorMessage](#mirrorerrormessage)
+- [HookEventMessage](#hookeventmessage)
 - [ResultMessage](#resultmessage)
 - [StreamEvent](#streamevent)
 - [RateLimitEvent](#ratelimitevent)
@@ -25,8 +26,8 @@ The SDK uses a sealed interface hierarchy for type-safe message handling. All me
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
-    TaskNotificationMessage, MirrorErrorMessage, ResultMessage,
-    StreamEvent, RateLimitEvent {}
+    TaskNotificationMessage, MirrorErrorMessage, HookEventMessage,
+    ResultMessage, StreamEvent, RateLimitEvent {}
 ```
 
 ## Forward Compatibility
@@ -60,6 +61,7 @@ Message (sealed interface)
 ├── TaskProgressMessage (record) - Task lifecycle: task in progress
 ├── TaskNotificationMessage (record) - Task lifecycle: task completed/failed/stopped
 ├── MirrorErrorMessage (record) - Non-fatal SessionStore.append() failure
+├── HookEventMessage (record) - Hook lifecycle events (when includeHookEvents enabled)
 ├── ResultMessage (record) - Final result with cost/usage/timing
 ├── StreamEvent (record) - Partial streaming updates
 └── RateLimitEvent (record) - Rate limit status change notifications
@@ -373,6 +375,41 @@ for (Message msg : ClaudeSDK.query(prompt, options)) {
 
 See [Session Store](./feature-session-store.md) for the full mirror flow and retry semantics.
 
+## HookEventMessage
+
+Hook lifecycle event surfaced into the message stream. Only emitted when `includeHookEvents(true)` is set on `ClaudeAgentOptions`. See [Hooks → Hook Lifecycle Events on the Stream](./feature-hooks.md#hook-lifecycle-events-on-the-stream).
+
+```java
+record HookEventMessage(
+    String subtype,                       // "hook_started" or "hook_response"
+    Map<String, Object> data,             // full raw event dict from the CLI
+    String hookEventName,                 // e.g. "PreToolUse", "PostToolUse", "Stop"
+    @Nullable String sessionId,           // session ID this event belongs to
+    @Nullable String uuid                 // unique event ID
+) implements Message {
+    String type();                        // returns "system"
+    <T> T get(String key);                // typed lookup into data
+}
+```
+
+`type()` returns `"system"` for symmetry with `SystemMessage`, but `HookEventMessage` is a separate sealed-interface member — `instanceof SystemMessage` does **not** match. Branch on `HookEventMessage` directly.
+
+`subtype` values:
+
+- `"hook_started"` — when a hook begins executing.
+- `"hook_response"` — when a hook completes; `data` includes `output`, `exit_code`, and `outcome` keys.
+
+```java
+for (Message msg : ClaudeSDK.query(prompt, options.toBuilder().includeHookEvents(true).build())) {
+    if (msg instanceof HookEventMessage hook) {
+        System.out.printf("[%s] %s%n", hook.subtype(), hook.hookEventName());
+        if ("hook_response".equals(hook.subtype())) {
+            System.out.println("  outcome: " + hook.get("outcome"));
+        }
+    }
+}
+```
+
 ## ResultMessage
 
 Final result sent at the end of each conversation turn with timing, cost, and usage information.
@@ -394,12 +431,24 @@ record ResultMessage(
     @Nullable Object structuredOutput,            // Structured output (when json_schema used)
     @Nullable Map<String, Object> modelUsage,     // Per-model usage breakdown
     @Nullable List<Object> permissionDenials,     // Permission denials during session
+    @Nullable DeferredToolUse deferredToolUse,    // Tool call deferred by a PreToolUse hook
     @Nullable List<String> errors,                // Error messages from the CLI
+    @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid                         // Unique message identifier in session
 ) implements Message
 ```
 
-The `errors` field contains a list of error messages from the CLI, useful for diagnosing non-zero exit codes. The `modelUsage` field provides per-model token breakdowns. Backwards-compatible constructors without the newer fields are also available.
+The `errors` field contains a list of error messages from the CLI, useful for diagnosing non-zero exit codes. The `modelUsage` field provides per-model token breakdowns. The `deferredToolUse` field is set when a `PreToolUse` hook returned `permissionDecision: "defer"` — see [Hooks → Permission Decision: `"defer"`](./feature-hooks.md#permission-decision-defer). The `apiErrorStatus` field carries the HTTP status code (e.g. `429`, `500`, `529`) of the failing API call when `isError=true` and `subtype="success"` (the API failed but the session itself completed); it is safe to log because it carries no message content. Backwards-compatible constructors without the newer fields are also available.
+
+### DeferredToolUse
+
+```java
+record DeferredToolUse(
+    String id,                       // unique identifier of the deferred tool call
+    String name,                     // tool name
+    Map<String, Object> input        // tool input arguments
+)
+```
 
 ### Common Subtypes
 
@@ -675,6 +724,7 @@ String result = switch (message) {
     case TaskProgressMessage t -> "Task progress: " + t.taskId();
     case TaskNotificationMessage t -> "Task done: " + t.status();
     case MirrorErrorMessage m -> "Mirror error: " + m.error();
+    case HookEventMessage h -> "Hook " + h.subtype() + ": " + h.hookEventName();
     case ResultMessage r -> "Cost: $" + r.totalCostUsd();
     case StreamEvent e -> "Streaming: " + e.eventType();
     case RateLimitEvent rle -> "Rate limit: " + rle.rateLimitInfo().status();
