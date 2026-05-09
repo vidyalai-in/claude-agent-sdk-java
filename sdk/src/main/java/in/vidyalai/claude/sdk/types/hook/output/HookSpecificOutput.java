@@ -54,6 +54,7 @@ public sealed interface HookSpecificOutput permits
     String PERMISSION_DECISION_REASON = "permissionDecisionReason";
     String UPDATED_INPUT = "updatedInput";
     String ADDITIONAL_CONTEXT = "additionalContext";
+    String UPDATED_TOOL_OUTPUT = "updatedToolOutput";
     String UPDATED_MCP_TOOL_OUTPUT = "updatedMCPToolOutput";
     String DECISION = "decision";
 

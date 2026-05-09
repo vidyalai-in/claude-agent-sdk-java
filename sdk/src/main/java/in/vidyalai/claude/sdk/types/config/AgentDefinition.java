@@ -13,7 +13,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param description    description of the agent
  * @param prompt         the system prompt for the agent
  * @param tools          list of tools the agent can use (null means inherit from
- *                       parent)
+ *                       parent). <b>Deprecated:</b> passing {@code "Skill"} here
+ *                       is deprecated; use {@link #skills} instead, which
+ *                       configures everything needed (including allowing the
+ *                       {@code Skill} tool).
  * @param disallowedTools list of tools the agent cannot use (null means none)
  * @param model          model alias ("sonnet", "opus", "haiku", "inherit") or a
  *                       full model ID, or null
@@ -30,7 +33,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param background     whether to run the agent in the background (null means
  *                       false)
  * @param effort         effort level for the agent ("low", "medium", "high",
- *                       "max") or null
+ *                       "xhigh", "max") or null. "xhigh" is an Opus 4.7-specific
+ *                       level that falls back to "high" on other models.
  * @param permissionMode permission mode for the agent (null means inherit)
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)

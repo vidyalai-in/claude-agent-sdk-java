@@ -34,7 +34,12 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param modelUsage        per-model usage breakdown (may be null)
  * @param permissionDenials list of permission denials during the session (may
  *                          be null)
+ * @param deferredToolUse   tool call deferred by a PreToolUse hook returning
+ *                          {@code "defer"} (may be null)
  * @param errors            list of error messages from the CLI (may be null)
+ * @param apiErrorStatus    HTTP status code (e.g. 429, 500, 529) of the
+ *                          failing API call when {@code isError} is true and
+ *                          {@code subtype} is "success"; null otherwise
  * @param uuid              unique identifier for this message in the session
  */
 public record ResultMessage(
@@ -51,7 +56,9 @@ public record ResultMessage(
         @JsonProperty("structured_output") @Nullable Object structuredOutput,
         @JsonProperty("modelUsage") @Nullable Map<String, Object> modelUsage,
         @JsonProperty("permission_denials") @Nullable List<Object> permissionDenials,
+        @JsonProperty("deferred_tool_use") @Nullable DeferredToolUse deferredToolUse,
         @JsonProperty("errors") @Nullable List<String> errors,
+        @JsonProperty("api_error_status") @Nullable Integer apiErrorStatus,
         @JsonProperty("uuid") @Nullable String uuid) implements Message {
 
     /**
@@ -65,7 +72,25 @@ public record ResultMessage(
             @Nullable Object structuredOutput) {
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
-                null, null, null, null);
+                null, null, null, null, null, null);
+    }
+
+    /**
+     * Backwards-compatible constructor with modelUsage, permissionDenials,
+     * errors, and uuid fields (pre-{@code deferredToolUse} / {@code apiErrorStatus}).
+     */
+    public ResultMessage(String subtype, int durationMs, int durationApiMs,
+            boolean isError, int numTurns, String sessionId,
+            @Nullable String stopReason, @Nullable Double totalCostUsd,
+            @Nullable Map<String, Object> usage, @Nullable String result,
+            @Nullable Object structuredOutput,
+            @Nullable Map<String, Object> modelUsage,
+            @Nullable List<Object> permissionDenials,
+            @Nullable List<String> errors,
+            @Nullable String uuid) {
+        this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
+                stopReason, totalCostUsd, usage, result, structuredOutput,
+                modelUsage, permissionDenials, null, errors, null, uuid);
     }
 
     @Override

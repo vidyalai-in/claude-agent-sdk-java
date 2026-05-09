@@ -542,6 +542,35 @@ class SessionsTest {
     // parseSessionInfoFromLite
     // -------------------------------------------------------------------------
 
+    @Test
+    void testExtractCreatedAtFromFirstLine_scansSubsequentLinesWhenFirstLacksTimestamp() {
+        // Regression for Python SDK fix #907: when the first JSONL record is a
+        // metadata-only entry (e.g. permission-mode) without a `timestamp`
+        // field, scan the head buffer for the next record that has one.
+        String head = "{\"type\":\"permission-mode\",\"permissionMode\":\"acceptEdits\"}\n"
+                + "{\"type\":\"user\",\"message\":{\"content\":\"hello\"},"
+                + "\"timestamp\":\"2026-01-15T10:30:00.000Z\"}\n";
+        Long createdAt = Sessions.extractCreatedAtFromFirstLine(head);
+        assertThat(createdAt).isEqualTo(1768473000000L);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testParseSessionInfoFromLite_createdAtFromLaterLineWhenFirstLacksTimestamp() {
+        // Regression for Python SDK fix #907 — at the parseSessionInfoFromLite
+        // level, not just the helper.
+        String head = "{\"type\":\"permission-mode\",\"permissionMode\":\"acceptEdits\"}\n"
+                + "{\"type\":\"user\",\"message\":{\"content\":\"hello\"},"
+                + "\"cwd\":\"/workspace\","
+                + "\"timestamp\":\"2026-01-15T10:30:00.000Z\"}\n";
+        Sessions.LiteSessionFile lite = new Sessions.LiteSessionFile(
+                System.currentTimeMillis(), 100L, head, head);
+
+        SDKSessionInfo info = Sessions.parseSessionInfoFromLite("abc", lite, null);
+        assertThat(info).isNotNull();
+        assertThat(info.createdAt()).isEqualTo(1768473000000L);
+    }
+
     @SuppressWarnings("null")
     @Test
     void testParseSessionInfoFromLite_withTagAndCreatedAt() {

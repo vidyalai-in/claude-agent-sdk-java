@@ -141,6 +141,94 @@ public class ControlProtocolIntegrationTest {
         assertThat(permReq.subtype()).isEqualTo("can_use_tool");
     }
 
+    @SuppressWarnings({ "unchecked", "null" })
+    @Test
+    public void testSDKControlPermissionRequestDeserializationWithEnrichmentFields() throws Exception {
+        // Wire payload exercising decision_reason / blocked_path / title /
+        // display_name / description (Python SDK v0.1.74 #909).
+        String json = """
+                {
+                    "type": "control_request",
+                    "request_id": "req-enrich",
+                    "request": {
+                        "subtype": "can_use_tool",
+                        "tool_name": "Bash",
+                        "input": {"command": "rm -rf /tmp/x"},
+                        "permission_suggestions": [],
+                        "tool_use_id": "toolu_01DEF456",
+                        "blocked_path": "/tmp/x",
+                        "decision_reason": "PreToolUse hook flagged this as destructive",
+                        "title": "Claude wants to run a Bash command",
+                        "display_name": "Bash",
+                        "description": "rm -rf /tmp/x"
+                    }
+                }
+                """;
+
+        Map<String, Object> messageMap = MAPPER.readValue(json, Map.class);
+        String reJson = MAPPER.writeValueAsString(messageMap);
+        SDKControlRequest request = MAPPER.readValue(reJson, SDKControlRequest.class);
+
+        SDKControlPermissionRequest permReq = (SDKControlPermissionRequest) request.request();
+        assertThat(permReq.toolName()).isEqualTo("Bash");
+        assertThat(permReq.toolUseId()).isEqualTo("toolu_01DEF456");
+        assertThat(permReq.blockedPath()).isEqualTo("/tmp/x");
+        assertThat(permReq.decisionReason()).isEqualTo("PreToolUse hook flagged this as destructive");
+        assertThat(permReq.title()).isEqualTo("Claude wants to run a Bash command");
+        assertThat(permReq.displayName()).isEqualTo("Bash");
+        assertThat(permReq.description()).isEqualTo("rm -rf /tmp/x");
+    }
+
+    @SuppressWarnings({ "unchecked", "null" })
+    @Test
+    public void testSDKControlPermissionRequestDeserializesSuggestionsAsPermissionUpdate() throws Exception {
+        // Verifies the Python SDK v0.1.76 #920 fix is already correct in Java:
+        // the dict-of-suggestions on the wire deserializes into PermissionUpdate
+        // instances via @JsonCreator on PermissionUpdate.fromMap.
+        String json = """
+                {
+                    "type": "control_request",
+                    "request_id": "req-suggestions",
+                    "request": {
+                        "subtype": "can_use_tool",
+                        "tool_name": "Bash",
+                        "input": {"command": "git status"},
+                        "permission_suggestions": [
+                            {
+                                "type": "addRules",
+                                "destination": "localSettings",
+                                "behavior": "allow",
+                                "rules": [{"toolName": "Bash", "ruleContent": "git status"}]
+                            }
+                        ]
+                    }
+                }
+                """;
+
+        Map<String, Object> messageMap = MAPPER.readValue(json, Map.class);
+        String reJson = MAPPER.writeValueAsString(messageMap);
+        SDKControlRequest request = MAPPER.readValue(reJson, SDKControlRequest.class);
+
+        SDKControlPermissionRequest permReq = (SDKControlPermissionRequest) request.request();
+        assertThat(permReq.permissionSuggestions()).hasSize(1);
+        PermissionUpdate suggestion = permReq.permissionSuggestions().get(0);
+        assertThat(suggestion).isInstanceOf(PermissionUpdate.class);
+        assertThat(suggestion.destination().getValue()).isEqualTo("localSettings");
+        assertThat(suggestion.behavior().getValue()).isEqualTo("allow");
+        assertThat(suggestion.rules()).hasSize(1);
+        assertThat(suggestion.rules().get(0).toolName()).isEqualTo("Bash");
+        assertThat(suggestion.rules().get(0).ruleContent()).isEqualTo("git status");
+
+        // Round-trip back through toMap (the @JsonValue serializer) — this is
+        // what PermissionResultAllow.toMap echoes back to the CLI when callers
+        // re-use the suggestions in updatedPermissions.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> echoed = (Map<String, Object>) suggestion.toMap();
+        assertThat(echoed).containsEntry("type", "addRules");
+        assertThat(echoed).containsEntry("destination", "localSettings");
+        assertThat(echoed).containsEntry("behavior", "allow");
+    }
+
     @Test
     public void testControlResponseSerialization() throws Exception {
         ControlResponse response = new ControlResponse("req-456", Map.of("status", "ok"));

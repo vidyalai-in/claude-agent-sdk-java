@@ -524,6 +524,12 @@ public class QueryHandler implements AutoCloseable {
     }
 
     private void readMessages() {
+        // Tracks the most recent error result's text so we can replace the
+        // generic "Command failed with exit code 1" ProcessException that
+        // the CLI raises after emitting an error result. Mirrors the
+        // TypeScript and Python SDKs' lastErrorResultText / _last_error_result_text.
+        @Nullable
+        String[] lastErrorResultText = new String[1];
         try {
             Iterator<Map<String, Object>> messages = transport.readMessages();
             while (messages.hasNext() && (!closed.get())) {
@@ -588,6 +594,29 @@ public class QueryHandler implements AutoCloseable {
                         }
                     }
                     firstResultEvent.complete(null);
+                    Object isErr = message.get("is_error");
+                    if (isErr instanceof Boolean b && b) {
+                        @SuppressWarnings("unchecked")
+                        List<String> errList = (message.get("errors") instanceof List<?> el)
+                                ? (List<String>) el : null;
+                        String joined = (errList != null && !errList.isEmpty())
+                                ? String.join("; ", errList)
+                                : null;
+                        if (joined == null || joined.isEmpty()) {
+                            Object subtype = message.get("subtype");
+                            joined = (subtype instanceof String s && !s.isEmpty()) ? s : "unknown error";
+                        }
+                        lastErrorResultText[0] = joined;
+                    } else {
+                        lastErrorResultText[0] = null;
+                    }
+                } else if (!("system".equals(msgType)
+                        && "session_state_changed".equals(message.get("subtype")))) {
+                    // Anything other than the post-turn session_state_changed
+                    // marker means the conversation moved on; a ProcessException
+                    // now is a fresh crash, not the expected exit from a prior
+                    // error result. Mirrors the TS/Python SDK reset logic.
+                    lastErrorResultText[0] = null;
                 }
 
                 // Regular SDK messages go to the stream
@@ -602,7 +631,22 @@ public class QueryHandler implements AutoCloseable {
             logger.fine("Reader thread interrupted");
         } catch (Exception e) {
             if (!closed.get()) {
-                logger.log(Level.SEVERE, "Fatal error in message reader: " + e.getMessage(), e);
+                // When the CLI emits a result with is_error=true (e.g.
+                // error_max_turns, error_during_execution) it then exits
+                // non-zero on purpose. The trailing ProcessException carries
+                // no information beyond "exit code 1" — replace it with the
+                // structured error the CLI already reported so the exception
+                // is actionable. Mirrors the TS/Python SDKs.
+                String errorText;
+                boolean replaced = (e instanceof in.vidyalai.claude.sdk.exceptions.ProcessException
+                        && lastErrorResultText[0] != null);
+                if (replaced) {
+                    errorText = "Claude Code returned an error result: " + lastErrorResultText[0];
+                    logger.fine("Replacing ProcessException with result error text: " + errorText);
+                } else {
+                    errorText = e.getMessage();
+                    logger.log(Level.SEVERE, "Fatal error in message reader: " + errorText, e);
+                }
                 // Signal all pending control requests
                 for (Map.Entry<String, CompletableFuture<ControlResponse>> entry : pendingControlResponses
                         .entrySet()) {
@@ -614,7 +658,7 @@ public class QueryHandler implements AutoCloseable {
                 try {
                     Map<String, Object> errMessage = new HashMap<>();
                     errMessage.put("type", "error");
-                    errMessage.put("error", e.getMessage());
+                    errMessage.put("error", errorText);
                     messageQueue.offer(errMessage, 1, TimeUnit.SECONDS);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
@@ -694,7 +738,16 @@ public class QueryHandler implements AutoCloseable {
                     List<PermissionUpdate> suggestions = ((permissionReq.permissionSuggestions() != null)
                             ? permissionReq.permissionSuggestions()
                             : List.of());
-                    ToolPermissionContext context = new ToolPermissionContext(null, suggestions, permissionReq.toolUseId(), permissionReq.agentId());
+                    ToolPermissionContext context = new ToolPermissionContext(
+                            null,
+                            suggestions,
+                            permissionReq.toolUseId(),
+                            permissionReq.agentId(),
+                            permissionReq.blockedPath(),
+                            permissionReq.decisionReason(),
+                            permissionReq.title(),
+                            permissionReq.displayName(),
+                            permissionReq.description());
 
                     CompletableFuture<PermissionResult> resultFuture = canUseTool.apply(toolName, input, context);
                     PermissionResult result = resultFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);

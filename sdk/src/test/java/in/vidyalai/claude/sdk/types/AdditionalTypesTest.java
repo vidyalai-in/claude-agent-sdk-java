@@ -592,6 +592,28 @@ class AdditionalTypesTest {
         assertThat(context.suggestions()).hasSize(2);
     }
 
+    @Test
+    void testToolPermissionContextEnrichmentFields() {
+        ToolPermissionContext context = new ToolPermissionContext(
+                null,
+                List.of(),
+                "tool-use-77",
+                "agent-1",
+                "/etc/passwd",
+                "Hook asked",
+                "Claude wants to read foo.txt",
+                "Read file",
+                "Read /private/foo.txt");
+
+        assertThat(context.toolUseId()).isEqualTo("tool-use-77");
+        assertThat(context.agentId()).isEqualTo("agent-1");
+        assertThat(context.blockedPath()).isEqualTo("/etc/passwd");
+        assertThat(context.decisionReason()).isEqualTo("Hook asked");
+        assertThat(context.title()).isEqualTo("Claude wants to read foo.txt");
+        assertThat(context.displayName()).isEqualTo("Read file");
+        assertThat(context.description()).isEqualTo("Read /private/foo.txt");
+    }
+
     // ==================== HookContext Tests ====================
 
     @Test

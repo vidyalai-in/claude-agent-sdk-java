@@ -14,7 +14,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -174,6 +176,28 @@ public class SubprocessCLITransport implements Transport {
     private static final int DEFAULT_MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
     private static final String MINIMUM_CLAUDE_CODE_VERSION = "2.0.0";
     private static final String CLAUDE_CLI_NAME = "claude";
+
+    // Track live CLI subprocesses so we can terminate them when the parent
+    // JVM exits. Mirrors the Python SDK's atexit handler and the TypeScript
+    // SDK's parent-exit cleanup, preventing orphaned ``claude`` processes from
+    // leaking when callers crash or exit before calling close().
+    private static final Set<Process> ACTIVE_CHILDREN =
+            ConcurrentHashMap.newKeySet();
+
+    static {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            for (Process p : ACTIVE_CHILDREN) {
+                try {
+                    if (p.isAlive()) {
+                        p.destroy();
+                    }
+                } catch (Exception ignored) {
+                    // best-effort
+                }
+            }
+            ACTIVE_CHILDREN.clear();
+        }, "SPCTransport-ShutdownHook"));
+    }
 
     private final ClaudeAgentOptions options;
     private final String cliPath;
@@ -653,6 +677,14 @@ public class SubprocessCLITransport implements Transport {
             cmd.add("--include-partial-messages");
         }
 
+        if (options.includeHookEvents()) {
+            cmd.add("--include-hook-events");
+        }
+
+        if (options.strictMcpConfig()) {
+            cmd.add("--strict-mcp-config");
+        }
+
         if (options.forkSession()) {
             cmd.add("--fork-session");
         }
@@ -789,6 +821,7 @@ public class SubprocessCLITransport implements Transport {
 
             logger.fine("Claude ENV:" + env);
             process = pb.start();
+            ACTIVE_CHILDREN.add(process);
 
             stdin = new BufferedWriter(
                     new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
@@ -1036,6 +1069,9 @@ public class SubprocessCLITransport implements Transport {
             }
         }
 
+        if (process != null) {
+            ACTIVE_CHILDREN.remove(process);
+        }
         process = null;
         stdout = null;
         stderr = null;

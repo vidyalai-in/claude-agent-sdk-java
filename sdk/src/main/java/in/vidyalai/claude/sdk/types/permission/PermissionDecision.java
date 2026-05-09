@@ -20,7 +20,16 @@ public enum PermissionDecision {
     /**
      * Ask the user for permission.
      */
-    ASK("ask");
+    ASK("ask"),
+
+    /**
+     * Defer the tool call without executing it.
+     *
+     * <p>The CLI stops the run and surfaces the deferred call on
+     * {@code ResultMessage.deferredToolUse} so the SDK consumer can decide
+     * whether to resume.
+     */
+    DEFER("defer");
 
     private final String value;
 

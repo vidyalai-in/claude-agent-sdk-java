@@ -460,8 +460,12 @@ public class Sessions {
         // tool_use inputs (git tag, Docker tags, etc.)
         String tag = extractTagFromTail(tail);
 
-        // created_at from first entry's ISO timestamp (epoch ms)
-        Long createdAt = extractCreatedAtFromFirstLine(firstLine);
+        // created_at from the first ISO timestamp found in the head (epoch ms).
+        // Scans the whole head rather than only firstLine because the first
+        // record may be a metadata-only entry (e.g. permission-mode) with no
+        // timestamp field; the first user/assistant record that follows does
+        // carry one. Mirrors Python SDK fix #907.
+        Long createdAt = extractCreatedAtFromFirstLine(head);
 
         return new SDKSessionInfo(
                 sessionId,
@@ -498,10 +502,15 @@ public class Sessions {
     }
 
     /**
-     * Extracts created_at timestamp from the first line's ISO timestamp field.
+     * Extracts the {@code created_at} epoch-ms from the first ISO timestamp
+     * found in {@code text}. Callers pass the full head buffer rather than
+     * just the first line, since the first JSONL record may be a metadata-only
+     * entry (e.g. {@code permission-mode}) without a {@code timestamp} field;
+     * the first user/assistant record that follows does carry one. Mirrors
+     * Python SDK fix #907.
      */
-    static @Nullable Long extractCreatedAtFromFirstLine(String firstLine) {
-        String timestamp = extractJsonStringField(firstLine, "timestamp");
+    static @Nullable Long extractCreatedAtFromFirstLine(String text) {
+        String timestamp = extractJsonStringField(text, "timestamp");
         if (timestamp == null) {
             return null;
         }

@@ -138,6 +138,15 @@ public final class ClaudeAgentOptions {
     // Partial message streaming support
     private final boolean includePartialMessages;
 
+    // Include hook lifecycle events in the message stream
+    private final boolean includeHookEvents;
+
+    // When true, only use MCP servers passed via mcpServers, ignoring all
+    // other MCP configurations the CLI would otherwise load (e.g. project
+    // .mcp.json, user/global settings, plugin-provided servers). Maps to the
+    // CLI's --strict-mcp-config flag.
+    private final boolean strictMcpConfig;
+
     // Agent definitions for custom agents
     @Nullable
     private final Map<String, AgentDefinition> agents;
@@ -246,6 +255,8 @@ public final class ClaudeAgentOptions {
         this.hooks = ((builder.hooks != null) ? Map.copyOf(builder.hooks) : null);
         this.user = builder.user;
         this.includePartialMessages = builder.includePartialMessages;
+        this.includeHookEvents = builder.includeHookEvents;
+        this.strictMcpConfig = builder.strictMcpConfig;
         this.agents = ((builder.agents != null) ? Map.copyOf(builder.agents) : null);
         this.settingSources = builder.settingSources;
         this.skills = builder.skills;
@@ -318,6 +329,8 @@ public final class ClaudeAgentOptions {
         builder.hooks = ((this.hooks != null) ? new HashMap<>(this.hooks) : null);
         builder.user = this.user;
         builder.includePartialMessages = this.includePartialMessages;
+        builder.includeHookEvents = this.includeHookEvents;
+        builder.strictMcpConfig = this.strictMcpConfig;
         builder.agents = ((this.agents != null) ? new HashMap<>(this.agents) : null);
         builder.settingSources = this.settingSources;
         builder.skills = this.skills;
@@ -339,6 +352,18 @@ public final class ClaudeAgentOptions {
         return tools;
     }
 
+    /**
+     * Returns the list of tools that are automatically allowed without
+     * prompting the user.
+     *
+     * <p>To restrict which tools are available at all, use {@link #tools}.
+     *
+     * <p><b>Deprecated:</b> passing {@code "Skill"} here is deprecated. Use
+     * the {@link #skills() skills} option instead, which configures everything
+     * needed (including allowing the {@code Skill} tool).
+     *
+     * @return the allowed tools list (never null; empty when not configured)
+     */
     public List<String> allowedTools() {
         return allowedTools;
     }
@@ -466,7 +491,17 @@ public final class ClaudeAgentOptions {
     /**
      * Returns the effort level for thinking depth.
      *
-     * @return the effort level ("low", "medium", "high", "max"), or null if not set
+     * <p>Supported values:
+     * <ul>
+     *   <li>{@code "low"} — Minimal thinking, fastest responses.</li>
+     *   <li>{@code "medium"} — Moderate thinking.</li>
+     *   <li>{@code "high"} — Deep reasoning (default).</li>
+     *   <li>{@code "xhigh"} — Extended reasoning depth (Opus 4.7 only;
+     *       falls back to {@code "high"} on other models).</li>
+     *   <li>{@code "max"} — Maximum effort.</li>
+     * </ul>
+     *
+     * @return the effort level, or null if not set
      */
     @Nullable
     public String effort() {
@@ -566,6 +601,37 @@ public final class ClaudeAgentOptions {
      */
     public boolean includePartialMessages() {
         return includePartialMessages;
+    }
+
+    /**
+     * Returns whether hook lifecycle events are included in the message stream.
+     *
+     * <p>When true, the CLI emits hook events (PreToolUse, PostToolUse, Stop,
+     * etc.) as
+     * {@link in.vidyalai.claude.sdk.types.message.HookEventMessage} objects in
+     * the message stream. Mirrors the TypeScript SDK's {@code includeHookEvents}
+     * and the Python SDK's {@code include_hook_events}.
+     *
+     * @return true if hook events should be included
+     */
+    public boolean includeHookEvents() {
+        return includeHookEvents;
+    }
+
+    /**
+     * Returns whether the CLI should use only MCP servers passed via
+     * {@link #mcpServers()}, ignoring all other MCP configurations.
+     *
+     * <p>When true, the CLI's project {@code .mcp.json}, user/global settings,
+     * and plugin-provided servers are ignored — only the servers in
+     * {@code mcpServers} are loaded. Maps to the CLI's
+     * {@code --strict-mcp-config} flag and matches the TypeScript SDK's
+     * {@code strictMcpConfig} option.
+     *
+     * @return true if MCP config is strict
+     */
+    public boolean strictMcpConfig() {
+        return strictMcpConfig;
     }
 
     @Nullable
@@ -679,9 +745,19 @@ public final class ClaudeAgentOptions {
     /**
      * Functional interface for tool permission callbacks.
      *
+     * <p>This callback is the SDK replacement for the interactive permission
+     * prompt: it fires only when the CLI's permission rules evaluate to
+     * <b>{@code "ask"}</b> for a tool call. It is <b>not</b> invoked for
+     * tool calls already permitted by {@code allowedTools},
+     * {@code permissionMode} (e.g. {@code ACCEPT_EDITS},
+     * {@code BYPASS_PERMISSIONS}), or {@code permissions.allow} rules in
+     * settings — those never reach a prompt. To observe or gate <i>every</i>
+     * tool call regardless of permission rules, register a
+     * {@code PreToolUse} hook via {@link Builder#hooks(Map) hooks} instead.
+     *
      * <p>
      * Example usage:
-     * 
+     *
      * <pre>{@code
      * ClaudeAgentOptions.CanUseTool canUseTool = (toolName, input, context) -> {
      *     // context.suggestions() contains permission suggestions from CLI
@@ -698,11 +774,16 @@ public final class ClaudeAgentOptions {
     public interface CanUseTool {
 
         /**
-         * Called when Claude wants to use a tool and a permission decision is needed.
+         * Called when Claude wants to use a tool and the CLI's permission
+         * rules evaluate to {@code "ask"}.
          *
          * @param toolName the name of the tool
          * @param input    the tool input parameters
-         * @param context  additional context including permission suggestions from CLI
+         * @param context  additional context including permission suggestions
+         *                 from the CLI plus optional enrichment fields
+         *                 ({@code blockedPath}, {@code decisionReason},
+         *                 {@code title}, {@code displayName},
+         *                 {@code description})
          * @return a future with the permission result
          */
         CompletableFuture<PermissionResult> apply(String toolName, Map<String, Object> input,
@@ -794,6 +875,8 @@ public final class ClaudeAgentOptions {
         @Nullable
         private String user;
         private boolean includePartialMessages;
+        private boolean includeHookEvents;
+        private boolean strictMcpConfig;
         @Nullable
         private Map<String, AgentDefinition> agents;
         @Nullable
@@ -840,7 +923,12 @@ public final class ClaudeAgentOptions {
         }
 
         /**
-         * Sets the list of allowed tools.
+         * Sets the list of allowed tools — tools that execute automatically
+         * without asking the user for approval.
+         *
+         * <p><b>Deprecated:</b> passing {@code "Skill"} here is deprecated.
+         * Use {@link #skills(List)} instead, which configures everything
+         * needed (including allowing the {@code Skill} tool).
          *
          * @param allowedTools list of tool names to allow
          * @return this builder
@@ -1065,7 +1153,8 @@ public final class ClaudeAgentOptions {
         /**
          * Sets the effort level for thinking depth.
          *
-         * @param effort the effort level ("low", "medium", "high", or "max")
+         * @param effort the effort level ("low", "medium", "high", "xhigh", or "max").
+         *               "xhigh" is Opus 4.7-specific and falls back to "high" on other models.
          * @return this builder
          */
         public Builder effort(String effort) {
@@ -1211,6 +1300,35 @@ public final class ClaudeAgentOptions {
          */
         public Builder includePartialMessages(boolean includePartialMessages) {
             this.includePartialMessages = includePartialMessages;
+            return this;
+        }
+
+        /**
+         * Sets whether to include hook lifecycle events in the message stream.
+         *
+         * <p>When true, the CLI emits hook events (PreToolUse, PostToolUse,
+         * Stop, etc.) as
+         * {@link in.vidyalai.claude.sdk.types.message.HookEventMessage} objects
+         * alongside regular messages.
+         *
+         * @param includeHookEvents true to include hook events
+         * @return this builder
+         */
+        public Builder includeHookEvents(boolean includeHookEvents) {
+            this.includeHookEvents = includeHookEvents;
+            return this;
+        }
+
+        /**
+         * Sets whether the CLI should use only MCP servers passed via
+         * {@link #mcpServers(Map)}, ignoring project, user, and global MCP
+         * configurations.
+         *
+         * @param strictMcpConfig true to enable strict MCP configuration
+         * @return this builder
+         */
+        public Builder strictMcpConfig(boolean strictMcpConfig) {
+            this.strictMcpConfig = strictMcpConfig;
             return this;
         }
 

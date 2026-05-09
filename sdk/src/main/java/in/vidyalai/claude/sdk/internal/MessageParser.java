@@ -11,6 +11,8 @@ import in.vidyalai.claude.sdk.exceptions.MessageParseException;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.AssistantMessageError;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
+import in.vidyalai.claude.sdk.types.message.DeferredToolUse;
+import in.vidyalai.claude.sdk.types.message.HookEventMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
 import in.vidyalai.claude.sdk.types.message.RateLimitInfo;
@@ -240,6 +242,20 @@ public final class MessageParser {
                         getRequired(data, "session_id", String.class),
                         (String) data.get("tool_use_id"),
                         parseTaskUsageOptional((Map<String, Object>) data.get("usage")));
+                case "hook_started", "hook_response" -> {
+                    String hookEventName = "";
+                    Object he = data.get("hook_event");
+                    if (he instanceof String s && !s.isEmpty()) {
+                        hookEventName = s;
+                    } else if (data.get("hook_name") instanceof String s2 && !s2.isEmpty()) {
+                        hookEventName = s2;
+                    } else if (data.get("hook_event_name") instanceof String s3) {
+                        hookEventName = s3;
+                    }
+                    String sessionId = data.get("session_id") instanceof String s ? s : null;
+                    String uuid = data.get("uuid") instanceof String s ? s : null;
+                    yield new HookEventMessage(subtype, data, hookEventName, sessionId, uuid);
+                }
                 case "mirror_error" -> {
                     // SDK-synthesized via Query.reportMirrorError — never emitted by the CLI subprocess.
                     Object rawKey = data.get("key");
@@ -289,10 +305,29 @@ public final class MessageParser {
             List<String> errors = (List<String>) data.get("errors");
             String uuid = (String) data.get("uuid");
 
+            DeferredToolUse deferredToolUse = null;
+            Object deferredRaw = data.get("deferred_tool_use");
+            if (deferredRaw instanceof Map<?, ?> deferredMap) {
+                Object id = deferredMap.get("id");
+                Object name = deferredMap.get("name");
+                Object input = deferredMap.get("input");
+                if (id instanceof String idStr && name instanceof String nameStr) {
+                    Map<String, Object> inputMap = input instanceof Map<?, ?>
+                            ? (Map<String, Object>) input
+                            : Map.of();
+                    deferredToolUse = new DeferredToolUse(idStr, nameStr, inputMap);
+                }
+            }
+
+            Integer apiErrorStatus = null;
+            if (data.get("api_error_status") instanceof Number n) {
+                apiErrorStatus = n.intValue();
+            }
+
             return new ResultMessage(
                     subtype, durationMs, durationApiMs, isError, numTurns,
                     sessionId, stopReason, totalCostUsd, usage, result, structuredOutput,
-                    modelUsage, permissionDenials, errors, uuid);
+                    modelUsage, permissionDenials, deferredToolUse, errors, apiErrorStatus, uuid);
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in result message: " + e.getMessage(), data, e);
         }

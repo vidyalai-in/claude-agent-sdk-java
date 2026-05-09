@@ -25,6 +25,7 @@ import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.AssistantMessageError;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
 import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.message.HookEventMessage;
 import in.vidyalai.claude.sdk.types.message.MirrorErrorMessage;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.ServerToolResultBlock;
@@ -259,6 +260,7 @@ class TypesTest {
             case TaskProgressMessage t -> "task_progress: " + t.taskId();
             case TaskNotificationMessage t -> "task_notification: " + t.status();
             case MirrorErrorMessage m -> "mirror_error: " + m.error();
+            case HookEventMessage h -> "hook_event: " + h.hookEventName();
             case ResultMessage r -> "result: " + r.result();
             case StreamEvent e -> "event: " + e.eventType();
             case RateLimitEvent rle -> "rate_limit: " + rle.rateLimitInfo().status();

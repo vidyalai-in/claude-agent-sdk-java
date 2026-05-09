@@ -26,6 +26,8 @@ import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
 import in.vidyalai.claude.sdk.types.message.TaskUsage;
 import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
+import in.vidyalai.claude.sdk.types.message.DeferredToolUse;
+import in.vidyalai.claude.sdk.types.message.HookEventMessage;
 import in.vidyalai.claude.sdk.types.message.MirrorErrorMessage;
 import in.vidyalai.claude.sdk.types.message.ServerToolResultBlock;
 import in.vidyalai.claude.sdk.types.message.ServerToolUseBlock;
@@ -1311,6 +1313,114 @@ class MessageParserTest {
         ServerToolResultBlock str = (ServerToolResultBlock) block;
         assertThat(str.content()).containsEntry("type", "advisor_redacted_result");
         assertThat(str.content()).containsEntry("encrypted_content", "EuYDCioIDhgC...");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_withDeferredToolUse() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "result");
+        data.put("subtype", "success");
+        data.put("duration_ms", 1200);
+        data.put("duration_api_ms", 900);
+        data.put("is_error", false);
+        data.put("num_turns", 1);
+        data.put("session_id", "session-deferred");
+        data.put("deferred_tool_use", Map.of(
+                "id", "toolu_01abc",
+                "name", "Bash",
+                "input", Map.of("command", "rm -rf /tmp/scratch")));
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(ResultMessage.class);
+        ResultMessage rm = (ResultMessage) message;
+        DeferredToolUse deferred = rm.deferredToolUse();
+        assertThat(deferred).isNotNull();
+        assertThat(deferred.id()).isEqualTo("toolu_01abc");
+        assertThat(deferred.name()).isEqualTo("Bash");
+        assertThat(deferred.input()).containsEntry("command", "rm -rf /tmp/scratch");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_withApiErrorStatus() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "result");
+        data.put("subtype", "success");
+        data.put("duration_ms", 2000);
+        data.put("duration_api_ms", 1500);
+        data.put("is_error", true);
+        data.put("num_turns", 1);
+        data.put("session_id", "session-overload");
+        data.put("api_error_status", 529);
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(ResultMessage.class);
+        ResultMessage rm = (ResultMessage) message;
+        assertThat(rm.apiErrorStatus()).isEqualTo(529);
+        assertThat(rm.isError()).isTrue();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseHookEventMessage_started() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "system");
+        data.put("subtype", "hook_started");
+        data.put("hook_event", "PreToolUse");
+        data.put("session_id", "sess-123");
+        data.put("uuid", "uuid-456");
+        data.put("tool_name", "Bash");
+        data.put("tool_input", Map.of("command", "ls"));
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(HookEventMessage.class);
+        HookEventMessage hem = (HookEventMessage) message;
+        assertThat(hem.subtype()).isEqualTo("hook_started");
+        assertThat(hem.hookEventName()).isEqualTo("PreToolUse");
+        assertThat(hem.sessionId()).isEqualTo("sess-123");
+        assertThat(hem.uuid()).isEqualTo("uuid-456");
+        assertThat(hem.data()).containsEntry("tool_name", "Bash");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseHookEventMessage_response() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "system");
+        data.put("subtype", "hook_response");
+        data.put("hook_event", "PostToolUse");
+        data.put("session_id", "sess-123");
+        data.put("uuid", "uuid-789");
+        data.put("output", "");
+        data.put("exit_code", 0);
+        data.put("outcome", "success");
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(HookEventMessage.class);
+        HookEventMessage hem = (HookEventMessage) message;
+        assertThat(hem.subtype()).isEqualTo("hook_response");
+        assertThat(hem.hookEventName()).isEqualTo("PostToolUse");
+        assertThat(hem.<String>get("output")).isEqualTo("");
+        assertThat(hem.<Integer>get("exit_code")).isEqualTo(0);
+        assertThat(hem.<String>get("outcome")).isEqualTo("success");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseHookEventMessage_minimal() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "system");
+        data.put("subtype", "hook_started");
+        data.put("hook_name", "Stop");
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(HookEventMessage.class);
+        HookEventMessage hem = (HookEventMessage) message;
+        assertThat(hem.subtype()).isEqualTo("hook_started");
+        assertThat(hem.hookEventName()).isEqualTo("Stop");
+        assertThat(hem.sessionId()).isNull();
+        assertThat(hem.uuid()).isNull();
     }
 
     @SuppressWarnings("null")

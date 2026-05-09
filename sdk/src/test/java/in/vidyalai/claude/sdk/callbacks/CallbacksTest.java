@@ -292,6 +292,39 @@ class CallbacksTest {
     }
 
     @Test
+    void testHookSpecificOutputPostToolUse_updatedToolOutput() {
+        Map<String, Object> bashOutput = Map.of(
+                "stdout", "replaced",
+                "stderr", "",
+                "interrupted", false);
+        HookSpecificOutput output = new PostToolUseHookSpecificOutput(
+                null,
+                bashOutput,
+                null);
+
+        Map<String, Object> map = output.toMap();
+
+        assertThat(map).containsEntry("hookEventName", "PostToolUse");
+        assertThat(map).containsEntry("updatedToolOutput", bashOutput);
+        assertThat(map).doesNotContainKey("updatedMCPToolOutput");
+    }
+
+    @Test
+    void testPermissionDecision_includesDefer() {
+        // The wire-format value for "defer" must be lowercase to match the CLI.
+        assertThat(PermissionDecision.DEFER.getValue()).isEqualTo("defer");
+        assertThat(PermissionDecision.fromValue("defer")).isEqualTo(PermissionDecision.DEFER);
+
+        HookSpecificOutput output = new PreToolUseHookSpecificOutput(
+                PermissionDecision.DEFER,
+                "Defer this tool",
+                null,
+                null);
+        Map<String, Object> map = output.toMap();
+        assertThat(map).containsEntry("permissionDecision", "defer");
+    }
+
+    @Test
     void testHookSpecificOutputUserPromptSubmit() {
         HookSpecificOutput output = new UserPromptSubmitHookSpecificOutput(
                 "Modified prompt context");

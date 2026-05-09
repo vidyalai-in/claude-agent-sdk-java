@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-05-04 (Updated)
-**Java SDK Version:** 0.1.14
-**Python SDK Version:** [0.1.72](https://github.com/anthropics/claude-agent-sdk-python/commit/0a69e9449b72328742431119132f399e8f30055b) (latest)
+**Analysis Date:** 2026-05-09 (Updated)
+**Java SDK Version:** 0.1.15
+**Python SDK Version:** [0.1.80](https://github.com/anthropics/claude-agent-sdk-python/commit/694e4f3b4fcd0957f7f55530203ebd7b96a87f9e) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,13 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.72):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.72. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.1.80):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.80. These updates include:
+- **v0.1.78-0.1.80** - CLI updates to 2.1.136-2.1.138 (no API changes)
+- **v0.1.77** - Actionable error messages after error results (replaces generic "exit code 1" with structured CLI error text); deprecated `"Skill"` in `allowed_tools` in favor of the `skills` option; CLI 2.1.133
+- **v0.1.76** - `api_error_status: int | None` on `ResultMessage` (HTTP status of failing API calls when `is_error=True`); fix: deserialize `permission_suggestions` into `PermissionUpdate` instances; CLI 2.1.132
+- **v0.1.75** - CLI update to 2.1.131 (no API changes)
+- **v0.1.74** - `include_hook_events` option + `HookEventMessage` for hook lifecycle events in the message stream; `"defer"` hook decision + `DeferredToolUse` on `ResultMessage`; `strict_mcp_config` option; permission context enrichment (`decision_reason`, `blocked_path`, `title`, `display_name`, `description` on `ToolPermissionContext`); `updatedToolOutput` on `PostToolUseHookSpecificOutput` (works for all tools, not only MCP); `"xhigh"` effort level (Opus 4.7 — falls back to `"high"` on other models); JVM shutdown hook to terminate live CLI subprocesses on parent exit; fix: scan head buffer (not first line) for `created_at` timestamp; CLI 2.1.129
+- **v0.1.73** - CLI update to 2.1.128 (no API changes — `session_store_flush` shipped in Java v0.1.14)
 - **v0.1.72** - `session_store_flush` option on `ClaudeAgentOptions` (`"batched"` / `"eager"`) for eager mirroring of transcript entries to a custom `SessionStore` adapter; CLI update to 2.1.126
 - **v0.1.71** - Domain allowlist fields on `SandboxNetworkConfig` (`allowedDomains`, `deniedDomains`, `allowManagedDomainsOnly`, `allowMachLookup`); CLI update to 2.1.123
 - **v0.1.70** - CLI update to 2.1.122 (no API changes); fix(transport): use `spawn_detached` for stderr reader to avoid trio nursery corruption (Python-only — N/A for Java); fix(deps): require `mcp>=1.19.0` for in-process SDK MCP tools (Python package — N/A for Java)
@@ -105,6 +111,23 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - ✅ Fix: pass `--thinking` flag for adaptive/disabled instead of `--max-thinking-tokens` (v0.1.57)
 - ✅ `maxResultSizeChars` field on `ToolAnnotations` for large MCP result support (v0.1.55)
 - ✅ Forward `maxResultSizeChars` via `_meta` in tools/list JSONRPC response to bypass Zod stripping (v0.1.55)
+
+✅ **All new features from Python SDK v0.1.80 are now implemented in Java SDK v0.1.15**. This includes:
+- ✅ **`includeHookEvents` option** on `ClaudeAgentOptions` and **`HookEventMessage`** message type (v0.1.74). When the option is set the transport adds `--include-hook-events` and the CLI streams `system/hook_started` and `system/hook_response` envelopes; `MessageParser` routes them to `HookEventMessage` (added to the `Message` sealed interface) which exposes `subtype`, `hookEventName`, `sessionId`, `uuid`, and the full raw `data` map.
+- ✅ **`"defer"` permission decision** + **`DeferredToolUse`** type on `ResultMessage` (v0.1.74). `PermissionDecision.DEFER` serializes to `"defer"`; `MessageParser.parseResultMessage` deserializes the `deferred_tool_use` payload into a `DeferredToolUse` record (`id` / `name` / `input`).
+- ✅ **`strictMcpConfig` option** on `ClaudeAgentOptions` (v0.1.74). When `true` the transport adds `--strict-mcp-config` so the CLI ignores project / user / global / plugin MCP configs and uses only `mcpServers`.
+- ✅ **`ToolPermissionContext` enrichment** (v0.1.74): `decisionReason`, `blockedPath`, `title`, `displayName`, `description`. `SDKControlPermissionRequest` carries them off the wire and `QueryHandler` forwards them into the context handed to `canUseTool`. The pre-enrichment 4-arg constructor is preserved.
+- ✅ **`updatedToolOutput`** field on `PostToolUseHookSpecificOutput` (v0.1.74) for replacing any tool's output (built-ins included), in addition to the existing `updatedMCPToolOutput`. The 2-arg constructor is preserved.
+- ✅ **`"xhigh"` effort level** documented on `ClaudeAgentOptions.effort()` and `AgentDefinition.effort` (v0.1.74). The field stays a `String` so callers can pass any future effort value; the Javadoc now includes `"xhigh"` as an Opus 4.7-specific level that falls back to `"high"` on other models.
+- ✅ **JVM shutdown hook** in `SubprocessCLITransport` (v0.1.74). A static `ConcurrentHashMap.newKeySet()` tracks every spawned `Process`; a registered shutdown hook calls `destroy()` on each live child so they don't leak when the parent JVM exits before `close()`. Mirrors the Python `atexit` handler.
+- ✅ **`api_error_status`** field on `ResultMessage` (v0.1.76) — surfaces the HTTP status (e.g. 429, 500, 529) of the failing API call when `isError=true`.
+- ✅ **Permission suggestions deserialization** (v0.1.76): `permission_suggestions` already deserialize into `PermissionUpdate` instances via `PermissionUpdate.fromMap` (declared `@JsonCreator`) — Java was already correct here, the Python fix #920 brings parity to the Python side.
+- ✅ **Actionable error after error result** in `QueryHandler.readMessages` (v0.1.77). Tracks `lastErrorResultText` while reading; when the read loop catches a `ProcessException` after a result with `is_error=true`, the synthetic `{"type":"error"}` message carries `"Claude Code returned an error result: <text>"` instead of the generic exit-code message. Resets on any non-result, non-`session_state_changed` traffic.
+- ✅ **`"Skill"` deprecation in `allowed_tools`** (v0.1.77) — the Java SDK already directs callers to `skills(...)` / `skillsAll()`. Javadoc on `AgentDefinition.tools` notes the same deprecation as the Python SDK.
+- ✅ **`created_at` head-buffer scan** in `Sessions.parseSessionInfoFromLite` (v0.1.74 fix #907) — `extractCreatedAtFromFirstLine(head)` now scans the entire head buffer, so sessions whose first record is a metadata-only entry (e.g. permission-mode) still report a `createdAt` from the next record's timestamp.
+- ✅ N/A: bundled CLI version constants (v0.1.78-0.1.80) — Java SDK uses the system-installed CLI, no `_cli_version.py` equivalent.
+- ✅ N/A: `close_receive_stream` `ResourceWarning` fix (v0.1.74) — Python anyio-specific resource lifecycle; Java's `BlockingQueue`-based message stream has no equivalent warning.
+- ✅ N/A: trio nursery / receive-stream double-close fixes (v0.1.74) — Python/anyio-specific.
 
 ✅ **All new features from Python SDK v0.1.72 are now implemented in Java SDK v0.1.14**. This includes:
 - ✅ **`sessionStoreFlush` option** on `ClaudeAgentOptions` with `SessionStoreFlushMode` enum (`BATCHED` / `EAGER`) (v0.1.72). `EAGER` zeroes the `TranscriptMirrorBatcher` thresholds so every enqueued frame schedules a background drain; `BATCHED` keeps the defaults (flush on `result` or 500-entry / 1 MiB overflow). Wired through `SessionResume.buildMirrorBatcher()` from both `ClaudeSDK.query(stream)` and `ClaudeSDKClient.connect()`.
@@ -767,7 +790,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-05-04
-**Python SDK Version:** 0.1.72 (commit 0a69e9449b72328742431119132f399e8f30055b)
-**Java SDK Version:** 0.1.14
+**Latest Verification:** 2026-05-09
+**Python SDK Version:** 0.1.80 (commit 694e4f3b4fcd0957f7f55530203ebd7b96a87f9e)
+**Java SDK Version:** 0.1.15
 **Status:** ✅ 100% Feature Parity Maintained

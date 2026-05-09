@@ -293,6 +293,71 @@ class SubprocessCLITransportTest {
     }
 
     @Test
+    void testBuildCommandIncludeHookEvents_addedWhenEnabled() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .includeHookEvents(true)
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).contains("--include-hook-events");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandIncludeHookEvents_omittedWhenDisabled() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).doesNotContain("--include-hook-events");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandStrictMcpConfig_addedWhenEnabled() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .strictMcpConfig(true)
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).contains("--strict-mcp-config");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandStrictMcpConfig_omittedWhenDisabled() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).doesNotContain("--strict-mcp-config");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandEffortXhigh() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .effort("xhigh")
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        int idx = cmd.indexOf("--effort");
+        assertThat(idx).isGreaterThanOrEqualTo(0);
+        assertThat(cmd.get(idx + 1)).isEqualTo("xhigh");
+        transport.close();
+    }
+
+    @Test
     void testBuildCommandSessionMirrorFlag_addedWhenSessionStorePresent() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .sessionStore(new in.vidyalai.claude.sdk.types.session.InMemorySessionStore())

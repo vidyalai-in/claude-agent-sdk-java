@@ -13,6 +13,10 @@
  *   <li>{@link in.vidyalai.claude.sdk.types.message.AssistantMessage} - Responses from Claude</li>
  *   <li>{@link in.vidyalai.claude.sdk.types.message.SystemMessage} - System-level messages</li>
  *   <li>{@link in.vidyalai.claude.sdk.types.message.ResultMessage} - Final result with cost/usage info</li>
+ *   <li>{@link in.vidyalai.claude.sdk.types.message.HookEventMessage} - Hook lifecycle events
+ *       (when {@code includeHookEvents} is enabled)</li>
+ *   <li>{@link in.vidyalai.claude.sdk.types.message.DeferredToolUse} - Tool call deferred by a
+ *       {@code PreToolUse} hook returning {@code "defer"}</li>
  *   <li>{@link in.vidyalai.claude.sdk.types.message.StreamEvent} - Partial streaming events</li>
  * </ul>
  *

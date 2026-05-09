@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-05-09
+
+### Added
+- **`includeHookEvents` option on `ClaudeAgentOptions` + `HookEventMessage`** (Python SDK v0.1.74): when `true`, the transport adds `--include-hook-events`. The CLI then streams `system/hook_started` and `system/hook_response` envelopes which `MessageParser` routes to a new `HookEventMessage` (`Message` sealed-interface member). The message exposes `subtype`, `hookEventName`, `sessionId`, `uuid`, and the full raw `data` map.
+- **`"defer"` hook decision + `DeferredToolUse` on `ResultMessage`** (Python SDK v0.1.74): `PermissionDecision.DEFER` serializes to `"defer"`. `MessageParser.parseResultMessage` deserializes the `deferred_tool_use` payload into a new `DeferredToolUse` record (`id` / `name` / `input`). The pre-enrichment 11-arg / 15-arg `ResultMessage` constructors are preserved for callers who don't use the new fields.
+- **`strictMcpConfig` option on `ClaudeAgentOptions`** (Python SDK v0.1.74): when `true`, the transport adds `--strict-mcp-config` so the CLI ignores project / user / global / plugin MCP configurations and uses only the servers passed via `mcpServers`.
+- **`ToolPermissionContext` enrichment** (Python SDK v0.1.74): `decisionReason`, `blockedPath`, `title`, `displayName`, `description`. `SDKControlPermissionRequest` carries the new fields off the wire (with a backwards-compatible 6-arg constructor) and `QueryHandler` forwards them into the context handed to `canUseTool`. The pre-enrichment 4-arg `ToolPermissionContext` constructor is preserved.
+- **`updatedToolOutput` on `PostToolUseHookSpecificOutput`** (Python SDK v0.1.74): replaces any tool's output (built-ins included), in addition to the existing `updatedMCPToolOutput` for MCP-only replacements. The 2-arg constructor is preserved.
+- **`"xhigh"` effort level** (Python SDK v0.1.74): documented on `ClaudeAgentOptions.effort()` and `AgentDefinition.effort` Javadoc as an Opus 4.7-specific level that falls back to `"high"` on other models. The field type stays `String` so callers can pass any future effort value.
+- **`apiErrorStatus` on `ResultMessage`** (Python SDK v0.1.76): `Integer` field surfacing the HTTP status code (e.g. 429, 500, 529) of the failing API call when `isError=true` and `subtype="success"`. Safe to log (no message content). `MessageParser` populates it from the CLI's `api_error_status` field.
+
+### Changed
+- **JVM shutdown hook for live CLI subprocesses** in `SubprocessCLITransport` (Python SDK v0.1.74): a static `ConcurrentHashMap.newKeySet()` tracks every spawned `Process`; a `Runtime.addShutdownHook` registered at class init calls `destroy()` on each live child, preventing orphaned `claude` processes from leaking when the parent JVM exits before `close()`. Mirrors the Python SDK's `atexit` handler.
+- **Actionable error message after error result** in `QueryHandler.readMessages` (Python SDK v0.1.77): tracks the last error result's text while reading; when the read loop catches a `ProcessException` after a result with `is_error=true`, the synthetic `{"type":"error"}` message carries `"Claude Code returned an error result: <text>"` instead of the generic `"Command failed with exit code N"`. The text is built from the `errors` array (joined by `"; "`) or the result `subtype` when the array is missing. Resets on any non-result, non-`session_state_changed` traffic so a fresh crash later in the run keeps its original `ProcessException` message.
+- **`createdAt` head-buffer scan** in `Sessions.parseSessionInfoFromLite` (Python SDK v0.1.74 fix #907): `extractCreatedAtFromFirstLine` now scans the entire `head` buffer instead of only the first JSONL line. Sessions whose first record is a metadata-only entry (e.g. `permission-mode`) without a `timestamp` field now correctly report a `createdAt` from the next record's timestamp.
+
+### Synced
+- Python SDK v0.1.72 → v0.1.80 (commits 0a69e944..694e4f3b)
+- v0.1.73: CLI 2.1.128 (no API changes — `session_store_flush` shipped in Java v0.1.14)
+- v0.1.74: `include_hook_events` + `HookEventMessage`, `"defer"` decision + `DeferredToolUse`, `strict_mcp_config`, `ToolPermissionContext` enrichment, `updatedToolOutput`, `"xhigh"` effort, parent-exit subprocess cleanup, sessions `created_at` head-scan fix; CLI 2.1.129
+- v0.1.75: CLI 2.1.131 (no API changes)
+- v0.1.76: `api_error_status` on `ResultMessage`; permission-suggestions deserialization fix (Java already correct via `PermissionUpdate.fromMap` `@JsonCreator`); CLI 2.1.132
+- v0.1.77: actionable error after error result; `"Skill"` deprecation in `allowed_tools`; CLI 2.1.133
+- v0.1.78-0.1.80: CLI updates 2.1.136-2.1.138 (no API changes)
+
+[0.1.15]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.15
+
 ## [0.1.14] - 2026-05-04
 
 ### Added

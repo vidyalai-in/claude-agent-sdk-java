@@ -45,7 +45,28 @@ class ClaudeAgentOptionsTest {
         assertThat(options.env()).isEmpty();
         assertThat(options.extraArgs()).isEmpty();
         assertThat(options.includePartialMessages()).isFalse();
+        assertThat(options.includeHookEvents()).isFalse();
+        assertThat(options.strictMcpConfig()).isFalse();
         assertThat(options.enableFileCheckpointing()).isFalse();
+    }
+
+    @Test
+    void builder_includeHookEventsAndStrictMcpConfig() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .includeHookEvents(true)
+                .strictMcpConfig(true)
+                .effort("xhigh")
+                .build();
+
+        assertThat(options.includeHookEvents()).isTrue();
+        assertThat(options.strictMcpConfig()).isTrue();
+        assertThat(options.effort()).isEqualTo("xhigh");
+
+        // toBuilder round-trips the new fields
+        ClaudeAgentOptions roundTripped = options.toBuilder().build();
+        assertThat(roundTripped.includeHookEvents()).isTrue();
+        assertThat(roundTripped.strictMcpConfig()).isTrue();
+        assertThat(roundTripped.effort()).isEqualTo("xhigh");
     }
 
     @SuppressWarnings("deprecation")
