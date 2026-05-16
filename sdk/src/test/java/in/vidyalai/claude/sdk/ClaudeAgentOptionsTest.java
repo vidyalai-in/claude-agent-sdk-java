@@ -11,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
 import in.vidyalai.claude.sdk.types.config.AgentDefinition;
+import in.vidyalai.claude.sdk.types.config.EffortLevel;
 import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.ThinkingConfigEnabled;
@@ -321,6 +322,52 @@ class ClaudeAgentOptionsTest {
         ClaudeAgentOptions copy = options.toBuilder().build();
         assertThat(copy.sessionStoreFlush())
                 .isEqualTo(in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode.EAGER);
+    }
+
+    // ------------------------------------------------------------------
+    // EffortLevel enum (Python parity: #951)
+    // ------------------------------------------------------------------
+
+    @Test
+    void effortLevel_enumValues() {
+        // EffortLevel is part of the public package API for downstream wrappers.
+        assertThat(EffortLevel.values())
+                .extracting(EffortLevel::getValue)
+                .containsExactlyInAnyOrder("low", "medium", "high", "xhigh", "max");
+    }
+
+    @Test
+    void effortLevel_fromValueRoundTrip() {
+        for (EffortLevel level : EffortLevel.values()) {
+            assertThat(EffortLevel.fromValue(level.getValue())).isEqualTo(level);
+        }
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void effortLevel_fromValueUnknownThrows() {
+        assertThatThrownBy(() -> EffortLevel.fromValue("ultra"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unknown effort level");
+    }
+
+    @Test
+    void builder_effortLevelEnum() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .effort(EffortLevel.XHIGH)
+                .build();
+
+        assertThat(options.effort()).isEqualTo("xhigh");
+    }
+
+    @Test
+    void builder_effortLevelEnumNullClears() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .effort(EffortLevel.HIGH)
+                .effort((EffortLevel) null)
+                .build();
+
+        assertThat(options.effort()).isNull();
     }
 
 }

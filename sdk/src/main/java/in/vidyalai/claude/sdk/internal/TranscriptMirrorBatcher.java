@@ -160,6 +160,10 @@ public final class TranscriptMirrorBatcher {
     }
 
     private CompletableFuture<Void> scheduleDrain() {
+        // CompletableFuture does not emit "exception was never retrieved" warnings
+        // like asyncio does, so no done-callback to swallow CancellationException
+        // is needed here. drainAndReport catches everything internally; close()
+        // wraps with .exceptionally().
         return CompletableFuture.runAsync(this::drainAndReport, executor);
     }
 

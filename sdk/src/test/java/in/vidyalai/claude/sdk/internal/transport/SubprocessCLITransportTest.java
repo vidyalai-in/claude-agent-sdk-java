@@ -2,9 +2,13 @@ package in.vidyalai.claude.sdk.internal.transport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.BufferedReader;
+import java.io.StringReader;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.junit.jupiter.api.Test;
 
@@ -1315,6 +1319,39 @@ class SubprocessCLITransportTest {
         assertThat(options.agents()).containsKey("test-agent");
         assertThat(options.includePartialMessages()).isTrue();
         assertThat(options.enableFileCheckpointing()).isTrue();
+    }
+
+    // ------------------------------------------------------------------
+    // Stderr callback isolation (Python parity: #932)
+    // ------------------------------------------------------------------
+
+    @Test
+    void testStderrCallbackRaiseDoesNotTerminateLoop() {
+        // Regression for Python SDK issue #929: a raise from ``options.stderr``
+        // must not kill the read loop. Previously the outer catch caught it,
+        // exited the loop, and silently dropped every subsequent stderr line
+        // for the rest of the session.
+        List<String> received = new ArrayList<>();
+        Consumer<String> stderrCb = line -> {
+            received.add(line);
+            if (received.size() == 1) {
+                throw new RuntimeException("simulated handler failure");
+            }
+        };
+
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .cliPath(Path.of("/usr/bin/claude"))
+                .stderrCallback(stderrCb)
+                .build();
+
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+
+        BufferedReader fakeStderr = new BufferedReader(new StringReader("line 1\nline 2\nline 3\n"));
+        transport.handleStderr(fakeStderr);
+
+        // All three lines must be delivered despite the first raise.
+        assertThat(received).containsExactly("line 1", "line 2", "line 3");
+        transport.close();
     }
 
 }

@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-05-09 (Updated)
-**Java SDK Version:** 0.1.15
-**Python SDK Version:** [0.1.80](https://github.com/anthropics/claude-agent-sdk-python/commit/694e4f3b4fcd0957f7f55530203ebd7b96a87f9e) (latest)
+**Analysis Date:** 2026-05-16 (Updated)
+**Java SDK Version:** 0.1.16
+**Python SDK Version:** [0.2.82](https://github.com/anthropics/claude-agent-sdk-python/commit/c352a509929a712de65637cbafafcc3a1e3ba4f6) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,9 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.1.80):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.1.80. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.82):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.82. These updates include:
+- **v0.2.82** - `EffortLevel` type export for downstream wrappers; fix: stderr callback isolation (a raise no longer kills the read loop); fix: `CancelledError` in eager-flush done callback (Python-asyncio-only); tighter `permission_suggestions` type on `SDKControlPermissionRequest` (Java already tighter via `PermissionUpdate`); docs: hooks dispatch is concurrent, not sequential; CLI 2.1.140-2.1.143
+- **v0.1.81** - CLI update to 2.1.139 (no API changes)
 - **v0.1.78-0.1.80** - CLI updates to 2.1.136-2.1.138 (no API changes)
 - **v0.1.77** - Actionable error messages after error results (replaces generic "exit code 1" with structured CLI error text); deprecated `"Skill"` in `allowed_tools` in favor of the `skills` option; CLI 2.1.133
 - **v0.1.76** - `api_error_status: int | None` on `ResultMessage` (HTTP status of failing API calls when `is_error=True`); fix: deserialize `permission_suggestions` into `PermissionUpdate` instances; CLI 2.1.132
@@ -111,6 +113,15 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - ✅ Fix: pass `--thinking` flag for adaptive/disabled instead of `--max-thinking-tokens` (v0.1.57)
 - ✅ `maxResultSizeChars` field on `ToolAnnotations` for large MCP result support (v0.1.55)
 - ✅ Forward `maxResultSizeChars` via `_meta` in tools/list JSONRPC response to bypass Zod stripping (v0.1.55)
+
+✅ **All new features from Python SDK v0.2.82 are now implemented in Java SDK v0.1.16**. This includes:
+- ✅ **`EffortLevel` enum** in `in.vidyalai.claude.sdk.types.config` (v0.2.82, PR #951). Mirrors Python's exported `EffortLevel` type alias (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`). Available as a public API for downstream wrappers; `ClaudeAgentOptions.Builder.effort(EffortLevel)` overload added alongside the existing `String` setter. Backward-compatible — the `effort()` getter still returns `String`.
+- ✅ **Stderr callback isolation** in `SubprocessCLITransport.handleStderr` (v0.2.82, PR #932). A `try/catch` around each `stderrCallback.accept(line)` invocation guarantees that a throwing callback no longer kills the read loop and silently drops subsequent lines. Outer-loop exceptions are now logged at `FINE` instead of being silently swallowed.
+- ✅ **Hooks dispatch concurrency** documented on `ClaudeAgentOptions.hooks()` / `Builder.hooks(Map)` and `HookMatcher` Javadoc (v0.2.82, PR #956). Matchers registered on the same event are dispatched concurrently by the CLI — independent design required.
+- ✅ N/A: `_swallow_done_exception` helper (v0.2.82, PR #931) — Python-asyncio-only failure mode (the "Exception in callback" warning when `Task.exception()` raises `CancelledError` from a done-callback). Java's `CompletableFuture` doesn't emit equivalent warnings; `TranscriptMirrorBatcher.drainAndReport` already catches all internal exceptions and `close()` wraps with `.exceptionally()`. A comment in `scheduleDrain()` documents this.
+- ✅ N/A: `permission_suggestions` type tightening on `SDKControlPermissionRequest` (v0.2.82, PR #955) — the Java SDK already types this field as `List<PermissionUpdate>` (strictly typed via `@JsonCreator` `fromMap`), which is tighter than both the pre-fix Python `list[Any]` and the post-fix `list[dict[str, Any]]`. No change needed.
+- ✅ N/A: `mcp>=1.23.0` dependency floor for GHSA-9h52-p55h-vw2f (v0.2.82, PR #927) — Python package metadata only; Java SDK uses its own JSON-RPC implementation for in-process SDK MCP tools.
+- ✅ N/A: bundled CLI version constants (v0.1.81, v0.2.82) — Java SDK uses the system-installed CLI, no `_cli_version.py` equivalent.
 
 ✅ **All new features from Python SDK v0.1.80 are now implemented in Java SDK v0.1.15**. This includes:
 - ✅ **`includeHookEvents` option** on `ClaudeAgentOptions` and **`HookEventMessage`** message type (v0.1.74). When the option is set the transport adds `--include-hook-events` and the CLI streams `system/hook_started` and `system/hook_response` envelopes; `MessageParser` routes them to `HookEventMessage` (added to the `Message` sealed interface) which exposes `subtype`, `hookEventName`, `sessionId`, `uuid`, and the full raw `data` map.
@@ -289,6 +300,7 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | Thinking config adaptive | `ThinkingConfigAdaptive` TypedDict | `ThinkingConfigAdaptive` record | ✅ |
 | Thinking config enabled | `ThinkingConfigEnabled` TypedDict | `ThinkingConfigEnabled` record | ✅ |
 | Thinking config disabled | `ThinkingConfigDisabled` TypedDict | `ThinkingConfigDisabled` record | ✅ |
+| Effort level | `EffortLevel` Literal/TypeAlias | `EffortLevel` enum | ✅ |
 
 ### Permission System (8 types)
 
@@ -790,7 +802,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-05-09
-**Python SDK Version:** 0.1.80 (commit 694e4f3b4fcd0957f7f55530203ebd7b96a87f9e)
-**Java SDK Version:** 0.1.15
+**Latest Verification:** 2026-05-16
+**Python SDK Version:** 0.2.82 (commit c352a509929a712de65637cbafafcc3a1e3ba4f6)
+**Java SDK Version:** 0.1.16
 **Status:** ✅ 100% Feature Parity Maintained

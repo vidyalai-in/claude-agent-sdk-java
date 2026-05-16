@@ -15,6 +15,11 @@ import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
  * <p>
  * Defines which hooks to call for specific tool patterns.
  *
+ * <p><b>Dispatch order:</b> when multiple matchers are registered on the same
+ * event, the CLI dispatches all matching hook callbacks <b>concurrently</b>
+ * (in parallel), not sequentially. Design each hook to be independent; do
+ * not rely on one completing before another starts.
+ *
  * @param matcher        See
  *                       https://docs.anthropic.com/en/docs/claude-code/hooks#structure
  *                       for the expected string value. For example, for

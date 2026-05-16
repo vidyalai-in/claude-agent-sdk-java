@@ -23,6 +23,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.jspecify.annotations.Nullable;
@@ -856,16 +857,24 @@ public class SubprocessCLITransport implements Transport {
     }
 
     @SuppressWarnings("null")
-    private void handleStderr(BufferedReader stderr) {
+    // Package-private for tests.
+    void handleStderr(BufferedReader stderr) {
         try (stderr) {
             String line;
             while ((line = stderr.readLine()) != null) {
                 if (options.stderrCallback() != null) {
-                    options.stderrCallback().accept(line);
+                    // Isolate per-line so a raise in the user's callback doesn't
+                    // terminate the loop and silently drop every subsequent
+                    // stderr line for the rest of the session.
+                    try {
+                        options.stderrCallback().accept(line);
+                    } catch (Throwable t) {
+                        logger.log(Level.FINE, "stderr callback raised; continuing", t);
+                    }
                 }
             }
         } catch (Exception e) {
-            // Stream closed
+            logger.log(Level.FINE, "stderr stream read failed", e);
         }
     }
 

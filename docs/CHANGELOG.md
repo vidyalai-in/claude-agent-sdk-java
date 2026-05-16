@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-05-16
+
+### Added
+- **`EffortLevel` enum** in `in.vidyalai.claude.sdk.types.config` (Python SDK v0.2.82, PR #951): mirrors Python's `EffortLevel` type alias with the same five values — `LOW`, `MEDIUM`, `HIGH`, `XHIGH`, `MAX` — each carrying the lowercase wire value via `@JsonValue`. Available as a public API for downstream wrappers and type annotations. `ClaudeAgentOptions.Builder.effort(EffortLevel)` overload added alongside the existing `effort(String)` setter; passing `null` clears the field. Backward-compatible — the `effort()` getter still returns `String`.
+
+### Fixed
+- **Stderr callback isolation** in `SubprocessCLITransport.handleStderr` (Python SDK v0.2.82, PR #932): a `try/catch` around each `stderrCallback.accept(line)` invocation guarantees a throwing callback no longer kills the read loop and silently drops every subsequent stderr line for the rest of the session. Outer-loop exceptions are now logged at `FINE` instead of being silently swallowed.
+
+### Changed
+- **Hooks dispatch concurrency** documented on `ClaudeAgentOptions.hooks()` / `Builder.hooks(Map)` and `HookMatcher` Javadoc (Python SDK v0.2.82, PR #956): clarifies that matchers registered on the same event are dispatched concurrently by the CLI, not sequentially. Existing behavior — Javadoc-only update.
+
+### Synced
+- Python SDK v0.1.80 → v0.2.82 (commits 694e4f3b..c352a509)
+- v0.1.81: CLI 2.1.139 (no API changes)
+- v0.2.82: `EffortLevel` export; stderr callback isolation; `_swallow_done_exception` for `CancelledError` in eager-flush done callback (Python-asyncio-only — N/A for Java's `CompletableFuture`); tighter `permission_suggestions` on `SDKControlPermissionRequest` (Java already tighter via `PermissionUpdate.fromMap` `@JsonCreator`); hooks dispatch concurrency docs; `mcp>=1.23.0` floor for GHSA-9h52-p55h-vw2f (Python package metadata only — N/A for Java); CLI 2.1.140-2.1.143
+
+[0.1.16]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.16
+
 ## [0.1.15] - 2026-05-09
 
 ### Added

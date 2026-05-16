@@ -11,6 +11,7 @@ import java.util.function.Consumer;
 import org.jspecify.annotations.Nullable;
 
 import in.vidyalai.claude.sdk.types.config.AgentDefinition;
+import in.vidyalai.claude.sdk.types.config.EffortLevel;
 import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
@@ -491,7 +492,8 @@ public final class ClaudeAgentOptions {
     /**
      * Returns the effort level for thinking depth.
      *
-     * <p>Supported values:
+     * <p>Supported values (see also
+     * {@link in.vidyalai.claude.sdk.types.config.EffortLevel}):
      * <ul>
      *   <li>{@code "low"} — Minimal thinking, fastest responses.</li>
      *   <li>{@code "medium"} — Moderate thinking.</li>
@@ -581,6 +583,11 @@ public final class ClaudeAgentOptions {
 
     /**
      * Returns the hook configurations.
+     *
+     * <p><b>Dispatch order:</b> multiple matchers registered on the same event
+     * are dispatched <b>concurrently</b> by the CLI — all hook callbacks for a
+     * given event fire in parallel, not sequentially. Design each hook to be
+     * independent; do not rely on one completing before another starts.
      *
      * @return map of hook events to matchers, or null if not configured
      */
@@ -1163,6 +1170,18 @@ public final class ClaudeAgentOptions {
         }
 
         /**
+         * Sets the effort level for thinking depth using the
+         * {@link EffortLevel} enum.
+         *
+         * @param effort the effort level, or null to clear
+         * @return this builder
+         */
+        public Builder effort(@Nullable EffortLevel effort) {
+            this.effort = effort == null ? null : effort.getValue();
+            return this;
+        }
+
+        /**
          * Sets the maximum message queue size.
          *
          * @param maxMsgQSize the max message queue size
@@ -1272,6 +1291,12 @@ public final class ClaudeAgentOptions {
 
         /**
          * Sets the hook configurations.
+         *
+         * <p><b>Dispatch order:</b> multiple matchers registered on the same
+         * event are dispatched <b>concurrently</b> by the CLI — all hook
+         * callbacks for a given event fire in parallel, not sequentially.
+         * Design each hook to be independent; do not rely on one completing
+         * before another starts.
          *
          * @param hooks map of hook events to matchers
          * @return this builder
