@@ -162,7 +162,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Manages CLI subprocess lifecycle
   - Stdin/stdout communication
   - Buffered reading with configurable limits
-  - Stderr callback support
+  - Stderr callback support with per-line exception isolation (a throwing user callback no longer kills the read loop)
   - Automatic process cleanup
   - **JVM shutdown hook**: a static `ConcurrentHashMap.newKeySet()` tracks every spawned `Process`; a `Runtime.addShutdownHook` registered at class init calls `destroy()` on each live child so stray `claude` subprocesses do not leak when the parent JVM exits before `close()`. Mirrors the Python SDK's `atexit` handler.
 - **Implementation Details**:

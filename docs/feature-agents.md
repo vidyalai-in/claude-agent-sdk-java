@@ -72,7 +72,7 @@ AgentDefinition compat = new AgentDefinition(
 | `initialPrompt` | `String` (nullable) | Initial prompt sent when agent starts |
 | `maxTurns` | `Integer` (nullable) | Max turns for the agent; null means unlimited |
 | `background` | `Boolean` (nullable) | Run the agent in background |
-| `effort` | `String` (nullable) | Effort level: "low", "medium", "high", "max" |
+| `effort` | `String` (nullable) | Effort level: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. `"xhigh"` is Opus 4.7-specific and falls back to `"high"` on other models. See also the [`EffortLevel`](feature-configuration-options.md#effortlevel-enum) enum. |
 | `permissionMode` | `String` (nullable) | Permission mode for the agent |
 
 **Model field:** The `model` field accepts short aliases (`"sonnet"`, `"opus"`, `"haiku"`, `"inherit"`) or full model IDs (e.g., `"claude-sonnet-4-5"`).

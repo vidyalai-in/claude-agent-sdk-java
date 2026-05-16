@@ -210,7 +210,7 @@ Add to your `pom.xml`:
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.15</version>
+    <version>0.1.16</version>
 </dependency>
 
 <repositories>
@@ -354,6 +354,6 @@ Contributions are welcome! Please see the repository for contribution guidelines
 
 ## Version
 
-Current version: 0.1.15
+Current version: 0.1.16
 
 See [CHANGELOG.md](../docs/CHANGELOG.md) for version history and release notes.

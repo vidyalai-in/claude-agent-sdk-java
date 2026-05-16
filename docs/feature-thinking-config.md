@@ -147,8 +147,15 @@ The `effort` option controls thinking depth/intensity. Valid values:
 | `"max"` | Maximum effort | Research, critical reasoning |
 
 ```java
+// Raw string overload
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .effort("xhigh")        // Opus 4.7-specific; falls back to "high" on other models
+    .model("claude-opus-4-7")
+    .build();
+
+// Type-safe EffortLevel enum overload (recommended)
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .effort(EffortLevel.XHIGH)
     .model("claude-opus-4-7")
     .build();
 ```
@@ -156,7 +163,8 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 **Notes**:
 
 - The effort level works in conjunction with ThinkingConfig. You can use effort without explicitly setting ThinkingConfig.
-- `"xhigh"` is **Opus 4.7-specific** and falls back to `"high"` on other models. The Java field stays a plain `String`, so future effort values can be passed without an SDK upgrade.
+- `"xhigh"` is **Opus 4.7-specific** and falls back to `"high"` on other models. The underlying field stays a plain `String`, so future effort values can be passed without an SDK upgrade.
+- The `EffortLevel` enum at `in.vidyalai.claude.sdk.types.config.EffortLevel` mirrors the Python SDK's exported `EffortLevel` type alias and is recommended for new code. The `String` overload remains for full flexibility (and for any future levels not yet in the enum). See [EffortLevel enum](feature-configuration-options.md#effortlevel-enum) for details.
 
 ## Usage Examples
 

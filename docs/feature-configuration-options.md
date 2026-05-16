@@ -361,20 +361,53 @@ See [Extended Thinking Configuration](./feature-thinking-config.md) for complete
 
 ### effort()
 
-**NEW**: Set thinking depth/intensity level.
+Set thinking depth/intensity level. Two overloads — pass either the raw string
+or the type-safe [`EffortLevel`](#effortlevel-enum) enum.
 
 ```java
-.effort("low")     // Minimal thinking
-.effort("medium")  // Balanced (default)
-.effort("high")    // Deep thinking
+// String overload
+.effort("low")     // Minimal thinking, fastest responses
+.effort("medium")  // Moderate thinking
+.effort("high")    // Deep reasoning (default)
+.effort("xhigh")   // Extended depth (Opus 4.7 only; falls back to "high")
 .effort("max")     // Maximum reasoning
+
+// Enum overload (recommended for type safety)
+.effort(EffortLevel.HIGH)
+.effort(EffortLevel.XHIGH)
+.effort((EffortLevel) null)  // clear
 ```
 
-**Valid values**: `"low"`, `"medium"`, `"high"`, `"max"`
+**Valid values**: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`
+
+`"xhigh"` is Opus 4.7-specific and falls back to `"high"` on other models.
 
 Works in conjunction with `thinking()` to control reasoning depth.
 
 See [Extended Thinking Configuration](./feature-thinking-config.md) for examples.
+
+### EffortLevel enum
+
+Public enum at `in.vidyalai.claude.sdk.types.config.EffortLevel` mirroring
+Python's `EffortLevel` type alias. Exposed so downstream SDK wrappers can
+reference the type directly.
+
+| Constant | Wire value | Description |
+|----------|------------|-------------|
+| `EffortLevel.LOW` | `"low"` | Minimal thinking, fastest responses |
+| `EffortLevel.MEDIUM` | `"medium"` | Moderate thinking |
+| `EffortLevel.HIGH` | `"high"` | Deep reasoning (default) |
+| `EffortLevel.XHIGH` | `"xhigh"` | Extended reasoning (Opus 4.7 only; falls back to `HIGH`) |
+| `EffortLevel.MAX` | `"max"` | Maximum effort |
+
+Helpers:
+- `EffortLevel.getValue()` returns the lowercase wire value (also the `@JsonValue` serializer).
+- `EffortLevel.fromValue(String)` parses a wire value back into an enum constant; throws `IllegalArgumentException` for unknown values.
+
+```java
+EffortLevel level = EffortLevel.fromValue("xhigh");
+String wire = level.getValue(); // "xhigh"
+```
 
 ### maxThinkingTokens()
 
@@ -527,13 +560,19 @@ BiFunction<String, Object, ToolPermissionContext, CompletableFuture<PermissionRe
 
 ### stderrCallback()
 
-Receive stderr output from CLI.
+Receive stderr output from CLI. Invoked once per stderr line as the CLI emits
+it (only piped when this callback is set).
 
 ```java
 .stderrCallback(line -> {
     System.err.println("CLI stderr: " + line);
 })
 ```
+
+**Exception isolation:** if your callback throws, the exception is caught,
+logged at `FINE` (`java.util.logging`), and stderr reading continues. A buggy
+callback can no longer silently terminate the read loop and drop every
+subsequent stderr line for the rest of the session.
 
 ## Hooks
 

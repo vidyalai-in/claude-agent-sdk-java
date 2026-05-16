@@ -60,6 +60,7 @@ options.toBuilder()
 - `maxBufferSize(Integer)` - Max stdout buffer bytes
 - `thinking(ThinkingConfig)` - Extended thinking configuration
 - `effort(String)` - Thinking depth level (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`). `"xhigh"` is Opus 4.7-specific and falls back to `"high"` on other models.
+- `effort(EffortLevel)` - Same as above, but type-safe using the [`EffortLevel`](feature-configuration-options.md#effortlevel-enum) enum (`LOW`, `MEDIUM`, `HIGH`, `XHIGH`, `MAX`). Pass `null` to clear.
 - `maxThinkingTokens(Integer)` - **DEPRECATED** Use `thinking()` instead
 - `maxMsgQSize(Integer)` - Max message queue size
 

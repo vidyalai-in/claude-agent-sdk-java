@@ -46,6 +46,12 @@ new HookMatcher(
 )
 ```
 
+> **Dispatch order:** when multiple matchers are registered on the same event,
+> the CLI dispatches all matching hook callbacks **concurrently** (in parallel),
+> not sequentially. Design each hook to be independent — do not rely on one
+> completing before another starts (e.g. don't chain rate-limiter hooks that
+> assume a gating order).
+
 ## Hook Input Fields
 
 All tool-related hook inputs (`PreToolUseHookInput`, `PostToolUseHookInput`, `PostToolUseFailureHookInput`, `PermissionRequestHookInput`) include two optional fields for subagent context:
