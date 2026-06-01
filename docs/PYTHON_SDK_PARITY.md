@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-05-16 (Updated)
+**Analysis Date:** 2026-06-01 (Updated)
 **Java SDK Version:** 0.1.16
-**Python SDK Version:** [0.2.82](https://github.com/anthropics/claude-agent-sdk-python/commit/c352a509929a712de65637cbafafcc3a1e3ba4f6) (latest)
+**Python SDK Version:** [0.2.87](https://github.com/anthropics/claude-agent-sdk-python/commit/6218b9b49e648e7769300f9ebc984604901c54b5) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,8 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.2.82):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.82. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.87):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.87. These updates include:
+- **v0.2.83-0.2.87** - Port the `session_store` resume/listing/mirroring code path from `asyncio` to `anyio` so it runs under both the asyncio and trio backends (PR #990 — Python-concurrency-backend portability only; Java already uses `CompletableFuture`/virtual threads and a synchronous flush executor, so N/A). The Python `_swallow_done_exception` eager-flush done-callback helper was removed (its asyncio "unretrieved exception" warning has no `CompletableFuture` equivalent — Java's `TranscriptMirrorBatcher.scheduleDrain` already documents this). Python `TranscriptMirrorBatcher.close()` flush is now shielded from cancellation; Java's synchronous executor-backed `close()` already completes its final flush during teardown. No Java-relevant API or behavioral changes. CLI 2.1.144-2.1.159
 - **v0.2.82** - `EffortLevel` type export for downstream wrappers; fix: stderr callback isolation (a raise no longer kills the read loop); fix: `CancelledError` in eager-flush done callback (Python-asyncio-only); tighter `permission_suggestions` type on `SDKControlPermissionRequest` (Java already tighter via `PermissionUpdate`); docs: hooks dispatch is concurrent, not sequential; CLI 2.1.140-2.1.143
 - **v0.1.81** - CLI update to 2.1.139 (no API changes)
 - **v0.1.78-0.1.80** - CLI updates to 2.1.136-2.1.138 (no API changes)
@@ -802,7 +803,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-05-16
-**Python SDK Version:** 0.2.82 (commit c352a509929a712de65637cbafafcc3a1e3ba4f6)
+**Latest Verification:** 2026-06-01
+**Python SDK Version:** 0.2.87 (commit 6218b9b49e648e7769300f9ebc984604901c54b5)
 **Java SDK Version:** 0.1.16
 **Status:** ✅ 100% Feature Parity Maintained

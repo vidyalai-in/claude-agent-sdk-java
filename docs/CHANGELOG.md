@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.16] - 2026-05-16
+## [0.1.16] - 2026-06-01
 
 ### Added
 - **`EffortLevel` enum** in `in.vidyalai.claude.sdk.types.config` (Python SDK v0.2.82, PR #951): mirrors Python's `EffortLevel` type alias with the same five values — `LOW`, `MEDIUM`, `HIGH`, `XHIGH`, `MAX` — each carrying the lowercase wire value via `@JsonValue`. Available as a public API for downstream wrappers and type annotations. `ClaudeAgentOptions.Builder.effort(EffortLevel)` overload added alongside the existing `effort(String)` setter; passing `null` clears the field. Backward-compatible — the `effort()` getter still returns `String`.
@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python SDK v0.1.80 → v0.2.82 (commits 694e4f3b..c352a509)
 - v0.1.81: CLI 2.1.139 (no API changes)
 - v0.2.82: `EffortLevel` export; stderr callback isolation; `_swallow_done_exception` for `CancelledError` in eager-flush done callback (Python-asyncio-only — N/A for Java's `CompletableFuture`); tighter `permission_suggestions` on `SDKControlPermissionRequest` (Java already tighter via `PermissionUpdate.fromMap` `@JsonCreator`); hooks dispatch concurrency docs; `mcp>=1.23.0` floor for GHSA-9h52-p55h-vw2f (Python package metadata only — N/A for Java); CLI 2.1.140-2.1.143
+- Python SDK v0.2.82 → v0.2.87 (commits c352a509..6218b9b4) — **no Java-relevant API or behavioral changes**.
+- v0.2.83-0.2.87: Ported the Python `session_store` resume/listing/mirroring path from `asyncio` to `anyio` so it runs under both the asyncio and trio event-loop backends (PR #990). This is Python-concurrency-backend portability only:
+  - `_internal/session_resume.py`, `_internal/sessions.py`, `_internal/transcript_mirror_batcher.py`: `asyncio.sleep`/`wait_for`/`gather`/`Semaphore`/`Lock` → `anyio` equivalents. Java already uses `CompletableFuture`/virtual threads and a `ReentrantLock`-serialized synchronous flush executor — N/A.
+  - Removed the asyncio-only `_swallow_done_exception` eager-flush done-callback helper (its "unretrieved exception" warning has no `CompletableFuture` equivalent; `TranscriptMirrorBatcher.scheduleDrain` already documents this).
+  - Python `TranscriptMirrorBatcher.close()` flush is now shielded from cancellation; Java's executor-backed `close()` already completes its final flush during teardown.
+  - New `tests/test_session_store_anyio.py` (trio backend) and `test_transcript_mirror.py` updates are backend-specific — N/A for Java.
+- CLI 2.1.144-2.1.159 (no API changes).
 
 [0.1.16]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.16
 
