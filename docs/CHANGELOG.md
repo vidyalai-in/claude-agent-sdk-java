@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Python `TranscriptMirrorBatcher.close()` flush is now shielded from cancellation; Java's executor-backed `close()` already completes its final flush during teardown.
   - New `tests/test_session_store_anyio.py` (trio backend) and `test_transcript_mirror.py` updates are backend-specific — N/A for Java.
 - CLI 2.1.144-2.1.159 (no API changes).
+- Python SDK v0.2.87 → v0.2.95 (commits 6218b9b4..7c37e347) — **no Java-relevant API or behavioral changes**.
+- v0.2.88: Completed the `asyncio` → `anyio` port of the session-store code paths (`TranscriptMirrorBatcher`, `session_resume`, `sessions`), fixing a `TypeError: trio.run received unrecognized yield message` crash when passing `session_store=` to `query()`/`ClaudeSDKClient` under trio (PR #990). Python-concurrency-backend portability only — Java uses `CompletableFuture`/virtual threads and a synchronous flush executor, so N/A. The conformance docstring example switched `@pytest.mark.asyncio` → `@pytest.mark.anyio` (Python test-infra — N/A).
+- v0.2.91: Switched the Python test suite from `pytest-asyncio` to anyio's pytest plugin, running every async test under both asyncio and trio backends (PR #1021). Python test-infrastructure only — N/A for Java.
+- CI: e2e jobs switched from a static API key to workload identity federation (short-lived OIDC tokens, PR #1018) — Python-repo CI only, N/A.
+- CLI 2.1.160-2.1.170 (no API changes).
 
 [0.1.16]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.16
 
