@@ -28,6 +28,8 @@ import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationStatus;
 import in.vidyalai.claude.sdk.types.message.TaskProgressMessage;
 import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
+import in.vidyalai.claude.sdk.types.message.TaskUpdatedMessage;
+import in.vidyalai.claude.sdk.types.message.TaskUpdatedStatus;
 import in.vidyalai.claude.sdk.types.message.TaskUsage;
 import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
@@ -242,6 +244,32 @@ public final class MessageParser {
                         getRequired(data, "session_id", String.class),
                         (String) data.get("tool_use_id"),
                         parseTaskUsageOptional((Map<String, Object>) data.get("usage")));
+                case "task_updated" -> {
+                    // Terminal task completion sometimes arrives only as a
+                    // task_updated patch (no separate task_notification), so
+                    // expose it as a typed lifecycle message rather than a
+                    // generic SystemMessage. Parsed defensively: the patch may
+                    // omit uuid/session_id and parsing must never raise on a
+                    // lifecycle event.
+                    Map<String, Object> patch = data.get("patch") instanceof Map<?, ?> p
+                            ? (Map<String, Object>) p
+                            : Map.of();
+                    // Terminal-ness is derived from patch.status; the CLI is
+                    // assumed to set it on terminal transitions. A patch that
+                    // carries only end_time/result/error (no status) is left
+                    // non-terminal (status=null) — the full patch is still
+                    // preserved on .patch() for callers that need more.
+                    TaskUpdatedStatus status = TaskUpdatedStatus.fromValueOrNull(
+                            patch.get("status") instanceof String s ? s : null);
+                    yield new TaskUpdatedMessage(
+                            subtype,
+                            data,
+                            data.get("task_id") instanceof String s ? s : "",
+                            patch,
+                            status,
+                            data.get("session_id") instanceof String s ? s : null,
+                            data.get("uuid") instanceof String s ? s : null);
+                }
                 case "hook_started", "hook_response" -> {
                     String hookEventName = "";
                     Object he = data.get("hook_event");

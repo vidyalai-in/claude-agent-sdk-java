@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import in.vidyalai.claude.sdk.exceptions.MessageParseException;
 import in.vidyalai.claude.sdk.internal.MessageParser;
@@ -23,6 +25,8 @@ import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationStatus;
 import in.vidyalai.claude.sdk.types.message.TaskProgressMessage;
 import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
+import in.vidyalai.claude.sdk.types.message.TaskUpdatedMessage;
+import in.vidyalai.claude.sdk.types.message.TaskUpdatedStatus;
 import in.vidyalai.claude.sdk.types.message.TaskUsage;
 import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
@@ -974,6 +978,165 @@ class MessageParserTest {
 
     @SuppressWarnings("null")
     @Test
+    void parseTaskUpdatedMessage_terminal() {
+        Map<String, Object> data = new java.util.HashMap<>(Map.of(
+                "type", "system",
+                "subtype", "task_updated",
+                "task_id", "task-abc",
+                "patch", Map.of("status", "completed", "end_time", 1780405729183L),
+                "uuid", "uuid-4",
+                "session_id", "session-1"));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskUpdatedMessage.class);
+        TaskUpdatedMessage updated = (TaskUpdatedMessage) message;
+        assertThat(updated.taskId()).isEqualTo("task-abc");
+        assertThat(updated.patch()).containsEntry("status", "completed").containsEntry("end_time", 1780405729183L);
+        assertThat(updated.status()).isEqualTo(TaskUpdatedStatus.COMPLETED);
+        assertThat(updated.uuid()).isEqualTo("uuid-4");
+        assertThat(updated.sessionId()).isEqualTo("session-1");
+        assertThat(updated.isTerminal()).isTrue();
+        assertThat(TaskUpdatedMessage.TERMINAL_TASK_STATUSES).contains(updated.status().getValue());
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskUpdatedMessage_minimal() {
+        // Mirrors the observed CLI shape where terminal completion arrives as a
+        // bare task_updated patch (no uuid/session_id) — parsing must never raise.
+        Map<String, Object> data = Map.of(
+                "type", "system",
+                "subtype", "task_updated",
+                "task_id", "b1m21w89v",
+                "patch", Map.of("status", "completed", "end_time", 1780405729183L));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskUpdatedMessage.class);
+        TaskUpdatedMessage updated = (TaskUpdatedMessage) message;
+        assertThat(updated.taskId()).isEqualTo("b1m21w89v");
+        assertThat(updated.status()).isEqualTo(TaskUpdatedStatus.COMPLETED);
+        assertThat(updated.uuid()).isNull();
+        assertThat(updated.sessionId()).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @ParameterizedTest
+    @ValueSource(strings = { "pending", "running", "paused" })
+    void parseTaskUpdatedMessage_nonTerminalStatuses(String status) {
+        Map<String, Object> data = Map.of(
+                "type", "system",
+                "subtype", "task_updated",
+                "task_id", "task-abc",
+                "patch", Map.of("status", status));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskUpdatedMessage.class);
+        TaskUpdatedMessage updated = (TaskUpdatedMessage) message;
+        assertThat(updated.status()).isEqualTo(TaskUpdatedStatus.fromValue(status));
+        assertThat(updated.isTerminal()).isFalse();
+        assertThat(TaskUpdatedMessage.TERMINAL_TASK_STATUSES).doesNotContain(status);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskUpdatedMessage_noPatch() {
+        Map<String, Object> data = Map.of(
+                "type", "system",
+                "subtype", "task_updated",
+                "task_id", "task-abc");
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskUpdatedMessage.class);
+        TaskUpdatedMessage updated = (TaskUpdatedMessage) message;
+        assertThat(updated.patch()).isEmpty();
+        assertThat(updated.status()).isNull();
+        assertThat(updated.isTerminal()).isFalse();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskUpdatedMessage_patchWithoutStatus() {
+        Map<String, Object> data = Map.of(
+                "type", "system",
+                "subtype", "task_updated",
+                "task_id", "task-abc",
+                "patch", Map.of("end_time", 1780405729183L));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskUpdatedMessage.class);
+        TaskUpdatedMessage updated = (TaskUpdatedMessage) message;
+        assertThat(updated.patch()).containsEntry("end_time", 1780405729183L);
+        assertThat(updated.status()).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @ParameterizedTest
+    @ValueSource(strings = { "completed", "failed", "killed" })
+    void parseTaskUpdatedMessage_terminalStatuses(String status) {
+        // task_updated reports the raw "killed" (not the "stopped" form the CLI
+        // maps to on task_notification).
+        Map<String, Object> data = Map.of(
+                "type", "system",
+                "subtype", "task_updated",
+                "task_id", "task-abc",
+                "patch", Map.of("status", status));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskUpdatedMessage.class);
+        TaskUpdatedMessage updated = (TaskUpdatedMessage) message;
+        assertThat(updated.status()).isEqualTo(TaskUpdatedStatus.fromValue(status));
+        assertThat(updated.isTerminal()).isTrue();
+        assertThat(TaskUpdatedMessage.TERMINAL_TASK_STATUSES).contains(status);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskUpdatedMessage_killedIsTerminal() {
+        // A task stopped via TaskStop reports status="killed"; in some kill paths
+        // no task_notification is emitted, so this patch is the only terminal signal.
+        Map<String, Object> data = Map.of(
+                "type", "system",
+                "subtype", "task_updated",
+                "task_id", "bs2r8eew4",
+                "patch", Map.of("status", "killed", "end_time", 1780405729183L));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskUpdatedMessage.class);
+        TaskUpdatedMessage updated = (TaskUpdatedMessage) message;
+        assertThat(updated.status()).isEqualTo(TaskUpdatedStatus.KILLED);
+        assertThat(updated.isTerminal()).isTrue();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseTaskUpdatedMessage_baseFieldsPopulated() {
+        // Backward-compat: subtype and data remain populated for legacy code paths.
+        Map<String, Object> data = new java.util.HashMap<>(Map.of(
+                "type", "system",
+                "subtype", "task_updated",
+                "task_id", "t1",
+                "patch", Map.of("status", "failed"),
+                "uuid", "u1",
+                "session_id", "s1"));
+
+        Message message = MessageParser.parse(data);
+
+        assertThat(message).isInstanceOf(TaskUpdatedMessage.class);
+        TaskUpdatedMessage updated = (TaskUpdatedMessage) message;
+        assertThat(updated.subtype()).isEqualTo("task_updated");
+        assertThat(updated.data()).containsEntry("task_id", "t1");
+        assertThat(updated.type()).isEqualTo("system");
+    }
+
+    @SuppressWarnings("null")
+    @Test
     void taskMessageBaseFields_arePopulated() {
         Map<String, Object> data = new java.util.HashMap<>(Map.of(
                 "type", "system",
@@ -1003,6 +1166,7 @@ class MessageParserTest {
         assertThat(message).isNotInstanceOf(TaskStartedMessage.class);
         assertThat(message).isNotInstanceOf(TaskProgressMessage.class);
         assertThat(message).isNotInstanceOf(TaskNotificationMessage.class);
+        assertThat(message).isNotInstanceOf(TaskUpdatedMessage.class);
         assertThat(message.getClass()).isEqualTo(SystemMessage.class);
         SystemMessage sys = (SystemMessage) message;
         assertThat(sys.subtype()).isEqualTo("some_future_subtype");

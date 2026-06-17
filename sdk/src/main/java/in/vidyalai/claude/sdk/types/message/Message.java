@@ -12,6 +12,7 @@ package in.vidyalai.claude.sdk.types.message;
  * <li>{@link TaskStartedMessage} - Task started system message</li>
  * <li>{@link TaskProgressMessage} - Task progress system message</li>
  * <li>{@link TaskNotificationMessage} - Task notification system message</li>
+ * <li>{@link TaskUpdatedMessage} - Task lifecycle update system message</li>
  * <li>{@link MirrorErrorMessage} - Session-store mirror append failure</li>
  * <li>{@link HookEventMessage} - Hook lifecycle events (when
  *     {@code includeHookEvents} is enabled)</li>
@@ -32,6 +33,7 @@ package in.vidyalai.claude.sdk.types.message;
  *     case TaskStartedMessage task -> System.out.println("Task started: " + task.taskId());
  *     case TaskProgressMessage task -> System.out.println("Task progress: " + task.taskId());
  *     case TaskNotificationMessage task -> System.out.println("Task done: " + task.status());
+ *     case TaskUpdatedMessage task -> System.out.println("Task updated: " + task.status());
  *     case MirrorErrorMessage mirror -> System.err.println("Mirror error: " + mirror.error());
  *     case HookEventMessage hook -> System.out.println("Hook " + hook.subtype() + ": " + hook.hookEventName());
  *     case StreamEvent event -> handleStreamEvent(event);
@@ -40,8 +42,8 @@ package in.vidyalai.claude.sdk.types.message;
  * }</pre>
  */
 public sealed interface Message permits UserMessage, AssistantMessage, SystemMessage,
-        TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage, MirrorErrorMessage,
-        HookEventMessage, ResultMessage, StreamEvent, RateLimitEvent {
+        TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage, TaskUpdatedMessage,
+        MirrorErrorMessage, HookEventMessage, ResultMessage, StreamEvent, RateLimitEvent {
 
     /**
      * Returns the type identifier for this message.

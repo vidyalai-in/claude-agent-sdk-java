@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-06-17
+
+### Added
+- **`TaskUpdatedMessage` typed lifecycle message** (Python SDK v0.2.101, PR #1016): the CLI emits `system`/`task_updated` events as a background task moves through its lifecycle, and a task's terminal state sometimes arrives *only* as a `task_updated` patch with no accompanying `TaskNotificationMessage` — e.g. a task stopped via `TaskStop` reports `status="killed"` here. `MessageParser` now routes `task_updated` to a new `TaskUpdatedMessage` record (a `Message` sealed-interface member, `type()` = `"system"`) exposing `taskId`, `patch` (the changed fields), `status`, `sessionId`, and `uuid`. Parsed defensively — a missing/non-Map `patch` falls back to an empty map and an unknown/absent status to `null`, so a lifecycle event never crashes parsing.
+- **`TaskUpdatedStatus` enum** in `in.vidyalai.claude.sdk.types.message` (Python SDK v0.2.101): mirrors Python's `TaskUpdatedStatus` literal — `PENDING`, `RUNNING`, `PAUSED` (non-terminal) and `COMPLETED`, `FAILED`, `KILLED` (terminal). Note `task_updated` reports the raw `killed`; the CLI maps that to `stopped` only when it emits a `task_notification`. `fromValueOrNull(String)` resolves a raw status without throwing on unknown/null values.
+- **`TaskUpdatedMessage.TERMINAL_TASK_STATUSES`** (Python SDK v0.2.101): Java equivalent of Python's top-level `TERMINAL_TASK_STATUSES` frozenset — `{"completed", "failed", "stopped", "killed"}`, spanning both lifecycle vocabularies so consumers can treat the status of a `TaskNotificationMessage` and a `TaskUpdatedMessage` the same way. A convenience `TaskUpdatedMessage.isTerminal()` returns whether the update's status is terminal.
+
+### Synced
+- Python SDK v0.2.95 → v0.2.103 (commits 7c37e347..7f74cdf6)
+- v0.2.96-0.2.103: `TaskUpdatedMessage` / `TaskUpdatedStatus` / `TERMINAL_TASK_STATUSES` (PR #1016, ported above); `deps: pin mcp below 2.0.0` (PR #1028 — Python package constraint, N/A for Java); CLI 2.1.172-2.1.179 (no API changes).
+
+[0.1.17]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.17
+
 ## [0.1.16] - 2026-06-01
 
 ### Added

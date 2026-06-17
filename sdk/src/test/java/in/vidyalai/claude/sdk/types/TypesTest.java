@@ -33,6 +33,7 @@ import in.vidyalai.claude.sdk.types.message.ServerToolUseBlock;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
+import in.vidyalai.claude.sdk.types.message.TaskUpdatedMessage;
 import in.vidyalai.claude.sdk.types.message.TaskProgressMessage;
 import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
 import in.vidyalai.claude.sdk.types.message.TextBlock;
@@ -259,6 +260,7 @@ class TypesTest {
             case TaskStartedMessage t -> "task_started: " + t.taskId();
             case TaskProgressMessage t -> "task_progress: " + t.taskId();
             case TaskNotificationMessage t -> "task_notification: " + t.status();
+            case TaskUpdatedMessage t -> "task_updated: " + t.status();
             case MirrorErrorMessage m -> "mirror_error: " + m.error();
             case HookEventMessage h -> "hook_event: " + h.hookEventName();
             case ResultMessage r -> "result: " + r.result();

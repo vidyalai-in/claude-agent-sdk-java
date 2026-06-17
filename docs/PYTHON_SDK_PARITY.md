@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-06-10 (Updated)
-**Java SDK Version:** 0.1.16
-**Python SDK Version:** [0.2.95](https://github.com/anthropics/claude-agent-sdk-python/commit/7c37e3478448f9166493581cbd9e5a53b39a3a89) (latest)
+**Analysis Date:** 2026-06-17 (Updated)
+**Java SDK Version:** 0.1.17
+**Python SDK Version:** [0.2.103](https://github.com/anthropics/claude-agent-sdk-python/commit/7f74cdf67403f6748043adf1eaa7d45e74d0625f) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,8 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.2.95):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.95. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.103):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.103. These updates include:
+- **v0.2.96-0.2.103** - `TaskUpdatedMessage` typed lifecycle message (PR #1016): the CLI sometimes signals a background task's terminal state only via a `system`/`task_updated` patch (no accompanying `task_notification`) — e.g. a task stopped via `TaskStop` reports `status="killed"` here. Ported to Java as the `TaskUpdatedMessage` record (a `Message`, `type()` = `"system"`), the `TaskUpdatedStatus` enum (`pending`/`running`/`paused`/`completed`/`failed`/`killed`), and `TaskUpdatedMessage.TERMINAL_TASK_STATUSES` (Java equivalent of the top-level `TERMINAL_TASK_STATUSES` frozenset, spanning both lifecycle vocabularies: `completed`/`failed`/`stopped`/`killed`) plus an `isTerminal()` helper. Parsed defensively — a missing/non-`dict` patch falls back to empty and an unknown/absent status to `null`, so a lifecycle event never crashes parsing. Also: `deps: pin mcp below 2.0.0` (PR #1028 — Python package constraint, N/A for Java). CLI 2.1.172-2.1.179
 - **v0.2.88-0.2.95** - Completed the `asyncio` → `anyio` port of the session-store code paths (`TranscriptMirrorBatcher`, `session_resume`, `sessions`), fixing a `TypeError: trio.run received unrecognized yield message` crash when passing `session_store=` to `query()`/`ClaudeSDKClient` under trio (PR #990). This is Python-concurrency-backend portability only — Java already uses `CompletableFuture`/virtual threads and a synchronous flush executor, so N/A. Also Python test/CI infrastructure: the test suite moved from `pytest-asyncio` to anyio's pytest plugin to run every async test under both asyncio and trio backends (PR #1021), and e2e CI jobs switched from a static API key to workload identity federation (PR #1018) — both Python-repo-only, N/A. No Java-relevant API or behavioral changes. CLI 2.1.160-2.1.170
 - **v0.2.83-0.2.87** - Port the `session_store` resume/listing/mirroring code path from `asyncio` to `anyio` so it runs under both the asyncio and trio backends (PR #990 — Python-concurrency-backend portability only; Java already uses `CompletableFuture`/virtual threads and a synchronous flush executor, so N/A). The Python `_swallow_done_exception` eager-flush done-callback helper was removed (its asyncio "unretrieved exception" warning has no `CompletableFuture` equivalent — Java's `TranscriptMirrorBatcher.scheduleDrain` already documents this). Python `TranscriptMirrorBatcher.close()` flush is now shielded from cancellation; Java's synchronous executor-backed `close()` already completes its final flush during teardown. No Java-relevant API or behavioral changes. CLI 2.1.144-2.1.159
 - **v0.2.82** - `EffortLevel` type export for downstream wrappers; fix: stderr callback isolation (a raise no longer kills the read loop); fix: `CancelledError` in eager-flush done callback (Python-asyncio-only); tighter `permission_suggestions` type on `SDKControlPermissionRequest` (Java already tighter via `PermissionUpdate`); docs: hooks dispatch is concurrent, not sequential; CLI 2.1.140-2.1.143
@@ -804,7 +805,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-06-10
-**Python SDK Version:** 0.2.95 (commit 7c37e3478448f9166493581cbd9e5a53b39a3a89)
-**Java SDK Version:** 0.1.16
+**Latest Verification:** 2026-06-17
+**Python SDK Version:** 0.2.103 (commit 7f74cdf67403f6748043adf1eaa7d45e74d0625f)
+**Java SDK Version:** 0.1.17
 **Status:** ✅ 100% Feature Parity Maintained
