@@ -21,8 +21,8 @@ Unknown message types return `null` instead of throwing an exception, allowing t
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
-    TaskNotificationMessage, MirrorErrorMessage, HookEventMessage,
-    ResultMessage, StreamEvent, RateLimitEvent {
+    TaskNotificationMessage, TaskUpdatedMessage, MirrorErrorMessage,
+    HookEventMessage, ResultMessage, StreamEvent, RateLimitEvent {
     String type();
 }
 ```
@@ -375,6 +375,47 @@ enum TaskNotificationStatus {
 
     String getValue();
     static TaskNotificationStatus fromValue(String);
+}
+```
+
+### TaskUpdatedMessage
+
+Emitted on `system`/`task_updated` events as a background task moves through its lifecycle. A task's terminal state sometimes arrives **only** as a `task_updated` patch with no accompanying `TaskNotificationMessage` (e.g. a task stopped via `TaskStop` reports `status="killed"` here). Parsed defensively — a missing or non-map `patch` falls back to an empty map, and an unknown/absent status to `null`, so a lifecycle event never crashes parsing.
+
+```java
+record TaskUpdatedMessage(
+    String subtype,                    // always "task_updated"
+    Map<String, Object> data,          // raw message data
+    String taskId,                     // unique task identifier ("" if absent)
+    Map<String, Object> patch,         // changed fields (e.g. status, end_time); never null
+    @Nullable TaskUpdatedStatus status,// patch.status, or null if absent/unknown
+    @Nullable String sessionId,        // session identifier (may be null)
+    @Nullable String uuid              // message UUID (may be null)
+) implements Message {
+    String type();        // Returns "system"
+    boolean isTerminal(); // true if status is present and in TERMINAL_TASK_STATUSES
+
+    // Statuses that mean the task has finished, spanning both lifecycle
+    // vocabularies (task_notification's "stopped" and task_updated's "killed").
+    static final Set<String> TERMINAL_TASK_STATUSES =
+        Set.of("completed", "failed", "stopped", "killed");
+}
+```
+
+### TaskUpdatedStatus
+
+```java
+enum TaskUpdatedStatus {
+    PENDING,    // "pending"   (non-terminal)
+    RUNNING,    // "running"   (non-terminal)
+    PAUSED,     // "paused"    (non-terminal)
+    COMPLETED,  // "completed" (terminal)
+    FAILED,     // "failed"    (terminal)
+    KILLED;     // "killed"    (terminal — raw form; task_notification maps it to "stopped")
+
+    String getValue();
+    static TaskUpdatedStatus fromValue(String);              // throws on unknown
+    static @Nullable TaskUpdatedStatus fromValueOrNull(String); // null on unknown/null
 }
 ```
 

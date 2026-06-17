@@ -51,7 +51,7 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
 
 - **[Message Types](./feature-message-types.md)** - Understanding the message type system
   - UserMessage, AssistantMessage, SystemMessage, ResultMessage, StreamEvent, RateLimitEvent
-  - Task lifecycle messages (TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage)
+  - Task lifecycle messages (TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage, TaskUpdatedMessage)
   - HookEventMessage (when `includeHookEvents` is enabled)
   - DeferredToolUse on ResultMessage; `apiErrorStatus` HTTP status field
   - Content blocks (Text, Thinking, ToolUse, ToolResult)

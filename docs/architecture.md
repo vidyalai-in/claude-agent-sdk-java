@@ -257,8 +257,8 @@ Used extensively for type-safe message handling:
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
-    TaskNotificationMessage, MirrorErrorMessage, HookEventMessage,
-    ResultMessage, StreamEvent, RateLimitEvent {}
+    TaskNotificationMessage, TaskUpdatedMessage, MirrorErrorMessage,
+    HookEventMessage, ResultMessage, StreamEvent, RateLimitEvent {}
 
 // Usage with pattern matching
 switch (message) {

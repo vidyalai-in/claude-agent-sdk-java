@@ -26,8 +26,8 @@ The SDK uses a sealed interface hierarchy for type-safe message handling. All me
 ```java
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
-    TaskNotificationMessage, MirrorErrorMessage, HookEventMessage,
-    ResultMessage, StreamEvent, RateLimitEvent {}
+    TaskNotificationMessage, TaskUpdatedMessage, MirrorErrorMessage,
+    HookEventMessage, ResultMessage, StreamEvent, RateLimitEvent {}
 ```
 
 ## Forward Compatibility
@@ -60,6 +60,7 @@ Message (sealed interface)
 ├── TaskStartedMessage (record) - Task lifecycle: task started
 ├── TaskProgressMessage (record) - Task lifecycle: task in progress
 ├── TaskNotificationMessage (record) - Task lifecycle: task completed/failed/stopped
+├── TaskUpdatedMessage (record) - Task lifecycle: state-change patch (may be the only terminal signal)
 ├── MirrorErrorMessage (record) - Non-fatal SessionStore.append() failure
 ├── HookEventMessage (record) - Hook lifecycle events (when includeHookEvents enabled)
 ├── ResultMessage (record) - Final result with cost/usage/timing
@@ -301,6 +302,50 @@ enum TaskNotificationStatus {
 }
 ```
 
+### TaskUpdatedMessage
+
+Emitted on `system`/`task_updated` events as a background task moves through its lifecycle. `patch` carries the changed fields (e.g. `status`, `end_time`).
+
+A task's terminal state sometimes arrives **only** as a `TaskUpdatedMessage` with no accompanying `TaskNotificationMessage` — for example a task stopped via `TaskStop` reports `status="killed"` here, and the matching notification is sometimes suppressed. Consumers that track active task IDs should clear them on a terminal status from **either** message.
+
+Parsing is defensive — a missing or non-map `patch` falls back to an empty map, and an unknown/absent status to `null`, so a lifecycle event never crashes parsing.
+
+```java
+record TaskUpdatedMessage(
+    String subtype,                     // always "task_updated"
+    Map<String, Object> data,           // raw message data
+    String taskId,                      // unique task identifier ("" if absent)
+    Map<String, Object> patch,          // changed fields; never null (empty if absent)
+    @Nullable TaskUpdatedStatus status, // patch.status, or null if absent/unknown
+    @Nullable String sessionId,         // session identifier (may be null)
+    @Nullable String uuid               // message UUID (may be null)
+) implements Message
+```
+
+| Method | Description |
+|--------|-------------|
+| `type()` | Returns `"system"` |
+| `isTerminal()` | `true` if `status` is present and in `TERMINAL_TASK_STATUSES` |
+| `get(String key)` | Gets a value from the raw data map |
+| `TaskUpdatedMessage.TERMINAL_TASK_STATUSES` | `Set.of("completed", "failed", "stopped", "killed")` — terminal statuses spanning both task lifecycle vocabularies |
+
+### TaskUpdatedStatus
+
+`task_updated` reports the raw `KILLED`; the CLI maps that to `STOPPED` (`TaskNotificationStatus`) only when it emits a `task_notification`.
+
+```java
+enum TaskUpdatedStatus {
+    PENDING("pending"),     // non-terminal
+    RUNNING("running"),     // non-terminal
+    PAUSED("paused"),       // non-terminal
+    COMPLETED("completed"), // terminal
+    FAILED("failed"),       // terminal
+    KILLED("killed")        // terminal
+}
+```
+
+`TaskUpdatedStatus.fromValueOrNull(String)` resolves a raw status without throwing on an unknown or `null` value (used during defensive parsing); `fromValue(String)` throws on an unknown value.
+
 ### TaskUsage
 
 Usage statistics for a task:
@@ -330,6 +375,14 @@ for (Message msg : client.receiveMessages()) {
                 task.status(), task.taskId(), task.summary());
             if (task.usage() != null) {
                 System.out.println("Final tokens: " + task.usage().totalTokens());
+            }
+        }
+        case TaskUpdatedMessage task -> {
+            System.out.printf("Task updated: %s -> %s%n", task.taskId(), task.status());
+            if (task.isTerminal()) {
+                // Terminal state may arrive ONLY here (no TaskNotificationMessage),
+                // e.g. status=KILLED for a task stopped via TaskStop.
+                System.out.println("Task finished (terminal): " + task.taskId());
             }
         }
         default -> {}
@@ -723,6 +776,7 @@ String result = switch (message) {
     case TaskStartedMessage t -> "Task started: " + t.taskId();
     case TaskProgressMessage t -> "Task progress: " + t.taskId();
     case TaskNotificationMessage t -> "Task done: " + t.status();
+    case TaskUpdatedMessage t -> "Task updated: " + t.status();
     case MirrorErrorMessage m -> "Mirror error: " + m.error();
     case HookEventMessage h -> "Hook " + h.subtype() + ": " + h.hookEventName();
     case ResultMessage r -> "Cost: $" + r.totalCostUsd();
