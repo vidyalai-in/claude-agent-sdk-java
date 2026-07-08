@@ -618,6 +618,32 @@ class MessageParserTest {
                 .hasMessageContaining("Missing required field");
     }
 
+    @Test
+    void parseAssistantMessage_stringContent_throwsMessageParseException() {
+        // Assistant content as a bare string raises MessageParseException, not a raw crash.
+        Map<String, Object> data = Map.of(
+                "type", "assistant",
+                "message", Map.of("model", "m", "content", "hi"));
+
+        assertThatThrownBy(() -> MessageParser.parse(data))
+                .isInstanceOf(MessageParseException.class)
+                .hasMessageContaining("Invalid assistant content");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "assistant", "user" })
+    void parseMessage_nonDictContentBlock_throwsMessageParseException(String role) {
+        // A non-dict block raises MessageParseException, never a raw ClassCastException leak.
+        Map<String, Object> message = role.equals("assistant")
+                ? Map.of("model", "m", "content", List.of("oops"))
+                : Map.of("content", List.of("oops"));
+        Map<String, Object> data = Map.of("type", role, "message", message);
+
+        assertThatThrownBy(() -> MessageParser.parse(data))
+                .isInstanceOf(MessageParseException.class)
+                .hasMessageContaining("Invalid content block");
+    }
+
     @SuppressWarnings("null")
     @Test
     void parseSystemMessage_missingFields_throwsException() {

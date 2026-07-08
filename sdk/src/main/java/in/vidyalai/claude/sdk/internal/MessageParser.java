@@ -115,6 +115,12 @@ public final class MessageParser {
             if (content instanceof List<?> contentList) {
                 List<ContentBlock> blocks = new ArrayList<>();
                 for (Object item : contentList) {
+                    if (!(item instanceof Map<?, ?>)) {
+                        throw new MessageParseException(
+                                "Invalid content block (expected dict, got "
+                                        + ((item != null) ? item.getClass().getSimpleName() : "null") + ")",
+                                data);
+                    }
                     Map<String, Object> block = (Map<String, Object>) item;
                     blocks.add(parseContentBlock(block));
                 }
@@ -137,13 +143,25 @@ public final class MessageParser {
                 throw new MessageParseException("Missing required field: 'message' in assistant message", data);
             }
 
-            List<?> contentList = (List<?>) message.get("content");
-            if (contentList == null) {
+            Object rawContent = message.get("content");
+            if (rawContent == null) {
                 throw new MessageParseException("Missing 'content' field in assistant message", data);
+            }
+            if (!(rawContent instanceof List<?> contentList)) {
+                throw new MessageParseException(
+                        "Invalid assistant content (expected list, got "
+                                + rawContent.getClass().getSimpleName() + ")",
+                        data);
             }
 
             List<ContentBlock> blocks = new ArrayList<>();
             for (Object item : contentList) {
+                if (!(item instanceof Map<?, ?>)) {
+                    throw new MessageParseException(
+                            "Invalid content block (expected dict, got "
+                                    + ((item != null) ? item.getClass().getSimpleName() : "null") + ")",
+                            data);
+                }
                 Map<String, Object> block = (Map<String, Object>) item;
                 blocks.add(parseContentBlock(block));
             }

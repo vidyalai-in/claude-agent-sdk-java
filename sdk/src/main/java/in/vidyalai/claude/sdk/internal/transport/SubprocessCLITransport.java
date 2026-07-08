@@ -1078,7 +1078,11 @@ public class SubprocessCLITransport implements Transport {
             }
         }
 
-        if (process != null) {
+        // Only stop tracking a child we actually reaped. A still-running process
+        // (destroyForcibly raced, or waitFor timed out) stays in the set so the
+        // JVM shutdown-hook reaper gets a chance at it — dropping it here is what
+        // turns a wedged close() into a leaked child.
+        if ((process != null) && !process.isAlive()) {
             ACTIVE_CHILDREN.remove(process);
         }
         process = null;

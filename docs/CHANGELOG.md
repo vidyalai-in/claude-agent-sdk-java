@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.18] - 2026-07-08
+
+### Added
+- **`canUseTool` shadowing warning** (Python SDK v0.2.111, PR #1081): a new `CanUseToolShadow` helper logs a `WARNING` when a `canUseTool` callback is registered alongside options that auto-approve tool calls before the callback would ever fire — `allowedTools` entries that allow a whole tool (`"Read"`, `"Read()"`, `"Read(*)"`) or `permissionMode=BYPASS_PERMISSIONS`. Emitted once per query construction from `ClaudeSDKClient.connect()` and `ClaudeSDK.query(Iterator)` streaming setup. Advisory only (never throws): shadowing can be intentional. `skills("all")` is accounted for (it injects a bare `Skill` allow rule). Java uses `java.util.logging` in place of Python's `warnings`/`CanUseToolShadowedWarning`; suppress by configuring the `in.vidyalai.claude.sdk.internal.CanUseToolShadow` logger level.
+
+### Fixed
+- **`MessageParseException` on non-dict content blocks** (Python SDK v0.2.111, PR #1058): `MessageParser` now raises an explicit `MessageParseException` ("Invalid content block (expected dict, got …)" / "Invalid assistant content (expected list, got …)") when the CLI emits a message whose `content` is a bare string or whose content list holds a non-object element, instead of surfacing a raw `ClassCastException`. Both `user` and `assistant` messages are covered.
+- **No longer stop tracking a still-running CLI child on close** (Python SDK v0.2.111, PR #1082): `SubprocessCLITransport.close()` now removes the process from the active-children set only after confirming it is no longer alive (`!process.isAlive()`). A process that survived the terminate/kill escalation (kill raced, or `waitFor` timed out) stays tracked so the JVM shutdown-hook reaper still gets a chance at it, instead of being leaked.
+
+### Synced
+- Python SDK v0.2.103 → v0.2.113 (commits 7f74cdf6..5513b209)
+- v0.2.111: four bug fixes — `canUseTool` shadowing warning (#1081, ported above); non-dict message content → `MessageParseException` (#1058, ported above); shield subprocess cleanup from cancellation + keep an un-reaped child tracked (#1082, behavioral part ported; the anyio `CancelScope` shielding is Python-async-specific — Java's `close()` is synchronous and always runs to completion); e2e stderr test cwd fix (#1084 — Python test infra, N/A).
+- v0.2.111: **silent whitespace loss on NDJSON lines >64 KiB (#1083) — N/A for Java.** The Python fix reframes chunk-based stream reads for stdout *and* stderr (anyio yields ≤64 KiB chunks, and the old code stripped each chunk, dropping whitespace at a seam inside a JSON string). Java reads both stdout and stderr with `BufferedReader.readLine()`, which reassembles partial reads and returns a *complete* line regardless of length, stripping only the complete line — the chunk-seam bug is structurally impossible. The associated new tests are all sub-line chunk-framing simulations that `readLine()` handles transparently. (Behaviors that outlive the framing rewrite — oversized-line rejection, non-JSON skip, final-line-without-newline delivery, truncated-tail drop — are already covered by `SubprocessBufferingTest`.)
+- v0.2.104-0.2.110, v0.2.112-0.2.113: CLI bumps 2.1.181-2.1.204 (no API changes). Java resolves the CLI from `PATH` rather than bundling it, so CLI version bumps are informational only.
+
+[0.1.18]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.18
+
 ## [0.1.17] - 2026-06-17
 
 ### Added

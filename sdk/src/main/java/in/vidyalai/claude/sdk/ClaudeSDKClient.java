@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
+import in.vidyalai.claude.sdk.internal.CanUseToolShadow;
 import in.vidyalai.claude.sdk.internal.QueryHandler;
 import in.vidyalai.claude.sdk.internal.SessionResume;
 import in.vidyalai.claude.sdk.internal.SessionStoreValidation;
@@ -255,6 +256,8 @@ public class ClaudeSDKClient implements AutoCloseable {
                         "canUseTool callback cannot be used with permissionPromptToolName. " +
                                 "Please use one or the other.");
             }
+            // Advisory: warn if other options shadow the callback
+            CanUseToolShadow.warnIfShadowed(options);
             // Automatically set permission_prompt_tool_name to "stdio" for control protocol
             effectiveOptions = options.withPermissionPromptToolName("stdio");
         }

@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.jspecify.annotations.Nullable;
 
+import in.vidyalai.claude.sdk.internal.CanUseToolShadow;
 import in.vidyalai.claude.sdk.internal.QueryHandler;
 import in.vidyalai.claude.sdk.internal.SdkVersion;
 import in.vidyalai.claude.sdk.internal.SessionImport;
@@ -371,6 +372,9 @@ public final class ClaudeSDK {
                         "canUseTool callback cannot be used with permissionPromptToolName. " +
                                 "Please use one or the other.");
             }
+
+            // Advisory: warn if other options shadow the callback
+            CanUseToolShadow.warnIfShadowed(options);
 
             // Automatically set permissionPromptToolName to "stdio" for control protocol
             return options.withPermissionPromptToolName("stdio");
