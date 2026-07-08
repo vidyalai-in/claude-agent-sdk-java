@@ -56,6 +56,8 @@ Transport transport = new SubprocessCLITransport(
 
 **Stderr callback isolation** (0.1.16): each `stderrCallback.accept(line)` call is wrapped in a per-line `try/catch(Throwable)`. A throwing callback is caught, logged at `FINE`, and the read loop continues with the next line. Previously a throw would exit the loop and silently drop every subsequent stderr line for the rest of the session. Outer-loop failures (stream closed unexpectedly, I/O errors) are also logged at `FINE` instead of being silently swallowed.
 
+**Orphan-child cleanup** (0.1.18): every spawned CLI process is registered in a static `ACTIVE_CHILDREN` set, and a JVM shutdown hook best-effort terminates any that are still alive if the process exits before `close()` runs. `close()` escalates termination (grace period → `destroy()` / SIGTERM → `destroyForcibly()` / SIGKILL) and then removes the process from `ACTIVE_CHILDREN` **only after confirming it is no longer alive** (`!process.isAlive()`). A child that somehow survives the escalation (a raced kill, or a `waitFor` that timed out) therefore stays tracked, so the shutdown-hook reaper still gets a chance at it instead of leaking as an orphaned `claude` process.
+
 ## Custom Transport
 
 Implement `Transport` interface for custom communication:

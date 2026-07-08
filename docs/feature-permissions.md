@@ -42,6 +42,29 @@ For fine-grained control, use `canUseTool` callback (requires streaming mode):
 
 > **`canUseTool` only fires for `"ask"` decisions.** This callback is the SDK replacement for the interactive permission prompt — it runs only when the CLI's permission rules evaluate to `"ask"`. It is **not** invoked for tool calls already permitted by `allowedTools`, `permissionMode` (e.g. `ACCEPT_EDITS`, `BYPASS_PERMISSIONS`), or `permissions.allow` rules in settings — those never reach a prompt. To observe or gate **every** tool call regardless of permission rules, register a `PreToolUse` hook via `hooks(...)` instead.
 
+### Shadowing Warning
+
+Because `canUseTool` never fires for calls already permitted by other options, the SDK emits an **advisory warning** at connection time when it detects a callback that is visibly shadowed. The check runs once per query construction — when `ClaudeSDKClient.connect()` starts, or when a streaming `ClaudeSDK.query(Iterator, ...)` is set up — and logs a `WARNING` via `java.util.logging` on the logger named `in.vidyalai.claude.sdk.internal.CanUseToolShadow`.
+
+A `canUseTool` callback is reported as shadowed when it is set alongside either of:
+
+- **`permissionMode(PermissionMode.BYPASS_PERMISSIONS)`** — every tool call is auto-approved (except explicit deny rules) before the callback is consulted.
+- **An `allowedTools` entry that allows a *whole* tool** — an entry with no specifier (`"Read"`), an empty specifier (`"Read()"`), or a lone-wildcard specifier (`"Read(*)"`). A narrowing specifier such as `"Bash(ls:*)"` does **not** shadow the callback, because non-matching invocations still fall through to it. The warning names each shadowed tool.
+
+`skills("all")` (via `Builder.skillsAll()`) is accounted for: it makes the transport inject a bare `Skill` allow rule, so it shadows the callback exactly like a hand-written `"Skill"` entry. Named skills (`skills(List.of("reviewer"))`) inject `Skill(name)` specifiers, which do not shadow.
+
+The warning is **advisory only — it never throws**. Shadowing can be intentional (for example, a callback used solely for tools that are *not* in `allowedTools`). To observe or gate every tool call regardless of permission rules, use a `PreToolUse` hook instead — but note that a `PreToolUse` hook returning an *allow* decision also skips `canUseTool`. Allow rules that live in settings files can shadow the callback too, but are not visible to this check.
+
+To suppress the warning, raise the level of the `in.vidyalai.claude.sdk.internal.CanUseToolShadow` logger above `WARNING`:
+
+```java
+java.util.logging.Logger
+    .getLogger("in.vidyalai.claude.sdk.internal.CanUseToolShadow")
+    .setLevel(java.util.logging.Level.SEVERE);
+```
+
+> **Idiom note:** the Python SDK reports this condition as a `CanUseToolShadowedWarning` (a `UserWarning` subclass) and the TypeScript SDK as a `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` process warning. The Java SDK uses `java.util.logging` — its idiomatic warning channel — in place of a dedicated warning type.
+
 ## ToolPermissionContext
 
 The CLI enriches the permission context so callbacks can render meaningful prompts without reconstructing them from the raw tool input:

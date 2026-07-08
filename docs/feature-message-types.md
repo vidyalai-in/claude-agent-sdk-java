@@ -43,6 +43,8 @@ for (Message msg : ClaudeSDK.query(prompt)) {
 }
 ```
 
+**Unknown type vs. malformed content.** Returning `null` applies to an *unrecognized message type*. A *known* type (`user` / `assistant`) whose structure is invalid is a different case — the parser raises a `MessageParseException` rather than silently dropping it, so a real protocol violation is not hidden. Since 0.1.18 this is enforced explicitly: an `assistant` message whose `content` is not a list (e.g. a bare string) raises `"Invalid assistant content (expected list, got …)"`, and a `content` list element that is not an object (for both `user` and `assistant` messages) raises `"Invalid content block (expected dict, got …)"`. Previously these surfaced as a raw `ClassCastException`; they are now consistently reported as `MessageParseException` (matching the parser's other structural validations).
+
 ## Message Type Hierarchy
 
 ```

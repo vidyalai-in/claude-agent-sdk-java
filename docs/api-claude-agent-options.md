@@ -44,7 +44,7 @@ options.toBuilder()
 ### Permissions
 - `permissionMode(PermissionMode)` - Permission mode
 - `permissionPromptToolName(String)` - Tool for prompts
-- `canUseTool(CanUseTool)` - Custom callback. **Fires only on `"ask"` decisions** — not for tool calls already permitted by `allowedTools`, `permissionMode`, or `permissions.allow` rules. Use a `PreToolUse` hook to gate every call regardless of decision.
+- `canUseTool(CanUseTool)` - Custom callback. **Fires only on `"ask"` decisions** — not for tool calls already permitted by `allowedTools`, `permissionMode`, or `permissions.allow` rules. Use a `PreToolUse` hook to gate every call regardless of decision. The SDK logs an advisory `WARNING` at connection time if this callback is visibly shadowed by whole-tool `allowedTools` entries or `BYPASS_PERMISSIONS`; see [Shadowing Warning](feature-permissions.md#shadowing-warning).
 
 ### Sessions
 - `continueConversation(boolean)` - Continue last session
