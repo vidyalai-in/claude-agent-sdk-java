@@ -297,6 +297,54 @@ class SubprocessCLITransportTest {
     }
 
     @Test
+    void testBuildCommandResumeAndSessionId() {
+        // resume and session_id are passed as --flag=value single tokens.
+        String sessionId = "8f8b1c0e-2b1e-4a3f-9c2d-5e6f7a8b9c0d";
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .resume("abc123")
+                .sessionId(sessionId)
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).contains("--resume=abc123");
+        assertThat(cmd).contains("--session-id=" + sessionId);
+        // Never emitted as two separate argv tokens.
+        assertThat(cmd).doesNotContain("--resume");
+        assertThat(cmd).doesNotContain("--session-id");
+        assertThat(cmd).doesNotContain("abc123");
+        assertThat(cmd).doesNotContain(sessionId);
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandResumeAndSessionIdDoNotInjectFlags() {
+        // The CLI declares --resume with an optional value, so in the two-token
+        // form a dash-leading value is parsed as a separate flag rather than as
+        // the option's value. Applications that route untrusted input into
+        // these options would then let an attacker inject arbitrary CLI flags.
+        // The --flag=value form binds the value to the flag.
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .resume("--evil")
+                .sessionId("-r")
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).contains("--resume=--evil");
+        assertThat(cmd).contains("--session-id=-r");
+        // The injected values never appear as standalone argv tokens...
+        assertThat(cmd).doesNotContain("--evil");
+        assertThat(cmd).doesNotContain("-r");
+        // ...nor do the bare flags that would let the next token detach.
+        assertThat(cmd).doesNotContain("--resume");
+        assertThat(cmd).doesNotContain("--session-id");
+        transport.close();
+    }
+
+    @Test
     void testBuildCommandIncludeHookEvents_addedWhenEnabled() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .includeHookEvents(true)

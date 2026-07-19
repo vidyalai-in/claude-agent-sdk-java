@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-07-08 (Updated)
-**Java SDK Version:** 0.1.18
-**Python SDK Version:** [0.2.113](https://github.com/anthropics/claude-agent-sdk-python/commit/5513b2093dbb8d4c54116a7d92e1948a0f9262ea) (latest)
+**Analysis Date:** 2026-07-19 (Updated)
+**Java SDK Version:** 0.1.19
+**Python SDK Version:** [0.2.123](https://github.com/anthropics/claude-agent-sdk-python/commit/2d4ef9466427970a6db5e567253bae2b2825010a) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,12 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.2.113):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.113. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.123):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.123. These updates include:
+- **v0.2.114-0.2.123** - One security fix landed in v0.2.120; the rest are CLI-version bumps (2.1.205-2.1.215) and Python-repo CI/tooling only. Ported to Java:
+  - **`resume`/`sessionId` argv flag-injection fix** (PR #1123, v0.2.120): `SubprocessCLITransport.buildCommand()` now emits `--resume=<value>` and `--session-id=<value>` as single argv tokens instead of the two-token form. The CLI declares `--resume` with an *optional* value, so a dash-leading value in the two-token form is parsed as an independent CLI flag rather than the option's value — an app routing untrusted input into `resume`/`sessionId` could inject arbitrary flags (e.g. `resume("--version")` silently ran `claude --version`). The equals form always binds the value to the flag; the CLI then rejects a dash-leading value as an invalid session ID. Argv-level (no shell) — flag injection, not command execution. Matches the `--setting-sources=` style already used in `buildCommand()`. Two regression tests added (`testBuildCommandResumeAndSessionId`, `testBuildCommandResumeAndSessionIdDoNotInjectFlags`); TS SDK shipped the same fix in 0.3.208.
+  - Validate `CLAUDE_CLI_VERSION` + remove shell interpolation from build scripts (PR #1117) — Python build-script hardening (`download_cli.py`/`update_cli_version.py`), N/A for Java, which resolves the CLI from `PATH` rather than bundling it.
+  - CI/tooling only, N/A: Slack-notification untrusted-field escaping (PR #1116), trust-workspace for project-scoped grants (PR #1085), new `test_download_cli.py`/`test_update_cli_version.py` build-tooling coverage.
+- **v0.2.104-0.2.113** - Four bug fixes landed in v0.2.111 (PRs #1058/#1081/#1082/#1083); v0.2.104-0.2.110 and v0.2.112-0.2.113 are CLI-version bumps only (2.1.181-2.1.204, no API changes — Java resolves the CLI from `PATH` rather than bundling it, so these are informational). Ported to Java:
 - **v0.2.104-0.2.113** - Four bug fixes landed in v0.2.111 (PRs #1058/#1081/#1082/#1083); v0.2.104-0.2.110 and v0.2.112-0.2.113 are CLI-version bumps only (2.1.181-2.1.204, no API changes — Java resolves the CLI from `PATH` rather than bundling it, so these are informational). Ported to Java:
   - **`canUseTool` shadowing warning** (PR #1081): new `CanUseToolShadow` internal helper (`wholeToolAllowed`/`getShadowedWarning`/`shadowedWarningFor`/`warnIfShadowed`) mirrors Python's `_whole_tool_allowed`/`_get_can_use_tool_shadowed_warning`/`_warn_if_can_use_tool_shadowed`. Logs a `WARNING` (via `java.util.logging`, in place of Python's `warnings`/`CanUseToolShadowedWarning`) when a `canUseTool` callback is set alongside `allowedTools` entries that allow a whole tool (`"Read"`/`"Read()"`/`"Read(*)"`) or `permissionMode=BYPASS_PERMISSIONS`, since those auto-approve tool calls before the callback runs. Called once per query construction from `ClaudeSDKClient.connect()` and `ClaudeSDK` streaming-query setup. `skills("all")` injection of a bare `Skill` allow rule is accounted for. Advisory only — never throws.
   - **Non-dict message content → `MessageParseException`** (PR #1058): `MessageParser` now raises an explicit `MessageParseException` for a bare-string assistant `content` or a non-object content-block element (both `user` and `assistant`), instead of leaking a raw `ClassCastException`. Java already wrapped the `ClassCastException` into a `MessageParseException`; the explicit `instanceof Map`/`List` guards match Python's clearer messages and are defensive.
@@ -811,7 +816,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-07-08
-**Python SDK Version:** 0.2.113 (commit 5513b2093dbb8d4c54116a7d92e1948a0f9262ea)
-**Java SDK Version:** 0.1.18
+**Latest Verification:** 2026-07-19
+**Python SDK Version:** 0.2.123 (commit 2d4ef9466427970a6db5e567253bae2b2825010a)
+**Java SDK Version:** 0.1.19
 **Status:** ✅ 100% Feature Parity Maintained

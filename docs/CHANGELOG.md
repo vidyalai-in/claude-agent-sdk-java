@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-07-19
+
+### Security
+- **Pass `resume`/`sessionId` as `--flag=value` to prevent argv flag injection** (Python SDK v0.2.120, PR #1123): `SubprocessCLITransport.buildCommand()` now emits `--resume=<value>` and `--session-id=<value>` as single argv tokens instead of the two-token form (`--resume`, `<value>`). The CLI declares `--resume` with an *optional* value, so in the two-token form a dash-leading value is not bound to the flag and is parsed as an independent CLI flag — letting an application that routes untrusted input into `resume`/`sessionId` (e.g. a "resume my session" endpoint taking a session ID from a request) inject arbitrary flags. For example, `resume("--version")` silently ran `claude --version` and yielded zero messages; an injected value-taking flag escalates further. The equals form always binds the value to the flag, and the CLI then rejects a dash-leading value as an invalid session ID. This is argv-level (one argument per option, no shell involved) — flag injection, not command execution — and only affects apps forwarding untrusted input into these options. Matches the `--setting-sources=` style already used elsewhere in `buildCommand()`; the TypeScript SDK shipped the same fix in 0.3.208.
+
+### Synced
+- Python SDK v0.2.113 → v0.2.123 (commits 5513b209..2d4ef946)
+- v0.2.120: `--resume`/`--session-id` flag-injection fix (#1123, ported above). Also PR #1117 (validate `CLAUDE_CLI_VERSION` + drop shell interpolation in build scripts) — Python build-script hardening, N/A for Java, which resolves the CLI from `PATH` rather than bundling it.
+- v0.2.114-0.2.119, v0.2.121-0.2.123: CLI bumps 2.1.205-2.1.215 (no API changes) plus Python-repo CI/tooling only — Slack-notification field escaping (#1116), workspace-trust for project-scoped grants (#1085), and new build/download-CLI test coverage. Java resolves the CLI from `PATH`, so CLI version bumps are informational only.
+
+[0.1.19]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.19
+
 ## [0.1.18] - 2026-07-08
 
 ### Added

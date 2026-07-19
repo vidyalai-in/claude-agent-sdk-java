@@ -630,14 +630,17 @@ public class SubprocessCLITransport implements Transport {
             cmd.add("--continue");
         }
 
+        // Pass these as --flag=value rather than as two argv tokens. The CLI
+        // declares --resume with an optional value, so in the two-token form a
+        // dash-leading value is not bound to the flag and is instead parsed as
+        // a separate CLI flag -- letting an untrusted value inject arbitrary
+        // flags. The equals form always binds the value to the flag.
         if (options.resume() != null) {
-            cmd.add("--resume");
-            cmd.add(options.resume());
+            cmd.add("--resume=" + options.resume());
         }
 
         if (options.sessionId() != null) {
-            cmd.add("--session-id");
-            cmd.add(options.sessionId());
+            cmd.add("--session-id=" + options.sessionId());
         }
 
         // Settings and sandbox
