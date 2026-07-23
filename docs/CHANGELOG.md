@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.20] - 2026-07-23
+
+### Added
+- **`ImageBlock` and `DocumentBlock` content blocks.** Reading a PDF with the `Read` tool makes the CLI emit a short `tool_result` announcing the page count, followed by a *separate* user message carrying the file itself — either as one `image` block per rendered page (`image/jpeg`, base64) or as a single `document` block holding the whole PDF (`application/pdf`, base64). Both shapes were observed from CLI 2.1.218 against the same 1.5 MB file on different runs, so both are modelled. `MessageParser` previously rejected both with `MessageParseException: Unknown content block type`, which meant *any* agent granted `Read` over a directory of PDFs died mid-run without ever mentioning images or documents in its own configuration. `source` is kept as the raw map — the API defines `base64`, `url`, `file`, `text` and `content` source shapes and can add more — with `sourceType()`, `mediaType()` and `data()` covering the base64 case.
+- **`UnknownBlock` for unmodelled content block types.** `MessageParser.parse()` already returns `null` for an unrecognised *message* type so that a newer CLI does not crash an older SDK; content blocks now get the same forward compatibility instead of throwing. An unrecognised block is preserved whole as an `UnknownBlock` (`type()` plus the raw map) and logged once per type at `WARNING` from `in.vidyalai.claude.sdk.internal.MessageParser`. This is what `image` and `document` needed and did not have: the old behaviour killed the reader thread, discarded every other block in the message — including text the model had already produced — and surfaced as a JSON decode failure naming a type the caller never asked for.
+
+### Notes
+- `ContentBlock` is sealed, and its `permits` clause has grown by three. An exhaustive `switch` over it in caller code will no longer compile until the new types are handled; add an `UnknownBlock` branch rather than a `default`, so the next addition is still a compile error rather than a silent fallthrough.
+- **Reading PDFs requires raising `ClaudeAgentOptions.maxBufferSize`.** These blocks are base64, four bytes per three, on a single line of CLI stdout: a 1.5 MB PDF is a ~2.1 MB line against the 1 MB default. The default is unchanged (it matches the Python SDK), so callers that read files of any size must set it explicitly.
+
+[0.1.20]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.20
+
 ## [0.1.19] - 2026-07-19
 
 ### Security

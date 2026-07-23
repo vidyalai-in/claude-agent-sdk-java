@@ -3,6 +3,8 @@ package in.vidyalai.claude.sdk.internal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 import org.jspecify.annotations.Nullable;
@@ -12,6 +14,8 @@ import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.AssistantMessageError;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
 import in.vidyalai.claude.sdk.types.message.DeferredToolUse;
+import in.vidyalai.claude.sdk.types.message.DocumentBlock;
+import in.vidyalai.claude.sdk.types.message.ImageBlock;
 import in.vidyalai.claude.sdk.types.message.HookEventMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
@@ -35,6 +39,7 @@ import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
 import in.vidyalai.claude.sdk.types.message.ToolResultBlock;
 import in.vidyalai.claude.sdk.types.message.ToolUseBlock;
+import in.vidyalai.claude.sdk.types.message.UnknownBlock;
 import in.vidyalai.claude.sdk.types.message.UserMessage;
 import in.vidyalai.claude.sdk.types.session.SessionKey;
 
@@ -44,6 +49,9 @@ import in.vidyalai.claude.sdk.types.session.SessionKey;
 public final class MessageParser {
 
     private static final Logger logger = Logger.getLogger(MessageParser.class.getName());
+
+    /** Block types already reported as unmodelled, so a long run warns once rather than per block. */
+    private static final Set<String> WARNED_BLOCK_TYPES = ConcurrentHashMap.newKeySet();
 
     private MessageParser() {
         // Utility class
@@ -220,8 +228,29 @@ public final class MessageParser {
             case "advisor_tool_result" -> new ServerToolResultBlock(
                     (String) block.get("tool_use_id"),
                     (Map<String, Object>) block.get("content"));
-            default -> throw new MessageParseException("Unknown content block type: " + type, block);
+            // Reading a PDF produces these on the user side without the caller asking for
+            // anything image- or document-shaped, so they are not an exotic case.
+            case "image" -> new ImageBlock((Map<String, Object>) block.get("source"));
+            case "document" -> new DocumentBlock((Map<String, Object>) block.get("source"));
+            default -> unknownBlock(type, block);
         };
+    }
+
+    /**
+     * Preserves a block type this SDK does not model, rather than failing the whole run.
+     *
+     * <p>The CLI and the API own the block vocabulary and extend it independently of this
+     * library. Throwing here means an added type kills the reader thread mid-turn and reports
+     * itself as a JSON decode failure, which is both fatal and misleading — that is exactly how
+     * {@code image} and {@code document} presented before they were modelled above. Logged at
+     * WARNING, once per type per process, so it stays visible without flooding a long run.
+     */
+    private static ContentBlock unknownBlock(String type, Map<String, Object> block) {
+        if (WARNED_BLOCK_TYPES.add(type)) {
+            logger.warning("Content block type '" + type + "' is not modelled by this SDK version; "
+                    + "passing it through as an UnknownBlock. Upgrade the SDK if you need it typed.");
+        }
+        return new UnknownBlock(type, block);
     }
 
     @SuppressWarnings("unchecked")

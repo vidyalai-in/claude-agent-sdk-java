@@ -24,6 +24,8 @@ import in.vidyalai.claude.sdk.types.mcp.McpStdioServerConfig;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.AssistantMessageError;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
+import in.vidyalai.claude.sdk.types.message.DocumentBlock;
+import in.vidyalai.claude.sdk.types.message.ImageBlock;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.HookEventMessage;
 import in.vidyalai.claude.sdk.types.message.MirrorErrorMessage;
@@ -40,6 +42,7 @@ import in.vidyalai.claude.sdk.types.message.TextBlock;
 import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
 import in.vidyalai.claude.sdk.types.message.ToolResultBlock;
 import in.vidyalai.claude.sdk.types.message.ToolUseBlock;
+import in.vidyalai.claude.sdk.types.message.UnknownBlock;
 import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
 import in.vidyalai.claude.sdk.types.message.UserMessage;
 import in.vidyalai.claude.sdk.types.permission.PermissionBehavior;
@@ -282,6 +285,9 @@ class TypesTest {
             case ToolResultBlock t -> "result: " + t.toolUseId();
             case ServerToolUseBlock s -> "server_tool: " + s.name();
             case ServerToolResultBlock s -> "server_tool_result: " + s.toolUseId();
+            case ImageBlock i -> "image: " + i.mediaType();
+            case DocumentBlock d -> "document: " + d.mediaType();
+            case UnknownBlock u -> "unknown: " + u.type();
         };
 
         assertThat(result).isEqualTo("tool: Bash");
