@@ -259,7 +259,7 @@ public final class SessionResume {
             return null;
         }
         List<SessionStoreListEntry> sorted = new ArrayList<>(sessions);
-        sorted.sort(Comparator.comparingLong(SessionStoreListEntry::mtime).reversed());
+        sorted.sort(Comparator.comparingLong((SessionStoreListEntry e) -> e.mtime()).reversed());
         for (SessionStoreListEntry cand : sorted) {
             String sid = cand.sessionId();
             if (!UUID_RE.matcher(sid).matches()) {

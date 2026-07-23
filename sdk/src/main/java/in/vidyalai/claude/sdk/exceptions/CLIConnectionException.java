@@ -5,6 +5,8 @@ package in.vidyalai.claude.sdk.exceptions;
  */
 public class CLIConnectionException extends ClaudeSDKException {
 
+    private static final long serialVersionUID = 1L;
+
     /**
      * Creates a new exception with the specified message.
      *

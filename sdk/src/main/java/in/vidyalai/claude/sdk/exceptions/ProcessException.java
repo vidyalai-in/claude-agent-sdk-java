@@ -7,6 +7,8 @@ import org.jspecify.annotations.Nullable;
  */
 public class ProcessException extends ClaudeSDKException {
 
+    private static final long serialVersionUID = 1L;
+
     @Nullable
     private final Integer exitCode;
 

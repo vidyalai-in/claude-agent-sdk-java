@@ -2,6 +2,7 @@ package in.vidyalai.claude.sdk.testing;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -346,13 +347,13 @@ public final class SessionStoreConformance {
         for (SessionStoreListEntry s : sessions) {
             ids.add(s.sessionId());
         }
-        ids.sort(String::compareTo);
+        ids.sort(Comparator.naturalOrder());
         return ids;
     }
 
     private static List<String> sorted(List<String> in) {
         List<String> out = new ArrayList<>(in);
-        out.sort(String::compareTo);
+        out.sort(Comparator.naturalOrder());
         return out;
     }
 

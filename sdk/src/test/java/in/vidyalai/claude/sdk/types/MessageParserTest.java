@@ -618,6 +618,7 @@ class MessageParserTest {
                 .hasMessageContaining("Missing required field");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseAssistantMessage_stringContent_throwsMessageParseException() {
         // Assistant content as a bare string raises MessageParseException, not a raw crash.
@@ -630,6 +631,7 @@ class MessageParserTest {
                 .hasMessageContaining("Invalid assistant content");
     }
 
+    @SuppressWarnings("null")
     @ParameterizedTest
     @ValueSource(strings = { "assistant", "user" })
     void parseMessage_nonDictContentBlock_throwsMessageParseException(String role) {

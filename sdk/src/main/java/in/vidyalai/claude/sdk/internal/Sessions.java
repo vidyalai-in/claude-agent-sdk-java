@@ -626,7 +626,7 @@ public class Sessions {
      */
     static List<SDKSessionInfo> applySortLimitOffset(
             List<SDKSessionInfo> sessions, @Nullable Integer limit, int offset) {
-        sessions.sort(Comparator.comparingLong(SDKSessionInfo::lastModified).reversed());
+        sessions.sort(Comparator.comparingLong((SDKSessionInfo s) -> s.lastModified()).reversed());
         if (offset > 0) {
             if (offset >= sessions.size()) {
                 return new ArrayList<>();

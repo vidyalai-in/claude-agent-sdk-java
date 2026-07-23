@@ -68,6 +68,7 @@ class CanUseToolShadowTest {
     @Nested
     class GetShadowedWarning {
 
+        @SuppressWarnings("null")
         @Test
         void bypassPermissionsMessage() {
             String message = CanUseToolShadow.getShadowedWarning(
@@ -77,6 +78,7 @@ class CanUseToolShadowTest {
                     .contains("PreToolUse");
         }
 
+        @SuppressWarnings("null")
         @Test
         void bareEntriesMessage() {
             String message = CanUseToolShadow.getShadowedWarning(
@@ -88,6 +90,7 @@ class CanUseToolShadowTest {
                     .contains("settings files");
         }
 
+        @SuppressWarnings("null")
         @Test
         void bypassPermissionsTakesPrecedenceOverBareEntries() {
             String message = CanUseToolShadow.getShadowedWarning(
@@ -98,6 +101,7 @@ class CanUseToolShadowTest {
                     .doesNotContain("Write");
         }
 
+        @SuppressWarnings("null")
         @Test
         void preservesAllowedToolsOrder() {
             String message = CanUseToolShadow.getShadowedWarning(null, List.of("Write", "Read"));
@@ -110,6 +114,7 @@ class CanUseToolShadowTest {
                     .isNull();
         }
 
+        @SuppressWarnings("null")
         @Test
         void acceptEditsStillReportsBareEntries() {
             String message = CanUseToolShadow.getShadowedWarning(
@@ -119,18 +124,21 @@ class CanUseToolShadowTest {
                     .doesNotContain("bypassPermissions");
         }
 
+        @SuppressWarnings("null")
         @Test
         void wildcardAndEmptySpecifiersAreWholeToolAllows() {
             String message = CanUseToolShadow.getShadowedWarning(null, List.of("Read(*)", "Write()"));
             assertThat(message).isNotNull().contains("invoked for: Read, Write.");
         }
 
+        @SuppressWarnings("null")
         @Test
         void blankEntriesNeverReachTheMessage() {
             String message = CanUseToolShadow.getShadowedWarning(null, List.of("   ", "Read"));
             assertThat(message).isNotNull().contains("invoked for: Read.");
         }
 
+        @SuppressWarnings("null")
         @Test
         void entriesResolvingToTheSameToolAreReportedOnce() {
             String message = CanUseToolShadow.getShadowedWarning(
@@ -138,6 +146,7 @@ class CanUseToolShadowTest {
             assertThat(message).isNotNull().contains("invoked for: Read.");
         }
 
+        @SuppressWarnings("null")
         @Test
         void dedupPreservesFirstSeenOrder() {
             String message = CanUseToolShadow.getShadowedWarning(
@@ -170,6 +179,7 @@ class CanUseToolShadowTest {
             assertThat(CanUseToolShadow.shadowedWarningFor(options)).isNull();
         }
 
+        @SuppressWarnings("null")
         @Test
         void warnsWithBypass() {
             ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -181,6 +191,7 @@ class CanUseToolShadowTest {
                     .contains("bypassPermissions");
         }
 
+        @SuppressWarnings("null")
         @Test
         void warnsWithWildcardSpecifier() {
             ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -202,6 +213,7 @@ class CanUseToolShadowTest {
             assertThat(CanUseToolShadow.shadowedWarningFor(options)).isNull();
         }
 
+        @SuppressWarnings("null")
         @Test
         void skillsAllShadowsTheSkillTool() {
             ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -222,6 +234,7 @@ class CanUseToolShadowTest {
             assertThat(CanUseToolShadow.shadowedWarningFor(options)).isNull();
         }
 
+        @SuppressWarnings("null")
         @Test
         void skillsAllDoesNotDuplicateExplicitSkillEntry() {
             ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -234,6 +247,7 @@ class CanUseToolShadowTest {
                     .contains("invoked for: Skill.");
         }
 
+        @SuppressWarnings("null")
         @Test
         void skillsAllLeavesCallerAllowedToolsUntouched() {
             List<String> allowed = List.of("Read");

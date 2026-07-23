@@ -9,8 +9,13 @@ import org.jspecify.annotations.Nullable;
  */
 public class MessageParseException extends ClaudeSDKException {
 
+    private static final long serialVersionUID = 1L;
+
+    // transient: the raw data holds arbitrary decoded JSON values that are not
+    // guaranteed to be Serializable, so it is dropped rather than making the
+    // whole exception unserializable.
     @Nullable
-    private final Map<String, Object> data;
+    private final transient Map<String, Object> data;
 
     /**
      * Creates a new exception with the specified message.
@@ -47,6 +52,9 @@ public class MessageParseException extends ClaudeSDKException {
 
     /**
      * Gets the raw message data that failed to parse.
+     *
+     * <p>
+     * Not preserved across Java serialization of this exception.
      *
      * @return the raw data, or null if not available
      */

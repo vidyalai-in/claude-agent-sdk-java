@@ -57,7 +57,7 @@ public record PermissionResultAllow(
         result.put(UPD_INPUT, ((updatedInput != null) ? updatedInput : input));
         if (updatedPermissions != null) {
             List<Map<String, Object>> permUpdates = updatedPermissions.stream()
-                    .map(PermissionUpdate::toMap)
+                    .map(u -> u.toMap())
                     .toList();
             result.put(UPD_PERMS, permUpdates);
         }

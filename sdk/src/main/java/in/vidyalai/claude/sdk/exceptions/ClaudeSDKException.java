@@ -9,6 +9,8 @@ package in.vidyalai.claude.sdk.exceptions;
  */
 public class ClaudeSDKException extends RuntimeException {
 
+    private static final long serialVersionUID = 1L;
+
     /**
      * Creates a new exception with the specified message.
      *

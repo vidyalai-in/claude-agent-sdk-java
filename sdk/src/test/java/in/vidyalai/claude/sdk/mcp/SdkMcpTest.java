@@ -53,7 +53,7 @@ class SdkMcpTest {
 
         assertThat(result.isError()).isFalse();
         assertThat(result.content()).hasSize(1);
-        Map<String, Object> content = (Map<String, Object>) result.content().get(0);
+        Map<String, Object> content = result.content().get(0);
         assertThat(content.get("text")).isEqualTo("Result: 8.0");
     }
 
@@ -63,7 +63,7 @@ class SdkMcpTest {
 
         assertThat(result.isError()).isFalse();
         assertThat(result.content()).hasSize(1);
-        Map<String, Object> content = (Map<String, Object>) result.content().get(0);
+        Map<String, Object> content = result.content().get(0);
         assertThat(content.get("type")).isEqualTo("text");
         assertThat(content.get("text")).isEqualTo("Hello, World!");
     }
@@ -74,7 +74,7 @@ class SdkMcpTest {
 
         assertThat(result.isError()).isTrue();
         assertThat(result.content()).hasSize(1);
-        Map<String, Object> content = (Map<String, Object>) result.content().get(0);
+        Map<String, Object> content = result.content().get(0);
         assertThat(content.get("text")).isEqualTo("Something went wrong");
     }
 
@@ -85,7 +85,7 @@ class SdkMcpTest {
 
         assertThat(result.isError()).isFalse();
         assertThat(result.content()).hasSize(1);
-        Map<String, Object> content = (Map<String, Object>) result.content().get(0);
+        Map<String, Object> content = result.content().get(0);
         assertThat(content.get("type")).isEqualTo("image");
         assertThat(content.get("data")).isEqualTo(imageData);
         assertThat(content.get("mimeType")).isEqualTo("image/png");

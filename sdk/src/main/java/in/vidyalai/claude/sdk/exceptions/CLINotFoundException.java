@@ -7,6 +7,8 @@ import org.jspecify.annotations.Nullable;
  */
 public class CLINotFoundException extends CLIConnectionException {
 
+    private static final long serialVersionUID = 1L;
+
     private static final String DEFAULT_MESSAGE = """
             Claude Code not found. Install by following:
                 https://code.claude.com/docs/en/setup

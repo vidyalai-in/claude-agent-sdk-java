@@ -5,6 +5,8 @@ package in.vidyalai.claude.sdk.exceptions;
  */
 public class CLIJSONDecodeException extends ClaudeSDKException {
 
+    private static final long serialVersionUID = 1L;
+
     private static final int MAX_LINE_LEN = 100;
 
     private final String line;
