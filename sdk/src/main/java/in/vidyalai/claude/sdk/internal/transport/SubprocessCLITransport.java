@@ -12,9 +12,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -178,6 +180,16 @@ public class SubprocessCLITransport implements Transport {
     private static final String MINIMUM_CLAUDE_CODE_VERSION = "2.0.0";
     private static final String CLAUDE_CLI_NAME = "claude";
 
+    /**
+     * cmd.exe metacharacters, plus the quote character cmd.exe uses to toggle
+     * its quoting state and {@code !}, which expands like {@code %} when delayed
+     * expansion is enabled. Windows argument quoting follows the MSVCRT argv
+     * rules — it adds quotes only around whitespace — so in a whitespace-free
+     * argument these characters reach a cmd.exe command line verbatim. See
+     * {@link #rejectWindowsCmdMetacharacters}.
+     */
+    private static final String CMD_EXE_METACHARACTERS = "&|<>^%!\"";
+
     // Track live CLI subprocesses so we can terminate them when the parent
     // JVM exits. Mirrors the Python SDK's atexit handler and the TypeScript
     // SDK's parent-exit cleanup, preventing orphaned ``claude`` processes from
@@ -256,25 +268,89 @@ public class SubprocessCLITransport implements Transport {
     }
 
     private String findCli() {
+        return findCli(System.getenv("PATH"));
+    }
+
+    /**
+     * Resolves the CLI path against the supplied {@code PATH} value.
+     *
+     * <p>
+     * Package-private with {@code PATH} injected so the platform-specific
+     * discovery order can be tested; the production caller passes
+     * {@code System.getenv("PATH")}.
+     *
+     * @param pathEnv the {@code PATH} environment value, or null
+     * @return the resolved CLI path
+     * @throws CLINotFoundException if no CLI could be located
+     */
+    static String findCli(@Nullable String pathEnv) {
+        boolean windows = isWindows();
+
         // Check PATH
-        String pathCli = findInPath(CLAUDE_CLI_NAME);
-        if (pathCli != null) {
+        String pathCli = findInPath(CLAUDE_CLI_NAME, pathEnv);
+        if (pathCli != null && (!windows || isWindowsNativeExe(pathCli))) {
             return pathCli;
         }
 
-        // Check common locations
-        List<Path> locations = List.of(
-                Path.of(System.getProperty("user.home"), ".npm-global", "bin", CLAUDE_CLI_NAME),
-                Path.of("/usr/local/bin/" + CLAUDE_CLI_NAME),
-                Path.of(System.getProperty("user.home"), ".local", "bin", CLAUDE_CLI_NAME),
-                Path.of(System.getProperty("user.home"), "node_modules", ".bin", CLAUDE_CLI_NAME),
-                Path.of(System.getProperty("user.home"), ".yarn", "bin", CLAUDE_CLI_NAME),
-                Path.of(System.getProperty("user.home"), ".claude", "local", CLAUDE_CLI_NAME));
+        // Check common locations. On Windows only the native installer's
+        // claude.exe is probed: an extensionless match (a WSL / git-bash script
+        // artifact under ~/.local/bin) would preempt the explanatory
+        // batch-script refusal with an opaque spawn failure, and a
+        // rooted-but-driveless "/usr/local/bin/claude" resolves against the
+        // current drive (C: followed by that same path), a location another
+        // local user can create — a binary-planting probe.
+        List<Path> locations = windows
+                ? List.of(Path.of(System.getProperty("user.home"), ".local", "bin",
+                        CLAUDE_CLI_NAME + ".exe"))
+                : List.of(
+                        Path.of(System.getProperty("user.home"), ".npm-global", "bin", CLAUDE_CLI_NAME),
+                        Path.of("/usr/local/bin/" + CLAUDE_CLI_NAME),
+                        Path.of(System.getProperty("user.home"), ".local", "bin", CLAUDE_CLI_NAME),
+                        Path.of(System.getProperty("user.home"), "node_modules", ".bin", CLAUDE_CLI_NAME),
+                        Path.of(System.getProperty("user.home"), ".yarn", "bin", CLAUDE_CLI_NAME),
+                        Path.of(System.getProperty("user.home"), ".claude", "local", CLAUDE_CLI_NAME));
 
         for (Path path : locations) {
             if (Files.exists(path) && Files.isRegularFile(path)) {
                 return path.toString();
             }
+        }
+
+        if (windows) {
+            // No native executable was discoverable anywhere. Prefer the npm
+            // batch shim over an extensionless wrapper script: connect() turns
+            // the shim into the explanatory batch-script refusal, whereas the
+            // wrapper only reaches an opaque "not a valid Win32 application"
+            // spawn failure. Windows itself resolves .CMD/.BAT ahead of an
+            // extensionless name via PATHEXT, so this also matches what the
+            // shell would have run.
+            String shim = findInPath(CLAUDE_CLI_NAME + ".cmd", pathEnv);
+            if (shim == null) {
+                shim = findInPath(CLAUDE_CLI_NAME + ".bat", pathEnv);
+            }
+            if (shim != null) {
+                return shim;
+            }
+        }
+
+        if (pathCli != null) {
+            // A non-native PATH hit (an extensionless git-bash / WSL wrapper).
+            // Returned so connect() surfaces the spawn error for it rather than
+            // a bare not-found error that hides what is actually installed.
+            return pathCli;
+        }
+
+        if (windows) {
+            // npm's Windows install is a claude.cmd shim, which connect()
+            // refuses (rejectWindowsBatchCli), so do not recommend it.
+            throw new CLINotFoundException("""
+                    Claude Code not found. Install the native claude.exe with (PowerShell):
+                      irm https://claude.ai/install.ps1 | iex
+                    Or provide the path to a claude.exe via ClaudeAgentOptions:
+                      ClaudeAgentOptions.builder().cliPath(Path.of("C:\\\\path\\\\to\\\\claude.exe"))
+                    (npm install -g @anthropic-ai/claude-code produces a claude.cmd shim,
+                    which this SDK refuses to run on Windows.)
+                    """);
         }
 
         throw new CLINotFoundException("""
@@ -285,29 +361,202 @@ public class SubprocessCLITransport implements Transport {
     }
 
     @Nullable
-    private String findInPath(String executable) {
-        String pathEnv = System.getenv("PATH");
+    static String findInPath(String executable, @Nullable String pathEnv) {
         if (pathEnv == null) {
             return null;
         }
 
-        String pathSeparator = System.getProperty("os.name").toLowerCase().contains("win") ? ";" : ":";
+        boolean windows = isWindows();
+        String pathSeparator = windows ? ";" : ":";
         String[] dirs = pathEnv.split(pathSeparator);
 
-        for (String dir : dirs) {
-            Path path = Path.of(dir, executable);
-            if (Files.exists(path) && Files.isExecutable(path)) {
-                return path.toString();
+        // Only an extensionless name gets the .exe treatment; an explicit
+        // "claude.cmd" probe must not go looking for "claude.cmd.exe".
+        boolean tryExeSuffix = windows && executable.indexOf('.') < 0;
+
+        // On Windows, sweep the whole PATH for the native executable before
+        // considering any extensionless entry. PATH is walked directory-major,
+        // so a git-bash / WSL wrapper script named "claude" in an early
+        // directory would otherwise shadow a real claude.exe installed in a
+        // later one — and the wrapper is not something the OS can run directly.
+        if (tryExeSuffix) {
+            String exe = firstExecutableIn(dirs, executable + ".exe");
+            if (exe != null) {
+                return exe;
             }
-            // On Windows, also check with .exe extension
-            if (System.getProperty("os.name").toLowerCase().contains("win")) {
-                path = Path.of(dir, executable + ".exe");
-                if (Files.exists(path) && Files.isExecutable(path)) {
-                    return path.toString();
-                }
+        }
+        return firstExecutableIn(dirs, executable);
+    }
+
+    @Nullable
+    private static String firstExecutableIn(String[] dirs, String fileName) {
+        for (String dir : dirs) {
+            if (dir.isEmpty()) {
+                continue;
+            }
+            Path path = Path.of(dir, fileName);
+            if (Files.exists(path) && Files.isRegularFile(path) && Files.isExecutable(path)) {
+                return path.toString();
             }
         }
         return null;
+    }
+
+    /**
+     * Whether the SDK is running on Windows.
+     *
+     * <p>
+     * Read from {@code os.name} on every call rather than cached, so tests can
+     * exercise the Windows-only paths on a POSIX host.
+     */
+    static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    /**
+     * Whether {@code cliPath}'s final component names an image the OS runs
+     * directly ({@code .exe} / {@code .com}).
+     *
+     * <p>
+     * Used only to decide which discovery result to prefer. It is not a
+     * security gate: every returned path still passes
+     * {@link #rejectWindowsBatchCli} before anything is spawned.
+     */
+    static boolean isWindowsNativeExe(String cliPath) {
+        String name = cliPath.replace('\\', '/');
+        name = name.substring(name.lastIndexOf('/') + 1);
+        name = stripTrailingDotsAndSpaces(name).toLowerCase(Locale.ROOT);
+        return name.endsWith(".exe") || name.endsWith(".com");
+    }
+
+    /**
+     * Whether {@code cliPath} names a {@code .bat}/{@code .cmd} batch script on
+     * Windows. Always false off Windows; see {@link #rejectWindowsBatchCli} for
+     * why spawning such a script is refused.
+     *
+     * <p>
+     * Deliberately plain string logic rather than {@link Path}: path parsing
+     * differs between the POSIX hosts these tests run on and the Windows hosts
+     * the code guards, and only string logic behaves identically on both.
+     *
+     * <p>
+     * Every path component is classified, not only the final one. Win32 opens a
+     * path after lexical normalization — {@code .}/{@code ..} collapsing,
+     * repeated separators, and position-dependent trailing dot/space trimming —
+     * and re-deriving the effective final component here is a race against that
+     * ruleset: get one rule slightly wrong and a spelling such as
+     * {@code claude.cmd\...\..} resolves to claude.cmd on Windows while the
+     * simulation lands on some other name. Refusing whenever <i>any</i>
+     * component carries a batch extension closes that whole class, because every
+     * normalization trick still has to spell the {@code .bat}/{@code .cmd}
+     * component somewhere in the string. It costs nothing legitimate: no real
+     * claude.exe lives beneath a directory named like a batch file.
+     *
+     * <p>
+     * Within a component, Win32 finds the extension with a last-dot scan over
+     * the whole component, NTFS stream spec included — {@code claude:evil.cmd}
+     * has extension {@code .cmd} — while a stream spec also opens its base file
+     * — {@code claude.cmd:stream} opens claude.cmd — and a drive prefix
+     * ({@code C:claude.cmd}) rides in the same component. Splitting each
+     * component on {@code :} covers all of these; colons cannot appear in real
+     * file names, so nothing legitimate is over-refused. A bare {@code .cmd}
+     * counts as a batch extension, as Win32 {@code PathFindExtension} treats it.
+     */
+    static boolean isWindowsBatchCli(String cliPath) {
+        if (!isWindows()) {
+            return false;
+        }
+        for (String component : cliPath.replace('\\', '/').split("/", -1)) {
+            for (String segment : component.split(":", -1)) {
+                String trimmed = stripTrailingDotsAndSpaces(segment).toLowerCase(Locale.ROOT);
+                if (trimmed.endsWith(".bat") || trimmed.endsWith(".cmd")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Strips the trailing dots and spaces Windows drops at path resolution. */
+    private static String stripTrailingDotsAndSpaces(String value) {
+        int end = value.length();
+        while (end > 0 && (value.charAt(end - 1) == '.' || value.charAt(end - 1) == ' ')) {
+            end--;
+        }
+        return value.substring(0, end);
+    }
+
+    /**
+     * Refuses to execute a {@code .bat}/{@code .cmd} script as the CLI on
+     * Windows.
+     *
+     * <p>
+     * Windows has no shebang mechanism: the OS runs batch scripts by silently
+     * rewriting the spawn into a {@code cmd.exe /c} invocation, and cmd.exe
+     * re-parses the whole command line at execution time. Argument quoting
+     * follows the MSVCRT argv rules, not cmd.exe's, so cmd.exe metacharacters
+     * inside an argument value — for example a session title passed to
+     * {@code --resume} — reach cmd.exe unescaped and can execute injected
+     * commands. Reliable escaping for cmd.exe does not exist ({@code %VAR%}
+     * expands even inside double quotes), so spawning a batch script with
+     * runtime-provided arguments cannot be made safe. Refusing is the same
+     * remediation Node.js shipped for this vulnerability class
+     * (CVE-2024-27980, "BatBadBut").
+     *
+     * <p>
+     * In practice this refuses npm's {@code claude.cmd} shim. The alternatives
+     * in the error message avoid cmd.exe entirely.
+     *
+     * @param cliPath the resolved CLI path
+     * @throws CLIConnectionException if the path names a batch script on Windows
+     */
+    static void rejectWindowsBatchCli(String cliPath) throws CLIConnectionException {
+        if (!isWindowsBatchCli(cliPath)) {
+            return;
+        }
+        throw new CLIConnectionException(
+                "Refusing to execute batch script '" + cliPath + "': Windows runs "
+                        + ".bat/.cmd files via cmd.exe, which can execute commands "
+                        + "injected through CLI arguments, and no reliable escaping for "
+                        + "cmd.exe exists. Use a native claude executable instead: "
+                        + "install Claude Code natively "
+                        + "(irm https://claude.ai/install.ps1 | iex) or point "
+                        + "ClaudeAgentOptions.cliPath(...) at a claude.exe.");
+    }
+
+    /**
+     * Defense in depth for Windows: rejects cmd.exe metacharacters.
+     *
+     * <p>
+     * With batch-script spawning refused ({@link #rejectWindowsBatchCli}) these
+     * characters are harmless, because argument quoting is correct for native
+     * executables. They are rejected anyway so that {@code resume} and
+     * {@code sessionId} values, which applications commonly take from external
+     * input, stay inert even if a cmd.exe hop is ever reintroduced between the
+     * SDK and the CLI. No format is imposed beyond this — resume values may be
+     * arbitrary session titles, not only UUIDs — and POSIX behavior is
+     * unchanged.
+     *
+     * @param optionName the option being validated, for the error message
+     * @param value      the caller-supplied value
+     * @throws IllegalArgumentException if the value carries cmd.exe
+     *                                  metacharacters or newlines on Windows
+     */
+    static void rejectWindowsCmdMetacharacters(String optionName, String value) {
+        if (!isWindows()) {
+            return;
+        }
+        Set<Character> bad = new TreeSet<>();
+        for (char c : value.toCharArray()) {
+            if (CMD_EXE_METACHARACTERS.indexOf(c) >= 0 || c == '\r' || c == '\n') {
+                bad.add(c);
+            }
+        }
+        if (!bad.isEmpty()) {
+            throw new IllegalArgumentException(
+                    optionName + " value '" + value + "' contains characters that are "
+                            + "unsafe to pass on a Windows command line: " + bad);
+        }
     }
 
     /**
@@ -636,10 +885,12 @@ public class SubprocessCLITransport implements Transport {
         // a separate CLI flag -- letting an untrusted value inject arbitrary
         // flags. The equals form always binds the value to the flag.
         if (options.resume() != null) {
+            rejectWindowsCmdMetacharacters("resume", options.resume());
             cmd.add("--resume=" + options.resume());
         }
 
         if (options.sessionId() != null) {
+            rejectWindowsCmdMetacharacters("sessionId", options.sessionId());
             cmd.add("--session-id=" + options.sessionId());
         }
 
@@ -719,9 +970,20 @@ public class SubprocessCLITransport implements Transport {
 
         // Extra args
         for (Map.Entry<String, String> entry : options.extraArgs().entrySet()) {
-            cmd.add("--" + entry.getKey());
-            if ((entry.getValue() != null) && (!entry.getValue().isBlank())) {
-                cmd.add(entry.getValue());
+            String value = entry.getValue();
+            if ((value == null) || value.isBlank()) {
+                // Boolean flag without value
+                cmd.add("--" + entry.getKey());
+            } else if (value.startsWith("-")) {
+                // In the two-token form a dash-leading value is not bound to its
+                // flag when the CLI declares the option with an optional value —
+                // it parses as a separate flag instead, the same injection the
+                // --resume equals form above closes. The equals form always
+                // binds.
+                cmd.add("--" + entry.getKey() + "=" + value);
+            } else {
+                cmd.add("--" + entry.getKey());
+                cmd.add(value);
             }
         }
 
@@ -797,6 +1059,12 @@ public class SubprocessCLITransport implements Transport {
         if (process != null) {
             return;
         }
+
+        // Validate the resolved CLI before anything is spawned with it. This
+        // guards the version probe below as well as the main spawn, and covers
+        // every route to the executable path: PATH discovery, an explicit
+        // ClaudeAgentOptions.cliPath, and the bundled-location fallbacks.
+        rejectWindowsBatchCli(cliPath);
 
         // Check version (unless skipped)
         if (System.getenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK") == null) {

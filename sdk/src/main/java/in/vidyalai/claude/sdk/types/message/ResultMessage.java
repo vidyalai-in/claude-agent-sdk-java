@@ -41,6 +41,17 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *                          failing API call when {@code isError} is true and
  *                          {@code subtype} is "success"; null otherwise
  * @param uuid              unique identifier for this message in the session
+ * @param terminalReason    why the query loop terminated (e.g.
+ *                          {@code "completed"}, {@code "max_turns"},
+ *                          {@code "aborted_streaming"}). A value of
+ *                          {@code "aborted_streaming"} or
+ *                          {@code "aborted_tools"} indicates the turn was
+ *                          cancelled, via
+ *                          {@link in.vidyalai.claude.sdk.ClaudeSDKClient#interrupt()}
+ *                          or an {@code interrupt} control request. Null when
+ *                          the CLI did not report a terminal reason (older CLI
+ *                          versions, or a result that bypassed the query loop
+ *                          such as a local slash command).
  */
 public record ResultMessage(
         @JsonProperty("subtype") String subtype,
@@ -54,12 +65,13 @@ public record ResultMessage(
         @JsonProperty("usage") @Nullable Map<String, Object> usage,
         @JsonProperty("result") @Nullable String result,
         @JsonProperty("structured_output") @Nullable Object structuredOutput,
-        @JsonProperty("modelUsage") @Nullable Map<String, Object> modelUsage,
+        @JsonProperty("modelUsage") @Nullable Map<String, ModelUsage> modelUsage,
         @JsonProperty("permission_denials") @Nullable List<Object> permissionDenials,
         @JsonProperty("deferred_tool_use") @Nullable DeferredToolUse deferredToolUse,
         @JsonProperty("errors") @Nullable List<String> errors,
         @JsonProperty("api_error_status") @Nullable Integer apiErrorStatus,
-        @JsonProperty("uuid") @Nullable String uuid) implements Message {
+        @JsonProperty("uuid") @Nullable String uuid,
+        @JsonProperty("terminal_reason") @Nullable String terminalReason) implements Message {
 
     /**
      * Backwards-compatible constructor without modelUsage, permissionDenials,
@@ -72,7 +84,7 @@ public record ResultMessage(
             @Nullable Object structuredOutput) {
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     /**
@@ -84,13 +96,33 @@ public record ResultMessage(
             @Nullable String stopReason, @Nullable Double totalCostUsd,
             @Nullable Map<String, Object> usage, @Nullable String result,
             @Nullable Object structuredOutput,
-            @Nullable Map<String, Object> modelUsage,
+            @Nullable Map<String, ModelUsage> modelUsage,
             @Nullable List<Object> permissionDenials,
             @Nullable List<String> errors,
             @Nullable String uuid) {
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
-                modelUsage, permissionDenials, null, errors, null, uuid);
+                modelUsage, permissionDenials, null, errors, null, uuid, null);
+    }
+
+    /**
+     * Backwards-compatible constructor without {@code terminalReason}.
+     */
+    public ResultMessage(String subtype, int durationMs, int durationApiMs,
+            boolean isError, int numTurns, String sessionId,
+            @Nullable String stopReason, @Nullable Double totalCostUsd,
+            @Nullable Map<String, Object> usage, @Nullable String result,
+            @Nullable Object structuredOutput,
+            @Nullable Map<String, ModelUsage> modelUsage,
+            @Nullable List<Object> permissionDenials,
+            @Nullable DeferredToolUse deferredToolUse,
+            @Nullable List<String> errors,
+            @Nullable Integer apiErrorStatus,
+            @Nullable String uuid) {
+        this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
+                stopReason, totalCostUsd, usage, result, structuredOutput,
+                modelUsage, permissionDenials, deferredToolUse, errors,
+                apiErrorStatus, uuid, null);
     }
 
     @Override

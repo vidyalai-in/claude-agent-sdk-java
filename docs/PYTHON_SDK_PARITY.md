@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-07-19 (Updated)
-**Java SDK Version:** 0.1.19
-**Python SDK Version:** [0.2.123](https://github.com/anthropics/claude-agent-sdk-python/commit/2d4ef9466427970a6db5e567253bae2b2825010a) (latest)
+**Analysis Date:** 2026-07-29 (Updated)
+**Java SDK Version:** 0.1.21
+**Python SDK Version:** [0.2.128](https://github.com/anthropics/claude-agent-sdk-python/commit/f8b9ec923982082a02c485924e0f60367949c3a1) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,13 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.2.123):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.123. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.128):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.128. These updates include:
+- **v0.2.124-0.2.128** - One security fix (v0.2.124), two type/API additions (v0.2.126) and one bug fix (v0.2.127); v0.2.125 and v0.2.128 are CLI-version bumps only (2.1.217, 2.1.220). Ported to Java:
+  - **Windows `.bat`/`.cmd` CLI refusal** (PR #1127, v0.2.124): follow-up to #1123. Windows has no shebang mechanism — the OS runs a batch script by rewriting the spawn into `cmd.exe /c`, and cmd.exe re-parses the whole command line. Argument quoting follows the MSVCRT argv rules, not cmd.exe's, so cmd.exe metacharacters inside an argument value reach cmd.exe unescaped and can execute injected commands before the CLI starts; the `--flag=value` form from #1123 does not help, because once cmd.exe re-parses the string there is no argv boundary left to protect. This is the "BatBadBut" class (CVE-2024-27980) and refusing is the remediation Node.js shipped. `SubprocessCLITransport.connect()` now calls `rejectWindowsBatchCli()` immediately after the CLI path is resolved and before anything is spawned, covering PATH discovery, an explicit `cliPath`, and the version probe. `isWindowsBatchCli()` normalizes the way Win32 does (trailing dots/spaces stripped, NTFS stream specs in both directions, drive-relative `C:claude.cmd`, bare `.cmd`) and classifies every path component, so `.`/`..` tricks cannot reach the spawn; plain string logic rather than `Path`, so POSIX CI and Windows agree. Discovery also prefers a native `claude.exe` within each PATH directory, and on Windows probes only `~/.local/bin/claude.exe` (an extensionless WSL/git-bash artifact would preempt the explanatory refusal, and a driveless `/usr/local/bin/claude` resolves against the current drive — a binary-planting probe). Defense in depth: `resume`/`sessionId` reject cmd.exe metacharacters and CR/LF on Windows (`IllegalArgumentException`; POSIX unchanged), and `extraArgs` emits `--flag=value` for dash-leading values. 58 tests in `SubprocessCLIWindowsRefusalTest`, 27 of which fail with the source change reverted.
+    - *Discovery divergence, resolved:* Python's `shutil.which("claude")` resolves npm's `claude.cmd` through `PATHEXT`, whereas Java's PATH probe only ever looked for `claude` and `claude.exe` — so the shim was unreachable and an npm-only Windows box would have hit an opaque "not a valid Win32 application" spawn failure instead of the explanatory refusal. `findInPath` now sweeps the whole PATH for `claude.exe` before considering any extensionless entry (matching Python's guard against an early-PATH wrapper shadowing a later native install), and `findCli` probes `claude.cmd`/`claude.bat` as a last resort so the refusal — with its remediation — is what the user actually sees. `findCli(String pathEnv)` and `findInPath(String, String)` are package-private with `PATH` injected so this order is testable on POSIX CI.
+  - **`ResultMessage.terminalReason`** (PR #1142, v0.2.126): surfaces why the query loop ended (`"completed"`, `"max_turns"`, `"aborted_streaming"`, `"aborted_tools"`). `"aborted_streaming"`/`"aborted_tools"` mean the turn was cancelled via `interrupt()`, an explicit cancelled marker without a new result subtype. Parsed from the result frame's `terminal_reason`; null when the CLI reports none. Mirrors the TS SDK's `SDKResultMessage.terminal_reason`.
+  - **`ModelUsage` type** (PR #1143, v0.2.126): `ResultMessage.modelUsage` is now `Map<String, ModelUsage>`. Mirrors the TS SDK shape plus `canonicalModel` (stable key for client-side rate-table lookups across provider-specific ids and aliases) and `provider`. Each entry retains the verbatim CLI map as `raw()`, following `RateLimitInfo`. Type-only in Python (a `TypedDict` is a `dict` at runtime); in Java it is a real conversion and a source-incompatible change for callers reading the values as `Map`.
+  - **In-flight task tracking before stdin closure** (PR #1103, v0.2.127, issue #1088): a `result` frame ends one turn, not the run. `QueryHandler` closed stdin on the first result, so a still-running background subagent's SDK-MCP calls failed with `"Stream closed"` and its `PreToolUse` hooks were silently bypassed. It now tracks `task_started` / `task_notification` / terminal `task_updated` frames and only treats a result as run-ending when no tasks are in flight. Only `local_agent`/`local_workflow` are tracked — a background shell may never reach a terminal status, and the CLI exits only on stdin EOF, so tracking one would withhold the close forever. 8 tests in `QueryHandlerInflightTaskTest`, 5 of which fail with the guard reverted.
 - **v0.2.114-0.2.123** - One security fix landed in v0.2.120; the rest are CLI-version bumps (2.1.205-2.1.215) and Python-repo CI/tooling only. Ported to Java:
   - **`resume`/`sessionId` argv flag-injection fix** (PR #1123, v0.2.120): `SubprocessCLITransport.buildCommand()` now emits `--resume=<value>` and `--session-id=<value>` as single argv tokens instead of the two-token form. The CLI declares `--resume` with an *optional* value, so a dash-leading value in the two-token form is parsed as an independent CLI flag rather than the option's value — an app routing untrusted input into `resume`/`sessionId` could inject arbitrary flags (e.g. `resume("--version")` silently ran `claude --version`). The equals form always binds the value to the flag; the CLI then rejects a dash-leading value as an invalid session ID. Argv-level (no shell) — flag injection, not command execution. Matches the `--setting-sources=` style already used in `buildCommand()`. Two regression tests added (`testBuildCommandResumeAndSessionId`, `testBuildCommandResumeAndSessionIdDoNotInjectFlags`); TS SDK shipped the same fix in 0.3.208.
   - Validate `CLAUDE_CLI_VERSION` + remove shell interpolation from build scripts (PR #1117) — Python build-script hardening (`download_cli.py`/`update_cli_version.py`), N/A for Java, which resolves the CLI from `PATH` rather than bundling it.
@@ -280,7 +286,8 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | Task started message | `TaskStartedMessage` dataclass | `TaskStartedMessage` record | ✅ |
 | Task progress message | `TaskProgressMessage` dataclass | `TaskProgressMessage` record | ✅ |
 | Task notification message | `TaskNotificationMessage` dataclass | `TaskNotificationMessage` record | ✅ |
-| Result message | `ResultMessage` dataclass (with `stop_reason`) | `ResultMessage` record (with `stopReason`) | ✅ |
+| Result message | `ResultMessage` dataclass (with `stop_reason`, `terminal_reason`) | `ResultMessage` record (with `stopReason`, `terminalReason`) | ✅ |
+| Per-model usage | `ModelUsage` TypedDict | `ModelUsage` record (plus `raw()`) | ✅ |
 | Stream event | `StreamEvent` dataclass | `StreamEvent` record | ✅ |
 | Rate limit event | `RateLimitEvent` dataclass | `RateLimitEvent` record | ✅ |
 | Rate limit info | `RateLimitInfo` dataclass | `RateLimitInfo` record | ✅ |
@@ -816,7 +823,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-07-19
-**Python SDK Version:** 0.2.123 (commit 2d4ef9466427970a6db5e567253bae2b2825010a)
-**Java SDK Version:** 0.1.19
+**Latest Verification:** 2026-07-29
+**Python SDK Version:** 0.2.128 (commit f8b9ec923982082a02c485924e0f60367949c3a1)
+**Java SDK Version:** 0.1.21
 **Status:** ✅ 100% Feature Parity Maintained

@@ -1,6 +1,7 @@
 package in.vidyalai.claude.sdk.internal;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -26,6 +27,7 @@ import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.ServerToolResultBlock;
 import in.vidyalai.claude.sdk.types.message.ServerToolUseBlock;
 import in.vidyalai.claude.sdk.types.message.MirrorErrorMessage;
+import in.vidyalai.claude.sdk.types.message.ModelUsage;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
@@ -375,10 +377,11 @@ public final class MessageParser {
             Object structuredOutput = data.get("structured_output");
 
             // Additional metadata fields
-            Map<String, Object> modelUsage = (Map<String, Object>) data.get("modelUsage");
+            Map<String, ModelUsage> modelUsage = parseModelUsage(data.get("modelUsage"));
             List<Object> permissionDenials = (List<Object>) data.get("permission_denials");
             List<String> errors = (List<String>) data.get("errors");
             String uuid = (String) data.get("uuid");
+            String terminalReason = (String) data.get("terminal_reason");
 
             DeferredToolUse deferredToolUse = null;
             Object deferredRaw = data.get("deferred_tool_use");
@@ -402,10 +405,57 @@ public final class MessageParser {
             return new ResultMessage(
                     subtype, durationMs, durationApiMs, isError, numTurns,
                     sessionId, stopReason, totalCostUsd, usage, result, structuredOutput,
-                    modelUsage, permissionDenials, deferredToolUse, errors, apiErrorStatus, uuid);
+                    modelUsage, permissionDenials, deferredToolUse, errors, apiErrorStatus,
+                    uuid, terminalReason);
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in result message: " + e.getMessage(), data, e);
         }
+    }
+
+    /**
+     * Converts the CLI's {@code modelUsage} object into typed entries.
+     *
+     * <p>
+     * The CLI passes this value through verbatim, so its keys are camelCase
+     * rather than the snake_case used elsewhere on the result frame. Entries
+     * with a non-object value are skipped rather than rejected: the raw map is
+     * retained on each {@link ModelUsage} so unmodeled fields stay reachable.
+     */
+    @SuppressWarnings("unchecked")
+    private static @Nullable Map<String, ModelUsage> parseModelUsage(@Nullable Object raw) {
+        if (!(raw instanceof Map<?, ?> byModel)) {
+            return null;
+        }
+        Map<String, ModelUsage> parsed = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : byModel.entrySet()) {
+            if (!(entry.getKey() instanceof String model)
+                    || !(entry.getValue() instanceof Map<?, ?> fields)) {
+                continue;
+            }
+            Map<String, Object> usage = (Map<String, Object>) fields;
+            parsed.put(model, new ModelUsage(
+                    longField(usage, "inputTokens"),
+                    longField(usage, "outputTokens"),
+                    longField(usage, "cacheReadInputTokens"),
+                    longField(usage, "cacheCreationInputTokens"),
+                    longField(usage, "webSearchRequests"),
+                    usage.get("costUSD") instanceof Number n ? n.doubleValue() : 0.0,
+                    longField(usage, "contextWindow"),
+                    longField(usage, "maxOutputTokens"),
+                    usage.get("canonicalModel") instanceof String s ? s : null,
+                    usage.get("provider") instanceof String s ? s : null,
+                    usage));
+        }
+        return parsed;
+    }
+
+    /**
+     * Reads a numeric field, treating an absent or non-numeric value as zero.
+     * The CLI emits every counter on each entry, so a missing one means no
+     * usage of that kind rather than a malformed frame.
+     */
+    private static long longField(Map<String, Object> fields, String name) {
+        return fields.get(name) instanceof Number n ? n.longValue() : 0L;
     }
 
     @SuppressWarnings("unchecked")

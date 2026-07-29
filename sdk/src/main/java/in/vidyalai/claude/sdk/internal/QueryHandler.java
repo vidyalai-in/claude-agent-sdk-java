@@ -8,6 +8,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -62,6 +63,7 @@ import in.vidyalai.claude.sdk.types.control.request.SDKControlGetContextUsageReq
 import in.vidyalai.claude.sdk.types.mcp.ContextUsageResponse;
 import in.vidyalai.claude.sdk.types.mcp.McpStatusResponse;
 import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.message.TaskUpdatedMessage;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;
 import in.vidyalai.claude.sdk.types.permission.PermissionResult;
 import in.vidyalai.claude.sdk.types.permission.PermissionResultAllow;
@@ -232,6 +234,25 @@ public class QueryHandler implements AutoCloseable {
     private static final int DEFAULT_MSG_Q_SIZE = 1000;
     private static final int RESULT_WAIT_SECS = 60;
     private static final int READER_THREAD_JOIN_TIMEOUT_SECS = 10;
+
+    /**
+     * Task types whose completion runs a follow-up turn, and which therefore may
+     * still need the control channel after the turn's result frame.
+     *
+     * <p>
+     * This mirrors the set the CLI itself holds a result back for, which is
+     * narrower than its notion of "delegated agent work". The types left out are
+     * left out on purpose, and none is merely an oversight: background shells
+     * and monitors run indefinitely by design, so deferring the close on one
+     * withholds it forever rather than briefly; teammates are long-lived too,
+     * with a status that stays running for their whole lifetime, so they never
+     * settle the ledger; remote agents can be long-running monitors the CLI
+     * likewise refuses to wait on. Anything added here must be a type that
+     * reliably reaches a terminal status, or it will hang the query — see
+     * {@link #trackTaskLifecycle}.
+     */
+    private static final Set<String> DEFERRING_TASK_TYPES =
+            Set.of("local_agent", "local_workflow");
     private static final int CONTROL_THREAD_JOIN_TIMEOUT_SECS = 5;
     private static final ObjectMapper MAPPER;
 
@@ -289,9 +310,18 @@ public class QueryHandler implements AutoCloseable {
     private final ExecutorService readerExecutor;
     private final ExecutorService controlExecutor;
 
-    // Track first result for proper stream closure
+    // Completed when a run-ending result arrives (a result frame with no tasks
+    // in flight) so the stdin-closing waiter can wake. Named for history — it
+    // once tracked the literal first result.
     private final CompletableFuture<Void> firstResultEvent = new CompletableFuture<>();
     private final Duration streamCloseTimeout;
+
+    // Task IDs of started-but-not-finished tasks. A result frame ends one turn,
+    // not the run: background tasks keep running past it and still need stdin
+    // for hook/SDK-MCP control responses, so a result arriving while this set is
+    // non-empty must not close stdin. Only touched from the reader thread, but
+    // kept concurrent because close() may inspect it from another thread.
+    private final Set<String> inflightTasks = ConcurrentHashMap.newKeySet();
 
     // SessionStore mirroring (set via setTranscriptMirrorBatcher)
     @Nullable
@@ -523,6 +553,68 @@ public class QueryHandler implements AutoCloseable {
         // If already started, this is a no-op (idempotent)
     }
 
+    /**
+     * Tracks in-flight tasks from {@code system} task lifecycle frames.
+     *
+     * <p>
+     * {@code task_started} marks a task in flight; {@code task_notification} or
+     * a {@code task_updated} patch with a terminal status clears it. Terminal
+     * completion can arrive as either frame (not every terminal task emits a
+     * notification), so both are handled, and removal is idempotent.
+     *
+     * <p>
+     * This is a mitigation, not a complete answer. An empty set means "nothing
+     * we know of is running", which is not the same as "the run is over": a task
+     * that settles <i>before</i> the turn's result frame leaves the set empty at
+     * that result, so stdin closes even though the completion may still wake the
+     * parent for a continuation turn. No ledger can close that gap, because it
+     * cannot distinguish a settled task whose continuation is pending from no
+     * work at all — that needs a run-boundary signal from the CLI. What this
+     * does fix is the common ordering, where the task outlives the turn that
+     * spawned it.
+     *
+     * <p>
+     * Only delegated agent work is tracked ({@link #DEFERRING_TASK_TYPES}). A
+     * background <i>shell</i> — {@code Bash(run_in_background=true)} on a dev
+     * server or {@code tail -f} — is reported through these frames too, but it
+     * may never reach a terminal status, and the CLI in stream-json mode only
+     * exits on stdin EOF. Tracking one would therefore withhold the close
+     * forever rather than briefly: no terminal frame, no process exit, so not
+     * even the reader's {@code finally} runs.
+     *
+     * <p>
+     * {@code background_tasks_changed} is deliberately not consumed, in either
+     * direction. Its payload is the live <i>background</i> set, while a subagent
+     * is registered in the foreground and only flips to backgrounded later,
+     * without a second {@code task_started}. Narrowing against it would drop an
+     * agent that goes on to outlive its turn — the very bug this prevents.
+     * Widening from it is no better: the snapshot spans every background task
+     * type and carries nothing marking an observer agent, whose start and
+     * terminal frames are both suppressed, so it could admit an id no later
+     * frame ever clears.
+     *
+     * @param message the system message to inspect
+     */
+    private void trackTaskLifecycle(Map<String, Object> message) {
+        if (!(message.get("task_id") instanceof String taskId) || taskId.isEmpty()) {
+            return;
+        }
+        Object subtype = message.get("subtype");
+        if ("task_started".equals(subtype)) {
+            if (DEFERRING_TASK_TYPES.contains(message.get("task_type"))) {
+                inflightTasks.add(taskId);
+            }
+        } else if ("task_notification".equals(subtype)) {
+            inflightTasks.remove(taskId);
+        } else if ("task_updated".equals(subtype)) {
+            if (message.get("patch") instanceof Map<?, ?> patch
+                    && patch.get("status") instanceof String status
+                    && TaskUpdatedMessage.TERMINAL_TASK_STATUSES.contains(status)) {
+                inflightTasks.remove(taskId);
+            }
+        }
+    }
+
     private void readMessages() {
         // Tracks the most recent error result's text so we can replace the
         // generic "Command failed with exit code 1" ProcessException that
@@ -578,6 +670,12 @@ public class QueryHandler implements AutoCloseable {
                     continue;
                 }
 
+                // Track task lifecycle frames so a result can tell "one turn
+                // ended" apart from "the run is done".
+                if ("system".equals(msgType)) {
+                    trackTaskLifecycle(message);
+                }
+
                 // Track results for proper stream closure
                 if ("result".equals(msgType)) {
                     // Flush pending transcript mirror entries before yielding
@@ -592,7 +690,19 @@ public class QueryHandler implements AutoCloseable {
                                     + flushEx.getMessage());
                         }
                     }
-                    firstResultEvent.complete(null);
+                    if (inflightTasks.isEmpty()) {
+                        firstResultEvent.complete(null);
+                    } else {
+                        // One turn ended, but background tasks are still running
+                        // and may need hook/SDK-MCP control responses over stdin.
+                        // Closing it now silently disables hooks and fails
+                        // SDK-MCP calls with "Stream closed". Each task
+                        // completion wakes the parent for a follow-up turn, so a
+                        // later result frame arrives with no tasks in flight and
+                        // closes stdin then.
+                        logger.fine("Result received with " + inflightTasks.size()
+                                + " task(s) in flight; keeping stdin open");
+                    }
                     Object isErr = message.get("is_error");
                     if (isErr instanceof Boolean b && b) {
                         @SuppressWarnings("unchecked")

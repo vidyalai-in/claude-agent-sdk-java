@@ -15,6 +15,7 @@ import in.vidyalai.claude.sdk.internal.MessageParser;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
 import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.message.ModelUsage;
 import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
 import in.vidyalai.claude.sdk.types.message.RateLimitStatus;
 import in.vidyalai.claude.sdk.types.message.RateLimitType;
@@ -1359,9 +1360,17 @@ class MessageParserTest {
         assertThat(message).isInstanceOf(ResultMessage.class);
         ResultMessage rm = (ResultMessage) message;
         assertThat(rm.modelUsage()).isNotNull();
-        @SuppressWarnings("unchecked")
-        Map<String, Object> sonnetUsage = (Map<String, Object>) rm.modelUsage().get("claude-sonnet-4-5-20250929");
-        assertThat(sonnetUsage.get("costUSD")).isEqualTo(0.0106);
+        ModelUsage sonnetUsage = rm.modelUsage().get("claude-sonnet-4-5-20250929");
+        assertThat(sonnetUsage.costUsd()).isEqualTo(0.0106);
+        assertThat(sonnetUsage.inputTokens()).isEqualTo(3);
+        assertThat(sonnetUsage.outputTokens()).isEqualTo(24);
+        // Counters the CLI did not emit read as zero, not as a parse failure.
+        assertThat(sonnetUsage.cacheReadInputTokens()).isZero();
+        // Fields added by a later CLI are absent rather than defaulted.
+        assertThat(sonnetUsage.canonicalModel()).isNull();
+        assertThat(sonnetUsage.provider()).isNull();
+        // The verbatim CLI map stays reachable for anything unmodeled.
+        assertThat(sonnetUsage.raw()).containsEntry("costUSD", 0.0106);
         assertThat(rm.permissionDenials()).isEmpty();
         assertThat(rm.uuid()).isEqualTo("d379c496-f33a-4ea4-b920-3c5483baa6f7");
     }
@@ -1385,6 +1394,82 @@ class MessageParserTest {
         assertThat(rm.permissionDenials()).isNull();
         assertThat(rm.errors()).isNull();
         assertThat(rm.uuid()).isNull();
+        assertThat(rm.terminalReason()).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_withFullModelUsageShape() {
+        Map<String, Object> data = baseResultData();
+        data.put("modelUsage", Map.of(
+                "claude-opus-4-7", Map.of(
+                        "inputTokens", 100,
+                        "outputTokens", 200,
+                        "cacheReadInputTokens", 300,
+                        "cacheCreationInputTokens", 400,
+                        "webSearchRequests", 5,
+                        "costUSD", 1.25,
+                        "contextWindow", 200000,
+                        "maxOutputTokens", 64000,
+                        "canonicalModel", "claude-opus-4-7",
+                        "provider", "bedrock")));
+
+        ResultMessage rm = (ResultMessage) MessageParser.parse(data);
+        ModelUsage usage = rm.modelUsage().get("claude-opus-4-7");
+        assertThat(usage.inputTokens()).isEqualTo(100);
+        assertThat(usage.outputTokens()).isEqualTo(200);
+        assertThat(usage.cacheReadInputTokens()).isEqualTo(300);
+        assertThat(usage.cacheCreationInputTokens()).isEqualTo(400);
+        assertThat(usage.webSearchRequests()).isEqualTo(5);
+        assertThat(usage.costUsd()).isEqualTo(1.25);
+        assertThat(usage.contextWindow()).isEqualTo(200000);
+        assertThat(usage.maxOutputTokens()).isEqualTo(64000);
+        assertThat(usage.canonicalModel()).isEqualTo("claude-opus-4-7");
+        assertThat(usage.provider()).isEqualTo("bedrock");
+    }
+
+    @Test
+    void parseResultMessage_withNonObjectModelUsageEntry() {
+        Map<String, Object> data = baseResultData();
+        // A malformed entry is skipped rather than failing the whole frame.
+        Map<String, Object> byModel = new java.util.HashMap<>();
+        byModel.put("claude-sonnet-4-5", "not-an-object");
+        byModel.put("claude-opus-4-7", Map.of("inputTokens", 7));
+        data.put("modelUsage", byModel);
+
+        ResultMessage rm = (ResultMessage) MessageParser.parse(data);
+        assertThat(rm.modelUsage()).containsOnlyKeys("claude-opus-4-7");
+    }
+
+    @Test
+    void parseResultMessage_withTerminalReason() {
+        Map<String, Object> data = baseResultData();
+        data.put("terminal_reason", "aborted_streaming");
+
+        ResultMessage rm = (ResultMessage) MessageParser.parse(data);
+        assertThat(rm.terminalReason()).isEqualTo("aborted_streaming");
+    }
+
+    @Test
+    void parseResultMessage_withMaxTurnsTerminalReason() {
+        Map<String, Object> data = baseResultData();
+        data.put("terminal_reason", "max_turns");
+
+        ResultMessage rm = (ResultMessage) MessageParser.parse(data);
+        assertThat(rm.terminalReason()).isEqualTo("max_turns");
+    }
+
+    /** Minimal well-formed result frame for field-specific assertions. */
+    private static Map<String, Object> baseResultData() {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "result");
+        data.put("subtype", "success");
+        data.put("duration_ms", 1000);
+        data.put("duration_api_ms", 500);
+        data.put("is_error", false);
+        data.put("num_turns", 1);
+        data.put("session_id", "session_123");
+        return data;
     }
 
     @SuppressWarnings("null")
