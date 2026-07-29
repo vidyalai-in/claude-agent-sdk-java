@@ -16,24 +16,21 @@
     <name>Claude Agent SDK Java - Examples</name>
     <description>Usage examples for Claude Agent Java SDK</description>
 
-    <repositories>
-        <!-- GitHub Packages repository for downloading published SDK -->
-        <repository>
-            <id>github</id>
-            <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/vidyalai-in/claude-agent-sdk-java</url>
-            <snapshots>
-                <enabled>true</enabled>
-            </snapshots>
-        </repository>
-    </repositories>
+    <!--
+         No <repositories> block: the SDK is published to Maven Central, which
+         Maven resolves from by default. Building from the repository root
+         satisfies this dependency from the reactor instead, so a SNAPSHOT
+         revision needs no repository either.
+    -->
 
     <dependencies>
         <!-- Depend on the SDK -->
         <!--
-             For local development: Uses ${project.version} (inherits from parent)
-             For testing against published package: Change to release version (e.g., 0.1.0)
-             and ensure GitHub authentication is configured in ~/.m2/settings.xml
+             For local development: Uses ${project.version} (inherits from parent),
+             resolved from the reactor when building from the repository root.
+             To build this module standalone against a published release, either
+             run `mvn install` in ../sdk first or set this to a released version
+             (e.g. 0.1.21) — no authentication is required for Maven Central.
         -->
         <dependency>
             <groupId>in.vidyalai</groupId>

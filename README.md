@@ -979,7 +979,7 @@ See the `examples/` module for complete working examples:
 
 ### Running Examples
 
-The examples module is a separate Maven module that depends on the published SDK from GitHub Packages.
+The examples module is a separate Maven module that depends on the SDK. Building from the repository root satisfies that dependency from the reactor; building `examples/` on its own resolves it from Maven Central, which requires no repository or authentication setup.
 
 #### Option 1: Run Examples from Root Directory (Recommended)
 
@@ -1003,7 +1003,7 @@ mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples
 # Navigate to examples directory
 cd examples
 
-# Build examples (downloads published SDK from GitHub Packages)
+# Build examples (resolves the published SDK from Maven Central)
 mvn clean package -DskipTests
 
 # Run an example using Maven exec plugin
@@ -1035,7 +1035,7 @@ To test examples against your local development version of the SDK (not the publ
 
 3. Run examples as described in Option 1 or 2.
 
-**Note:** You can also make the examples module depend on the published version from GitHub Packages. You need GitHub authentication configured to download it (see "Authentication for GitHub Packages" section above).
+**Note:** You can also pin the examples module to a released SDK version by setting the dependency's `<version>` in `examples/pom.xml` to that release (e.g. `0.1.21`). It resolves from Maven Central, so no repository or authentication setup is needed.
 
 ## Thread Safety
 

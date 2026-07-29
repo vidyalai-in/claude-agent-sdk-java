@@ -1,7 +1,7 @@
 # Multi-Module Project Structure
 
 This is a multi-module Maven project with two modules:
-- `sdk/` - The Claude Agent SDK library (published to GitHub Packages)
+- `sdk/` - The Claude Agent SDK library (published to Maven Central, mirrored to GitHub Packages)
 - `examples/` - Usage examples (depends on published SDK)
 
 ## CI-Friendly Versioning
@@ -72,7 +72,7 @@ mvn javadoc:javadoc
 
 # Running Examples
 
-Examples are located in the `examples/` module, which is a separate Maven module that depends on the published SDK from GitHub Packages.
+Examples are located in the `examples/` module, a separate Maven module that depends on the SDK. Building from the repository root satisfies that dependency from the reactor; building `examples/` standalone resolves it from Maven Central, which needs no repository or authentication setup.
 
 ## From Root Directory (Recommended)
 
@@ -116,7 +116,7 @@ mvn exec:java -Dexec.mainClass="examples.ToolUsage" -pl examples
 # Navigate to examples directory
 cd examples
 
-# Build examples (downloads published SDK from GitHub Packages)
+# Build examples (resolves the published SDK from Maven Central)
 mvn clean package -DskipTests
 
 # Run an example using Maven exec plugin (recommended)
