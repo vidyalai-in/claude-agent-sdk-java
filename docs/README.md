@@ -176,7 +176,7 @@ This is a multi-module Maven project:
 
 ```
 claude-agent-sdk-java/
-├── sdk/              # Core SDK library (published to GitHub Packages)
+├── sdk/              # Core SDK library (published to Maven Central; mirrored to GitHub Packages)
 │   ├── src/main/java/in/vidyalai/claude/sdk/
 │   │   ├── ClaudeSDK.java              # Main facade
 │   │   ├── ClaudeSDKClient.java        # Interactive client
@@ -204,22 +204,17 @@ claude-agent-sdk-java/
 
 ### Installation
 
-Add to your `pom.xml`:
+Add to your `pom.xml` — no repository or authentication setup is required:
 
 ```xml
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.18</version>
+    <version>0.1.21</version>
 </dependency>
-
-<repositories>
-    <repository>
-        <id>github</id>
-        <url>https://maven.pkg.github.com/vidyalai-in/claude-agent-sdk-java</url>
-    </repository>
-</repositories>
 ```
+
+Releases are also mirrored to GitHub Packages for consumers already pointing at it. That route needs a personal access token even though the artifacts are public, so prefer Maven Central unless you have a reason not to — see the [root README](../README.md#alternative-github-packages) for the repository and authentication setup.
 
 ### Hello World
 
@@ -354,6 +349,6 @@ Contributions are welcome! Please see the repository for contribution guidelines
 
 ## Version
 
-Current version: 0.1.18
+Current version: 0.1.21
 
-See [CHANGELOG.md](../docs/CHANGELOG.md) for version history and release notes.
+See [CHANGELOG.md](./CHANGELOG.md) for version history and release notes.

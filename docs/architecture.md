@@ -445,6 +445,32 @@ QueryHandler
             └─► {"id": "...", "result": {...}}
 ```
 
+### Stdin Lifecycle and In-Flight Tasks
+
+When hooks or SDK MCP servers are registered, the control protocol needs stdin open for the entire conversation, so `QueryHandler.streamInput()` waits for a run-ending `result` frame before calling `transport.endInput()`. Closing too early is not benign: the CLI in stream-json mode exits **only** on stdin EOF, so the close cannot simply be deferred to `close()` either — that would hang a one-shot `query()` forever.
+
+The subtlety is that **a `result` frame ends one turn, not the run**. A background task keeps running past it and still needs stdin for hook and SDK-MCP control responses. Closing on the first result meant a still-running subagent's SDK-MCP tool calls failed with `"Stream closed"`, and — more quietly — its `PreToolUse` hooks were never delivered, so built-in tools kept executing and deny-gate hooks stopped gating.
+
+`QueryHandler` therefore keeps a ledger of in-flight tasks, populated from `system` task lifecycle frames, and only treats a result as run-ending when the ledger is empty:
+
+```
+system: task_started (task_type ∈ DEFERRING_TASK_TYPES)  ─►  add task_id
+system: task_notification                                ─►  remove task_id
+system: task_updated (patch.status ∈ TERMINAL_TASK_STATUSES) ─► remove task_id
+
+result frame
+    ├─ ledger empty     ─►  complete firstResultEvent  ─►  endInput()
+    └─ ledger non-empty ─►  keep stdin open, log at FINE
+```
+
+Each task completion wakes the parent for a follow-up turn that ends in another result frame, so the close still happens promptly — and chained background tasks work, because the ledger only empties after the last one settles.
+
+`DEFERRING_TASK_TYPES` is `{"local_agent", "local_workflow"}`. The exclusions are deliberate, not oversights: background shells (`local_bash`) and monitors run indefinitely by design, and teammates stay `running` for their whole lifetime, so none of them reliably reaches a terminal status. Tracking one would withhold the close *forever* rather than briefly — and with no process exit, not even the reader's `finally` would run. Anything added to this set must be a type that reliably terminates.
+
+`background_tasks_changed` frames are ignored in both directions. That payload is the live *background* set, but a subagent is registered in the foreground and only flips to backgrounded later without a second `task_started` — so narrowing against it would drop exactly the agent this ledger exists to protect, and widening from it could admit an id no later frame ever clears.
+
+This is a mitigation rather than a complete answer: an empty ledger means "nothing we know of is running", which is not the same as "the run is over". A task that settles *before* its turn's result frame leaves the ledger empty at that result. No ledger can close that gap — it would need a run-boundary signal from the CLI — but the common ordering, where the task outlives the turn that spawned it, is fixed.
+
 ## Concurrency Model
 
 ### Thread Architecture
@@ -483,15 +509,23 @@ try (ClaudeSDKClient client = ClaudeSDK.createClient()) {
 Message (sealed interface)
     ├── UserMessage (record)
     ├── AssistantMessage (record)
-    │       └── content: List<ContentBlock>
+    │       └── content: List<ContentBlock>   (sealed interface)
     │               ├── TextBlock
     │               ├── ThinkingBlock
     │               ├── ToolUseBlock
-    │               └── ToolResultBlock
+    │               ├── ToolResultBlock
+    │               ├── ServerToolUseBlock
+    │               ├── ServerToolResultBlock
+    │               ├── ImageBlock        - PDF page render
+    │               ├── DocumentBlock     - whole PDF
+    │               └── UnknownBlock      - forward-compat fallback
     ├── SystemMessage (record)
     ├── ResultMessage (record)
+    │       └── modelUsage: Map<String, ModelUsage>
     └── StreamEvent (record)
 ```
+
+Both sealed hierarchies are exhaustive-`switch` friendly, which means adding a member is a deliberate source-breaking event for callers. `ContentBlock` gained three members in 0.1.20; `UnknownBlock` exists so that *unmodelled* types no longer require an SDK change at all — the parser preserves them whole and logs once per type instead of throwing.
 
 ### Configuration Types
 

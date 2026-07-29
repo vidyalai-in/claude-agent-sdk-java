@@ -484,16 +484,35 @@ record ResultMessage(
     @Nullable Map<String, Object> usage,          // Token usage breakdown
     @Nullable String result,                      // Result text
     @Nullable Object structuredOutput,            // Structured output (when json_schema used)
-    @Nullable Map<String, Object> modelUsage,     // Per-model usage breakdown
+    @Nullable Map<String, ModelUsage> modelUsage,  // Per-model usage breakdown
     @Nullable List<Object> permissionDenials,     // Permission denials during session
     @Nullable DeferredToolUse deferredToolUse,    // Tool call deferred by a PreToolUse hook
     @Nullable List<String> errors,                // Error messages from the CLI
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
-    @Nullable String uuid                         // Unique message identifier in session
+    @Nullable String uuid,                        // Unique message identifier in session
+    @Nullable String terminalReason               // Why the query loop terminated
 ) implements Message
 ```
 
-The `errors` field contains a list of error messages from the CLI, useful for diagnosing non-zero exit codes. The `modelUsage` field provides per-model token breakdowns. The `deferredToolUse` field is set when a `PreToolUse` hook returned `permissionDecision: "defer"` — see [Hooks → Permission Decision: `"defer"`](./feature-hooks.md#permission-decision-defer). The `apiErrorStatus` field carries the HTTP status code (e.g. `429`, `500`, `529`) of the failing API call when `isError=true` and `subtype="success"` (the API failed but the session itself completed); it is safe to log because it carries no message content. Backwards-compatible constructors without the newer fields are also available.
+The `errors` field contains a list of error messages from the CLI, useful for diagnosing non-zero exit codes. The `modelUsage` field provides per-model token breakdowns, typed as `ModelUsage` — see [API Reference → ModelUsage](./api-message-types.md#modelusage). The `deferredToolUse` field is set when a `PreToolUse` hook returned `permissionDecision: "defer"` — see [Hooks → Permission Decision: `"defer"`](./feature-hooks.md#permission-decision-defer). The `apiErrorStatus` field carries the HTTP status code (e.g. `429`, `500`, `529`) of the failing API call when `isError=true` and `subtype="success"` (the API failed but the session itself completed); it is safe to log because it carries no message content. Backwards-compatible constructors without the newer fields are also available.
+
+The `terminalReason` field reports why the query loop ended — `"completed"`, `"max_turns"`, `"aborted_streaming"`, `"aborted_tools"`. The two `aborted_*` values mean the turn was cancelled via `ClaudeSDKClient.interrupt()`, which gives callers an explicit cancelled marker without a distinct result subtype:
+
+```java
+try (var client = ClaudeSDK.createClient()) {
+    client.connect("Long running task");
+    client.interrupt();
+
+    for (Message msg : client.receiveResponse()) {
+        if (msg instanceof ResultMessage result) {
+            // "aborted_streaming" or "aborted_tools" after an interrupt
+            System.out.println("Ended because: " + result.terminalReason());
+        }
+    }
+}
+```
+
+It is `null` when the CLI reported no terminal reason — older CLI versions, or a result that bypassed the query loop such as a local slash command.
 
 ### DeferredToolUse
 
@@ -671,8 +690,11 @@ Assistant messages (and structured user messages) contain content blocks.
 ```java
 sealed interface ContentBlock permits TextBlock, ThinkingBlock,
     ToolUseBlock, ToolResultBlock,
-    ServerToolUseBlock, ServerToolResultBlock {}
+    ServerToolUseBlock, ServerToolResultBlock,
+    ImageBlock, DocumentBlock, UnknownBlock {}
 ```
+
+Because the interface is sealed, an exhaustive `switch` over it stops compiling whenever the `permits` clause grows. Prefer handling `UnknownBlock` explicitly over adding a `default` branch — that way the next new block type is a compile error you can act on rather than a silent fallthrough.
 
 ### TextBlock
 
@@ -763,6 +785,63 @@ For the advisor tool specifically, the `content` map's `type` field will be one 
 - `"advisor_result"` — text result with a `text` field
 - `"advisor_redacted_result"` — encrypted blob with an `encrypted_content` field
 - `"advisor_tool_result_error"` — error payload
+
+### ImageBlock and DocumentBlock
+
+Both arrive from the same flow: reading a PDF with the `Read` tool. The `tool_result` itself only announces the page count, and the file follows in a **separate user message**. The CLI uses one of two shapes for that message, and both have been observed from CLI 2.1.218 against the same 1.5 MB file on different runs:
+
+- one `image` block per rendered page (`image/jpeg`, base64), or
+- a single `document` block holding the whole PDF (`application/pdf`, base64).
+
+```java
+record ImageBlock(Map<String, Object> source) implements ContentBlock
+record DocumentBlock(Map<String, Object> source) implements ContentBlock
+```
+
+`source` is kept as the raw map because the API defines `base64`, `url`, `file`, `text` and `content` source shapes and can add more. Three accessors cover the base64 case, each returning `null` if the key is missing or not a string:
+
+```java
+for (ContentBlock block : userMessage.contentAsBlocks()) {
+    switch (block) {
+        case ImageBlock image -> System.out.printf("page image: %s, %d base64 chars%n",
+                image.mediaType(), image.data() == null ? 0 : image.data().length());
+        case DocumentBlock doc -> System.out.printf("document: %s%n", doc.mediaType());
+        default -> { }
+    }
+}
+```
+
+| Method | Returns |
+|---|---|
+| `sourceType()` | `source["type"]`, e.g. `"base64"` |
+| `mediaType()` | `source["media_type"]`, e.g. `"image/jpeg"` or `"application/pdf"` |
+| `data()` | `source["data"]`, the base64 payload |
+
+> **Reading PDFs requires raising `maxBufferSize`.** These blocks are base64 — four bytes per three — on a single line of CLI stdout, so a 1.5 MB PDF is roughly a 2.1 MB line against the 1 MB default. The default is unchanged (it matches the Python SDK), so callers reading files of any size must set it explicitly:
+>
+> ```java
+> ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+>     .allowedTools(List.of("Read"))
+>     .maxBufferSize(16 * 1024 * 1024)
+>     .build();
+> ```
+>
+> Without this, any agent granted `Read` over a directory of PDFs fails mid-run.
+
+### UnknownBlock
+
+Forward compatibility for block types this SDK version does not model.
+
+```java
+record UnknownBlock(
+    String type,             // The unrecognised discriminator
+    Map<String, Object> raw  // The block, preserved whole
+) implements ContentBlock
+```
+
+`MessageParser` already returns `null` for an unrecognised *message* type so a newer CLI cannot crash an older SDK; content blocks now behave the same way instead of throwing. The unrecognised block is preserved whole and logged once per type at `WARNING` from `in.vidyalai.claude.sdk.internal.MessageParser`.
+
+This is exactly what `image` and `document` needed and did not have. The previous behaviour threw `MessageParseException`, which killed the reader thread, discarded every other block in the message — including text the model had already produced — and surfaced as a JSON decode failure naming a type the caller never asked for.
 
 ## Pattern Matching
 
