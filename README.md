@@ -21,17 +21,40 @@ ClaudeAgentOptions.builder()
 
 ## Installation
 
+Released to Maven Central, so no repository or authentication setup is needed.
+
 ### Maven
 
 ```xml
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.1.2</version>
+    <version>0.1.21</version>
 </dependency>
 ```
 
-Add the GitHub Packages repository to your `pom.xml`:
+### Gradle
+
+```kotlin
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation("in.vidyalai:claude-agent-sdk-java:0.1.21")
+}
+```
+
+### Alternative: GitHub Packages
+
+Releases are also mirrored to GitHub Packages for consumers who already depend
+on it. This route requires a GitHub personal access token even though the
+artifacts are public, so prefer Maven Central unless you have a reason not to.
+
+<details>
+<summary>GitHub Packages setup</summary>
+
+Add the repository to your `pom.xml`:
 
 ```xml
 <repositories>
@@ -42,13 +65,7 @@ Add the GitHub Packages repository to your `pom.xml`:
 </repositories>
 ```
 
-### Gradle
-
-```kotlin
-implementation("in.vidyalai:claude-agent-sdk-java:0.1.2")
-```
-
-Add the GitHub Packages repository to your `build.gradle.kts`:
+Or to your `build.gradle.kts`:
 
 ```kotlin
 repositories {
@@ -62,13 +79,7 @@ repositories {
 }
 ```
 
-### Authentication for GitHub Packages
-
-To use this library from GitHub Packages, you need to authenticate with GitHub.
-
-#### Maven Authentication
-
-Add this to your `~/.m2/settings.xml`:
+Then authenticate. For Maven, add this to your `~/.m2/settings.xml`:
 
 ```xml
 <settings>
@@ -82,16 +93,16 @@ Add this to your `~/.m2/settings.xml`:
 </settings>
 ```
 
-Generate a personal access token with `read:packages` scope at: https://github.com/settings/tokens
-
-#### Gradle Authentication
-
-Create or update `~/.gradle/gradle.properties`:
+For Gradle, create or update `~/.gradle/gradle.properties`:
 
 ```properties
 gpr.user=YOUR_GITHUB_USERNAME
 gpr.key=YOUR_GITHUB_PERSONAL_ACCESS_TOKEN
 ```
+
+Generate a personal access token with `read:packages` scope at: https://github.com/settings/tokens
+
+</details>
 
 ## Quick Start
 

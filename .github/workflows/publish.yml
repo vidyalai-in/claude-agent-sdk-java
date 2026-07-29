@@ -1,12 +1,17 @@
-name: Publish to GitHub Packages
+name: Publish Release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g., 0.1.0)'
+        description: 'Version to publish (e.g., 0.1.21)'
         required: true
-        default: '0.1.0'
+        default: '0.1.21'
+      publish_to_github_packages:
+        description: 'Also publish to GitHub Packages'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -25,8 +30,33 @@ jobs:
         with:
           java-version: '25'
           distribution: 'temurin'
-          server-id: github
-          settings-path: ${{ github.workspace }}
+          # Imports the signing key into the runner's GPG keyring. The passphrase
+          # is deliberately not passed here - maven-gpg-plugin reads it straight
+          # from the MAVEN_GPG_PASSPHRASE env var on the deploy step.
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+
+      # setup-java can only write a single <server> entry and we need two.
+      # ${env.*} is Maven's own interpolation, resolved when Maven reads the
+      # file, so the secrets never land on disk or in the process list.
+      - name: Write Maven settings
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<'EOF'
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+            <servers>
+              <server>
+                <id>central</id>
+                <username>${env.CENTRAL_TOKEN_USERNAME}</username>
+                <password>${env.CENTRAL_TOKEN_PASSWORD}</password>
+              </server>
+              <server>
+                <id>github</id>
+                <username>${env.GITHUB_ACTOR}</username>
+                <password>${env.GITHUB_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
 
       - name: Verify version matches input
         run: |
@@ -45,8 +75,19 @@ jobs:
       - name: Build and test all modules
         run: mvn -B clean verify
 
-      - name: Publish SDK module to GitHub Packages
-        run: mvn -B deploy -DskipTests -s ${{ github.workspace }}/settings.xml -pl sdk
+      # Maven Central goes first: a published Central release is permanent and
+      # cannot be deleted or overwritten. If validation rejects the bundle the
+      # same version can be retried, but only while nothing has shipped yet.
+      - name: Publish SDK to Maven Central
+        run: mvn -B deploy -Pcentral -DskipTests
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+
+      - name: Publish SDK to GitHub Packages
+        if: ${{ github.event.inputs.publish_to_github_packages == 'true' }}
+        run: mvn -B deploy -Pgithub -DskipTests -pl sdk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -71,7 +112,9 @@ jobs:
             </dependency>
             ```
 
-            Add GitHub Packages repository and authentication to your `pom.xml` or `~/.m2/settings.xml` - see README for details.
+            Available from Maven Central - no repository or authentication setup
+            required. The artifact is also mirrored to GitHub Packages, which
+            does require a personal access token; see the README if you need that.
 
             ## Examples
 

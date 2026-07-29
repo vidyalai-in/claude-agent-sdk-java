@@ -15,14 +15,15 @@
 
     <name>Claude Agent SDK Java</name>
     <description>Unofficial Claude Agent Java SDK</description>
+    <!-- Declared explicitly: an inherited <url> gets the module's artifactId
+         appended, which would publish a 404 link as the project URL. -->
+    <url>https://github.com/vidyalai-in/claude-agent-sdk-java</url>
 
-    <distributionManagement>
-        <repository>
-            <id>github</id>
-            <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/vidyalai-in/claude-agent-sdk-java</url>
-        </repository>
-    </distributionManagement>
+    <properties>
+        <!-- This is the only module that gets published; the parent sets this to
+             true so the parent POM and the examples module are never deployed. -->
+        <maven.deploy.skip>false</maven.deploy.skip>
+    </properties>
 
     <dependencies>
         <!-- JSON serialization -->
@@ -161,4 +162,81 @@
             </plugin>
         </plugins>
     </build>
+
+    <!--
+        Publishing profiles.
+
+        The two targets cannot share a single `mvn deploy` run: the
+        central-publishing-maven-plugin registers itself as a build extension and
+        replaces the deploy phase wholesale, so it would swallow any
+        distributionManagement repository. Deploy twice instead:
+
+            mvn clean deploy -Pcentral -DskipTests    # Maven Central (do this first)
+            mvn deploy -Pgithub -DskipTests -pl sdk   # GitHub Packages
+
+        Central first, because a Central release is permanent and cannot be
+        deleted or overwritten - if its validation rejects the bundle you can
+        retry the same version, but only while nothing has been published yet.
+    -->
+    <profiles>
+        <!-- Maven Central via the Central Portal (central.sonatype.com). -->
+        <profile>
+            <id>central</id>
+            <build>
+                <plugins>
+                    <!-- Central requires a detached GPG signature for every
+                         artifact. Locally the passphrase comes from gpg-agent;
+                         in CI it comes from the MAVEN_GPG_PASSPHRASE env var,
+                         which needs loopback pinentry to be readable. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <!-- Matches the <server> id in settings.xml holding
+                                 the Central Portal user token. -->
+                            <publishingServerId>central</publishingServerId>
+                            <!-- Upload and validate, but leave the final release
+                                 as a manual click in the Portal UI. Flip to true
+                                 once the process is proven. -->
+                            <autoPublish>false</autoPublish>
+                            <waitUntil>validated</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- GitHub Packages. Kept for backwards compatibility with consumers
+             who already point at it; requires a PAT even for public artifacts. -->
+        <profile>
+            <id>github</id>
+            <distributionManagement>
+                <repository>
+                    <id>github</id>
+                    <name>GitHub Packages</name>
+                    <url>https://maven.pkg.github.com/vidyalai-in/claude-agent-sdk-java</url>
+                </repository>
+            </distributionManagement>
+        </profile>
+    </profiles>
 </project>

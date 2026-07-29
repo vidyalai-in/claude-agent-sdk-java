@@ -23,6 +23,7 @@
 
     <developers>
         <developer>
+            <name>Amit Padalkar</name>
             <organization>Vidyalai</organization>
             <organizationUrl>https://vidyalai.in</organizationUrl>
         </developer>
@@ -49,7 +50,15 @@
         <maven.javadoc.plugin.version>3.12.0</maven.javadoc.plugin.version>
         <maven.source.plugin.version>3.4.0</maven.source.plugin.version>
         <maven.flatten.plugin.version>1.7.3</maven.flatten.plugin.version>
+        <maven.gpg.plugin.version>3.2.8</maven.gpg.plugin.version>
+        <maven.central.publishing.plugin.version>0.11.0</maven.central.publishing.plugin.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <!-- Only the sdk module is published. The parent POM does not need to be
+             deployed because flatten-maven-plugin (ossrh mode) inlines it into the
+             sdk POM, and the examples module is reference code, not a library.
+             sdk/pom.xml overrides this back to false. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
         <jackson.databind.version>2.21.0</jackson.databind.version>
         <jackson.annotations.version>2.21</jackson.annotations.version>
         <jspecify.version>1.0.0</jspecify.version>
@@ -59,9 +68,11 @@
         <opentelemetry.version>1.61.0</opentelemetry.version>
     </properties>
 
-    <scm>
+    <scm child.scm.connection.inherit.append.path="false"
+         child.scm.developerConnection.inherit.append.path="false"
+         child.scm.url.inherit.append.path="false">
         <connection>scm:git:git://github.com/vidyalai-in/claude-agent-sdk-java.git</connection>
-        <developerConnection>scm:git:ssh://github.com:vidyalai-in/claude-agent-sdk-java.git</developerConnection>
+        <developerConnection>scm:git:ssh://github.com/vidyalai-in/claude-agent-sdk-java.git</developerConnection>
         <url>https://github.com/vidyalai-in/claude-agent-sdk-java</url>
         <tag>HEAD</tag>
     </scm>
@@ -188,6 +199,16 @@
                     <groupId>org.codehaus.mojo</groupId>
                     <artifactId>flatten-maven-plugin</artifactId>
                     <version>${maven.flatten.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-gpg-plugin</artifactId>
+                    <version>${maven.gpg.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.sonatype.central</groupId>
+                    <artifactId>central-publishing-maven-plugin</artifactId>
+                    <version>${maven.central.publishing.plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>

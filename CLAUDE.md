@@ -465,11 +465,32 @@ Thread.startVirtualThread(() -> {
 
 # Publishing
 
-## Publishing to GitHub Packages
+The SDK module is published to **two** registries: Maven Central (primary) and
+GitHub Packages (mirror, kept for existing consumers). The parent POM and the
+examples module are **not** published — `maven.deploy.skip` is `true` in the
+parent and overridden to `false` only in `sdk/pom.xml`.
 
-The project uses GitHub Actions to publish the SDK module to GitHub Packages. The examples module is **not** published.
+The two targets live in profiles in `sdk/pom.xml` and cannot share one
+`mvn deploy` run: `central-publishing-maven-plugin` registers as a build
+extension and takes over the deploy phase entirely, so it would swallow any
+`distributionManagement` repository. Deploy twice:
 
-### Release Process
+```bash
+mvn clean deploy -Pcentral -DskipTests    # Maven Central (always first)
+mvn deploy -Pgithub -DskipTests -pl sdk   # GitHub Packages
+```
+
+**Central goes first, always.** A published Central release is permanent — it
+cannot be deleted or overwritten. If validation rejects the bundle you can retry
+the same version, but only while nothing has been published. GitHub Packages, by
+contrast, allows delete-and-republish, so pushing there second means it never
+advertises a version Central lacks.
+
+Central releases require a GPG signature on every artifact (`maven-gpg-plugin`,
+active only in the `central` profile) and a Central Portal user token in
+`settings.xml` under the server id `central`.
+
+## Release Process
 
 1. **Update the `<revision>` property in root `pom.xml`** from SNAPSHOT to release version:
    ```xml
@@ -489,18 +510,30 @@ The project uses GitHub Actions to publish the SDK module to GitHub Packages. Th
 
 3. **Trigger GitHub Actions workflow:**
    - Navigate to: GitHub repository > Actions tab
-   - Select "Publish to GitHub Packages" workflow
+   - Select "Publish Release" workflow
    - Click "Run workflow"
    - Enter version: `0.1.1`
+   - Leave "Also publish to GitHub Packages" checked (uncheck it once the
+     GitHub Packages mirror is retired)
    - Click "Run workflow" button
 
 4. **Monitor workflow execution** in the Actions tab
 
-5. **Verify publication:**
-   - Go to: https://github.com/vidyalai-in/claude-agent-sdk-java/packages
-   - Verify SDK version is published with all JARs (main, sources, javadoc)
+5. **Release the Central deployment:**
+   - Go to: https://central.sonatype.com/publishing/deployments
+   - The deployment sits in `VALIDATED` state — click **Publish**
+   - (Set `<autoPublish>true</autoPublish>` in the `central` profile to skip
+     this click once the process is proven)
+   - Artifacts reach `repo1.maven.org` in ~10-30 minutes, search indexing lags
+     a few hours
 
-6. **Post-release - update to next SNAPSHOT version:**
+6. **Verify publication:**
+   - Maven Central: https://central.sonatype.com/artifact/in.vidyalai/claude-agent-sdk-java
+   - GitHub Packages: https://github.com/vidyalai-in/claude-agent-sdk-java/packages
+   - Verify all JARs are present (main, sources, javadoc) plus `.asc` signatures
+     on Central
+
+7. **Post-release - update to next SNAPSHOT version:**
    ```bash
    # Update <revision> in root pom.xml to next SNAPSHOT (e.g., 0.1.2-SNAPSHOT)
    # Edit: <revision>0.1.2-SNAPSHOT</revision>
@@ -509,14 +542,17 @@ The project uses GitHub Actions to publish the SDK module to GitHub Packages. Th
    git push origin main
    ```
 
-### Manual Publishing
+## Manual Publishing
 
-To publish manually (requires GitHub personal access token):
-
-1. **Configure Maven settings** (`~/.m2/settings.xml`):
+1. **Configure Maven settings** (`~/.m2/settings.xml`) with both servers:
    ```xml
    <settings>
      <servers>
+       <server>
+         <id>central</id>
+         <username>CENTRAL_PORTAL_TOKEN_USERNAME</username>
+         <password>CENTRAL_PORTAL_TOKEN_PASSWORD</password>
+       </server>
        <server>
          <id>github</id>
          <username>YOUR_GITHUB_USERNAME</username>
@@ -525,13 +561,24 @@ To publish manually (requires GitHub personal access token):
      </servers>
    </settings>
    ```
-2. **Generate GitHub PAT** with `write:packages` scope at: https://github.com/settings/tokens
-3. **Run Maven deploy** (only deploys SDK module):
+   The Central credentials are a **user token** generated at
+   https://central.sonatype.com (Account > Generate User Token), not the login
+   password. The GitHub PAT needs the `write:packages` scope.
+
+2. **Ensure a GPG key is available.** Signing uses the local keyring via
+   gpg-agent; in batch/CI contexts export `MAVEN_GPG_PASSPHRASE` instead. The
+   public key must be on a keyserver or Central rejects the bundle:
    ```bash
-   mvn clean deploy -DskipTests -pl sdk
+   gpg --keyserver keyserver.ubuntu.com --send-keys YOUR_KEY_ID
    ```
 
-### Pre-Release Checklist
+3. **Deploy, Central first:**
+   ```bash
+   mvn clean deploy -Pcentral -DskipTests    # then click Publish in the Portal
+   mvn deploy -Pgithub -DskipTests -pl sdk
+   ```
+
+## Pre-Release Checklist
 
 Before publishing a release:
 
@@ -547,9 +594,9 @@ Before publishing a release:
 
 **Note:** With CI-friendly versioning, you only need to update the `<revision>` property in one place (root `pom.xml`). All modules automatically inherit the new version.
 
-### Why Examples Module is Not Published
+## Why Examples Module is Not Published
 
-The examples module is **not** published to GitHub Packages because:
+The examples module is **not** published to either registry because:
 - Examples are reference code for learning, not a reusable library
 - They depend on the SDK and have no independent value as an artifact
 - Users should clone the repository to view/run examples
