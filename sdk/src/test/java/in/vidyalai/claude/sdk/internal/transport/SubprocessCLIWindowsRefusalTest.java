@@ -132,6 +132,7 @@ class SubprocessCLIWindowsRefusalTest {
     @Nested
     class Refusal {
 
+        @SuppressWarnings("null")
         @Test
         void batchCliIsRefusedOnWindows() {
             pretendWindows();
@@ -160,6 +161,7 @@ class SubprocessCLIWindowsRefusalTest {
                     .doesNotThrowAnyException();
         }
 
+        @SuppressWarnings("null")
         @Test
         void connectRefusesBatchCliBeforeSpawning() {
             pretendWindows();
@@ -309,6 +311,7 @@ class SubprocessCLIWindowsRefusalTest {
                     .endsWith("claude");
         }
 
+        @SuppressWarnings("null")
         @Test
         void notFoundMessageOnWindowsRecommendsNativeExe() {
             pretendWindows();
@@ -323,6 +326,7 @@ class SubprocessCLIWindowsRefusalTest {
                     .hasMessageContaining("refuses to run");
         }
 
+        @SuppressWarnings("null")
         @Test
         void notFoundMessageOffWindowsIsUnchanged() {
             pretendLinux();
@@ -346,6 +350,7 @@ class SubprocessCLIWindowsRefusalTest {
             }
         }
 
+        @SuppressWarnings("null")
         @ParameterizedTest
         @ValueSource(strings = {"R&D notes", "a|b", "a<b", "a>b", "a^b", "%PATH%", "a!b", "a\"b",
                 "line1\nline2", "line1\rline2"})
@@ -361,6 +366,7 @@ class SubprocessCLIWindowsRefusalTest {
                     .hasMessageContaining("unsafe to pass on a Windows command line");
         }
 
+        @SuppressWarnings("null")
         @Test
         void sessionIdWithCmdMetacharactersIsRejectedOnWindows() {
             pretendWindows();

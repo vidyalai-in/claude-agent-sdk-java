@@ -1428,6 +1428,7 @@ class MessageParserTest {
         assertThat(usage.provider()).isEqualTo("bedrock");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseResultMessage_withNonObjectModelUsageEntry() {
         Map<String, Object> data = baseResultData();
@@ -1441,6 +1442,7 @@ class MessageParserTest {
         assertThat(rm.modelUsage()).containsOnlyKeys("claude-opus-4-7");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseResultMessage_withTerminalReason() {
         Map<String, Object> data = baseResultData();
@@ -1450,6 +1452,7 @@ class MessageParserTest {
         assertThat(rm.terminalReason()).isEqualTo("aborted_streaming");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseResultMessage_withMaxTurnsTerminalReason() {
         Map<String, Object> data = baseResultData();

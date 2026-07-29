@@ -119,6 +119,7 @@ class QueryHandlerInflightTaskTest {
      * Starts a handler with a hook registered (so {@code streamInput} performs
      * the bidirectional wait) and drives {@code streamInput} on its own thread.
      */
+    @SuppressWarnings("null")
     private FeedableTransport startHandlerWithHooks() {
         FeedableTransport transport = new FeedableTransport();
         transportsToClose.add(transport);
