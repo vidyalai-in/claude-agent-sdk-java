@@ -488,6 +488,25 @@ Custom path to Claude Code CLI.
 
 Default: Searches system PATH.
 
+**Windows:** a `.bat`/`.cmd` path (npm's `claude.cmd` shim) is refused — the OS would run it through `cmd.exe`, which re-parses the command line. Point this at a `claude.exe`, or see `allowUnsafeWindowsBatchCli()` below.
+
+### allowUnsafeWindowsBatchCli()
+
+Waives the Windows batch-script refusal for deployments that cannot migrate to a native `claude.exe`. Default `false`.
+
+```java
+.cliPath(Path.of("C:\\Users\\Administrator\\AppData\\Roaming\\npm\\claude.cmd"))
+.allowUnsafeWindowsBatchCli(true)
+```
+
+This is **not** a plain bypass — a bare waiver would restore the full `cmd.exe` re-parse hole. Enabling it additionally:
+
+1. **Requires `-Djdk.lang.Process.allowAmbiguousCommands=false`** on the JVM. That property defaults to `true`, under which the JDK quotes nothing but whitespace around a batch spawn; `false` makes it quote `" < > & | ^` and reject arguments containing a quote. `connect()` throws `CLIConnectionException` if the flag is missing.
+2. **Rejects `& | < > ^ % ! "` and CR/LF in every CLI argument**, throwing `IllegalArgumentException` naming the offending option. `%` and `!` are absent from the JDK's escape set and quoting does not stop `%VAR%` expansion.
+3. **Logs a `WARNING`** naming the accepted risk.
+
+**Residual risk:** cmd.exe still expands `%VAR%` from the environment. Use only where the CLI path and every argument value are administrator-controlled. Ignored on POSIX. See [Transport Layer → batch-CLI opt-in](./feature-transport-layer.md#windows-batch-cli-opt-in-0122).
+
 ### settings()
 
 Path to settings JSON file.

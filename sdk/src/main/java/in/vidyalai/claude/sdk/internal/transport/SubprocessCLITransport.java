@@ -525,6 +525,12 @@ public class SubprocessCLITransport implements Transport {
      * In practice this refuses npm's {@code claude.cmd} shim. The alternatives
      * in the error message avoid cmd.exe entirely.
      *
+     * <p>
+     * A caller who cannot migrate off the shim can opt in with
+     * {@link ClaudeAgentOptions.Builder#allowUnsafeWindowsBatchCli(boolean)},
+     * which routes through {@link #enforceWindowsBatchCliPolicy} instead of
+     * this method.
+     *
      * @param cliPath the resolved CLI path
      * @throws CLIConnectionException if the path names a batch script on Windows
      */
@@ -539,7 +545,132 @@ public class SubprocessCLITransport implements Transport {
                         + "cmd.exe exists. Use a native claude executable instead: "
                         + "install Claude Code natively "
                         + "(irm https://claude.ai/install.ps1 | iex) or point "
-                        + "ClaudeAgentOptions.cliPath(...) at a claude.exe.");
+                        + "ClaudeAgentOptions.cliPath(...) at a claude.exe. If migrating "
+                        + "is not currently possible, the risk can be accepted explicitly "
+                        + "with ClaudeAgentOptions.builder().allowUnsafeWindowsBatchCli(true) "
+                        + "— read that method's javadoc first; it also requires "
+                        + "-Djdk.lang.Process.allowAmbiguousCommands=false.");
+    }
+
+    /**
+     * The JVM switch that makes {@code ProcessImpl} guard a batch-script spawn.
+     *
+     * <p>
+     * It defaults to {@code "true"}, which selects a legacy mode whose escape
+     * set is empty — nothing but whitespace is quoted, and an embedded quote is
+     * accepted. Setting it to {@code false} selects
+     * {@code VERIFICATION_CMD_BAT} for a non-{@code .exe} target: arguments
+     * containing {@code " < > & | ^} or whitespace are quoted, and an argument
+     * carrying an embedded quote throws. That is the difference between an
+     * unguarded cmd.exe re-parse and a guarded one, so the batch-CLI opt-in
+     * insists on it.
+     */
+    private static final String ALLOW_AMBIGUOUS_COMMANDS_PROPERTY =
+            "jdk.lang.Process.allowAmbiguousCommands";
+
+    /** Set once per transport so the opt-in warning is not logged per retry. */
+    private final AtomicBoolean batchCliWarningLogged = new AtomicBoolean(false);
+
+    /**
+     * Applies the Windows batch-CLI policy: refuse by default, or admit the
+     * spawn under the conditions {@code allowUnsafeWindowsBatchCli} demands.
+     *
+     * <p>
+     * A bare opt-in would hand back the whole {@code cmd.exe} re-parse hole, so
+     * enabling it is not a plain bypass. It additionally requires
+     * {@link #ALLOW_AMBIGUOUS_COMMANDS_PROPERTY} to be {@code false} — without
+     * which the JDK quotes nothing — and leaves the caller subject to the argv
+     * sweep in {@link #rejectCmdMetacharactersInArgv}, which covers the
+     * {@code %} and {@code !} expansions the JDK's rules omit. The net effect
+     * is a narrower attack surface than simply not having the check.
+     *
+     * @param cliPath the resolved CLI path
+     * @throws CLIConnectionException if the path names a batch script and
+     *                                either the opt-in or the required JVM
+     *                                switch is absent
+     */
+    void enforceWindowsBatchCliPolicy(String cliPath) throws CLIConnectionException {
+        if (!isWindowsBatchCli(cliPath)) {
+            return;
+        }
+        if (!options.allowUnsafeWindowsBatchCli()) {
+            rejectWindowsBatchCli(cliPath);
+            return;
+        }
+        String value = System.getProperty(ALLOW_AMBIGUOUS_COMMANDS_PROPERTY);
+        if (!"false".equalsIgnoreCase(value)) {
+            throw new CLIConnectionException(
+                    "allowUnsafeWindowsBatchCli(true) was set for '" + cliPath + "', but "
+                            + ALLOW_AMBIGUOUS_COMMANDS_PROPERTY + " is "
+                            + ((value == null) ? "unset (defaults to true)" : ("'" + value + "'"))
+                            + ". In that mode the JDK quotes nothing but whitespace when "
+                            + "spawning a batch script, so cmd.exe metacharacters in an "
+                            + "argument value reach it verbatim — the opt-in would simply "
+                            + "restore the vulnerability. Start the JVM with "
+                            + "-D" + ALLOW_AMBIGUOUS_COMMANDS_PROPERTY + "=false, which "
+                            + "makes the JDK quote cmd.exe metacharacters and reject "
+                            + "arguments containing a quote.");
+        }
+        if (batchCliWarningLogged.compareAndSet(false, true)) {
+            logger.warning(
+                    "Executing Windows batch CLI '" + cliPath + "' through cmd.exe because "
+                            + "allowUnsafeWindowsBatchCli(true) was set. cmd.exe re-parses "
+                            + "the command line; %VAR% still expands from the environment. "
+                            + "The caller has accepted responsibility for the CLI path and "
+                            + "for every argument value. Prefer a native claude.exe.");
+        }
+    }
+
+    /**
+     * Sweeps every CLI argument for cmd.exe metacharacters before a batch-script
+     * spawn.
+     *
+     * <p>
+     * This is the half the JDK does not cover. With
+     * {@link #ALLOW_AMBIGUOUS_COMMANDS_PROPERTY} set to {@code false} the JDK
+     * quotes {@code " < > & | ^} and whitespace and rejects embedded quotes, but
+     * {@code %} and {@code !} are absent from its escape set and quoting does
+     * not stop {@code %VAR%} expansion: an unquoted {@code %FOO%} that expands
+     * to {@code x&calc} is re-parsed by cmd.exe. Rejecting the whole
+     * {@link #CMD_EXE_METACHARACTERS} set across the entire argv closes that
+     * argument-side vector.
+     *
+     * <p>
+     * Runs only for a batch CLI on Windows. A native executable involves no
+     * cmd.exe hop, and the narrower {@code resume}/{@code sessionId} checks in
+     * {@link #rejectWindowsCmdMetacharacters} continue to cover it.
+     *
+     * @param cliPath the resolved CLI path
+     * @param cmd     the fully built argv, including the executable at index 0
+     * @throws IllegalArgumentException if any argument carries a metacharacter
+     */
+    void rejectCmdMetacharactersInArgv(String cliPath, List<String> cmd) {
+        if (!options.allowUnsafeWindowsBatchCli() || !isWindowsBatchCli(cliPath)) {
+            return;
+        }
+        // Skip index 0: the executable path itself is not caller-supplied
+        // argument data, and isWindowsBatchCli has already classified it.
+        for (int i = 1; i < cmd.size(); i++) {
+            String arg = cmd.get(i);
+            Set<Character> bad = new TreeSet<>();
+            for (char c : arg.toCharArray()) {
+                if ((CMD_EXE_METACHARACTERS.indexOf(c) >= 0) || (c == '\r') || (c == '\n')) {
+                    bad.add(c);
+                }
+            }
+            if (!bad.isEmpty()) {
+                // Name the preceding flag when there is one; an argument value
+                // is far easier to trace back than a bare index.
+                String context = ((i > 1) && cmd.get(i - 1).startsWith("--"))
+                        ? ("the value of " + cmd.get(i - 1))
+                        : ("CLI argument " + i);
+                throw new IllegalArgumentException(
+                        "Refusing to pass " + context + " to a Windows batch CLI: it "
+                                + "contains cmd.exe metacharacters " + bad + ", which "
+                                + "cmd.exe re-parses. Remove them, or switch to a native "
+                                + "claude.exe so no cmd.exe hop is involved.");
+            }
+        }
     }
 
     /**
@@ -1256,7 +1387,9 @@ public class SubprocessCLITransport implements Transport {
         // guards the version probe below as well as the main spawn, and covers
         // every route to the executable path: PATH discovery, an explicit
         // ClaudeAgentOptions.cliPath, and the bundled-location fallbacks.
-        rejectWindowsBatchCli(cliPath);
+        // Refuses a Windows batch script unless the caller opted in, in which
+        // case it enforces the conditions that opt-in carries.
+        enforceWindowsBatchCliPolicy(cliPath);
 
         // Check version (unless skipped)
         if (System.getenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK") == null) {
@@ -1264,6 +1397,11 @@ public class SubprocessCLITransport implements Transport {
         }
 
         List<String> cmd = buildCommand();
+        // Second half of the batch-CLI opt-in: no argument may carry a cmd.exe
+        // metacharacter. Deferred to here because it needs the built argv; the
+        // version probe above spawns only a fixed "--version", so nothing
+        // caller-supplied reaches cmd.exe ahead of this check.
+        rejectCmdMetacharactersInArgv(cliPath, cmd);
         logger.fine("Launching Claude Code with: %s".formatted(String.join(" ", cmd)));
         try {
             ProcessBuilder pb = new ProcessBuilder(cmd);

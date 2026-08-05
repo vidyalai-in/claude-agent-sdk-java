@@ -71,7 +71,8 @@ options.toBuilder()
 
 ### Environment
 - `cwd(Path)` - Working directory
-- `cliPath(Path)` - Custom CLI path
+- `cliPath(Path)` - Custom CLI path (a Windows `.bat`/`.cmd` path is refused; see below)
+- `allowUnsafeWindowsBatchCli(boolean)` - Waive the Windows batch-script refusal; also requires `-Djdk.lang.Process.allowAmbiguousCommands=false` and rejects cmd.exe metacharacters in every argument (default `false`)
 - `settings(String)` - Settings file path
 - `addDirs(List<Path>)` - Additional context dirs
 - `env(Map<String, String>)` - Environment variables

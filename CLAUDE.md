@@ -108,6 +108,7 @@ mvn exec:java -Dexec.mainClass="examples.SubagentTranscriptExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SystemPromptExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolsConfigurationExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolUsage" -pl examples
+mvn exec:java -Dexec.mainClass="examples.WindowsBatchCliExample" -pl examples
 ```
 
 ## From Examples Directory
@@ -324,6 +325,7 @@ examples/src/main/java/examples/
 ├── SystemPromptExample.java        # Custom system prompt usage
 ├── IncludePartialMessagesExample.java # Streaming with partial message updates
 ├── SessionStoreExample.java        # Mirror transcripts to a custom SessionStore
+├── WindowsBatchCliExample.java     # Windows .cmd CLI opt-in (Windows-only)
 └── plugins/                        # Example plugin implementations
 ```
 

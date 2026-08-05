@@ -137,6 +137,7 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Transport interface
   - Default implementation
   - Custom transport example
+  - Windows batch-script refusal, and the explicit opt-in for npm `claude.cmd` deployments
 
 - **[Plugin System](./feature-plugin-system.md)** - Creating and using plugins
   - SdkPluginConfig

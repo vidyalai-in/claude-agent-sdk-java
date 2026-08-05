@@ -136,6 +136,11 @@ public final class ClaudeAgentOptions {
     @Nullable
     private final String user;
 
+    // Opt-in to spawning a Windows .bat/.cmd CLI, which the SDK refuses by
+    // default because cmd.exe re-parses the command line (CVE-2024-27980,
+    // "BatBadBut"). Ignored on POSIX, where there is no cmd.exe hop.
+    private final boolean allowUnsafeWindowsBatchCli;
+
     // Partial message streaming support
     private final boolean includePartialMessages;
 
@@ -257,6 +262,7 @@ public final class ClaudeAgentOptions {
         this.stderrCallback = builder.stderrCallback;
         this.hooks = ((builder.hooks != null) ? Map.copyOf(builder.hooks) : null);
         this.user = builder.user;
+        this.allowUnsafeWindowsBatchCli = builder.allowUnsafeWindowsBatchCli;
         this.includePartialMessages = builder.includePartialMessages;
         this.includeHookEvents = builder.includeHookEvents;
         this.strictMcpConfig = builder.strictMcpConfig;
@@ -331,6 +337,7 @@ public final class ClaudeAgentOptions {
         builder.stderrCallback = this.stderrCallback;
         builder.hooks = ((this.hooks != null) ? new HashMap<>(this.hooks) : null);
         builder.user = this.user;
+        builder.allowUnsafeWindowsBatchCli = this.allowUnsafeWindowsBatchCli;
         builder.includePartialMessages = this.includePartialMessages;
         builder.includeHookEvents = this.includeHookEvents;
         builder.strictMcpConfig = this.strictMcpConfig;
@@ -601,6 +608,17 @@ public final class ClaudeAgentOptions {
     @Nullable
     public String user() {
         return user;
+    }
+
+    /**
+     * Returns whether spawning a Windows {@code .bat}/{@code .cmd} CLI is
+     * permitted.
+     *
+     * @return true if the unsafe Windows batch-CLI opt-in is enabled
+     * @see Builder#allowUnsafeWindowsBatchCli(boolean)
+     */
+    public boolean allowUnsafeWindowsBatchCli() {
+        return allowUnsafeWindowsBatchCli;
     }
 
     /**
@@ -883,6 +901,7 @@ public final class ClaudeAgentOptions {
         private Map<HookEvent, List<HookMatcher>> hooks;
         @Nullable
         private String user;
+        private boolean allowUnsafeWindowsBatchCli;
         private boolean includePartialMessages;
         private boolean includeHookEvents;
         private boolean strictMcpConfig;
@@ -1316,6 +1335,61 @@ public final class ClaudeAgentOptions {
          */
         public Builder user(String user) {
             this.user = user;
+            return this;
+        }
+
+        /**
+         * Permits spawning a Windows {@code .bat}/{@code .cmd} CLI, which the
+         * SDK refuses by default. <b>This weakens a security control — read
+         * this entire note before enabling it.</b>
+         *
+         * <p>
+         * Windows has no shebang mechanism, so the OS runs a batch script by
+         * rewriting the spawn into {@code cmd.exe /c}, and cmd.exe re-parses
+         * the whole command line. On a stock JVM that re-parse is unguarded:
+         * {@code jdk.lang.Process.allowAmbiguousCommands} defaults to
+         * {@code true}, which puts {@code ProcessImpl} in a legacy mode that
+         * quotes nothing but whitespace. Metacharacters inside an argument
+         * value then reach cmd.exe verbatim and can execute injected commands
+         * before the CLI starts — the "BatBadBut" class (CVE-2024-27980).
+         *
+         * <p>
+         * Because a bare opt-in would restore that hole, enabling this does
+         * not simply skip the check. At {@code connect()} the SDK also:
+         *
+         * <ol>
+         * <li><b>Requires {@code -Djdk.lang.Process.allowAmbiguousCommands=false}.</b>
+         * That switch makes the JDK apply its {@code VERIFICATION_CMD_BAT}
+         * rules to a batch target: arguments containing
+         * {@code " < > & | ^} or whitespace are quoted, and an argument with
+         * an embedded quote is rejected outright. Without the switch,
+         * {@code connect()} throws rather than spawning unprotected.</li>
+         * <li><b>Rejects cmd.exe metacharacters in every CLI argument.</b> The
+         * JDK's rules omit {@code %} and {@code !}, and quoting does not stop
+         * {@code %VAR%} expansion, so the SDK sweeps the whole argv for
+         * {@code & | < > ^ % ! "} and CR/LF.</li>
+         * <li>Logs a {@code WARNING} naming the accepted risk.</li>
+         * </ol>
+         *
+         * <p>
+         * <b>Residual risk this cannot remove:</b> cmd.exe expands
+         * {@code %VAR%} from the environment. The argv sweep closes the
+         * argument-side vector; it cannot help if an attacker controls the
+         * environment the JVM passes to the CLI.
+         *
+         * <p>
+         * Prefer a native {@code claude.exe}
+         * ({@code irm https://claude.ai/install.ps1 | iex}). Use this only
+         * when the CLI path and every argument value are administrator
+         * controlled, and the risk has been reviewed and accepted. Ignored on
+         * POSIX, where there is no cmd.exe hop.
+         *
+         * @param allowUnsafeWindowsBatchCli true to permit a {@code .bat}/
+         *                                   {@code .cmd} CLI on Windows
+         * @return this builder
+         */
+        public Builder allowUnsafeWindowsBatchCli(boolean allowUnsafeWindowsBatchCli) {
+            this.allowUnsafeWindowsBatchCli = allowUnsafeWindowsBatchCli;
             return this;
         }
 

@@ -76,7 +76,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-**Remediation** (all avoid cmd.exe entirely): install Claude Code natively with `irm https://claude.ai/install.ps1 | iex`, or point `cliPath` at a `claude.exe`.
+**Remediation** (all avoid cmd.exe entirely): install Claude Code natively with `irm https://claude.ai/install.ps1 | iex`, or point `cliPath` at a `claude.exe`. If migrating off an npm-installed `claude.cmd` is genuinely blocked, see [the explicit opt-in](#windows-batch-cli-opt-in-0122) below.
 
 Extension matching normalizes the way Win32 does and classifies **every** path component, not just the last one:
 
@@ -133,6 +133,66 @@ ClaudeAgentOptions.builder().resume("Refactor the parser (part 2)").build();
 | `Map.of("some-flag", "value")` | `--some-flag`, `value` |
 | `Map.of("some-flag", "--evil")` | `--some-flag=--evil` |
 | `Map.of("verbose-thing", "")` | `--verbose-thing` (bare boolean flag) |
+
+### Windows: batch-CLI opt-in (0.1.22)
+
+For deployments that cannot migrate off an npm-installed `claude.cmd` — centrally managed software distribution, for instance — the refusal above can be waived explicitly:
+
+```java
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .cliPath(Path.of("C:\\Users\\Administrator\\AppData\\Roaming\\npm\\claude.cmd"))
+    .allowUnsafeWindowsBatchCli(true)
+    .build();
+```
+
+The default is `false`; nothing about the refusal changes for callers who don't set it.
+
+#### Why this is not a plain bypass
+
+The obvious implementation — skip the check when the flag is set — would hand back the entire cmd.exe re-parse hole. The relevant detail is in the JDK itself:
+
+```java
+// OpenJDK, src/java.base/windows/classes/java/lang/ProcessImpl.java
+final String value = System.getProperty("jdk.lang.Process.allowAmbiguousCommands", "true");
+final boolean allowAmbiguousCommands = !"false".equalsIgnoreCase(value);
+if (allowAmbiguousCommands) {
+    cmdstr = createCommandLine(VERIFICATION_LEGACY, executablePath, cmd);  // escape set: ""
+```
+
+The property defaults to `"true"`, selecting a legacy mode whose escape set is **empty** — nothing but whitespace is quoted and embedded quotes are accepted. **On a stock JVM, Java is exposed to this vulnerability class exactly as Node.js was**; the refusal is not merely inherited reasoning from another ecosystem.
+
+Set the property to `false` and a non-`.exe` target instead selects `VERIFICATION_CMD_BAT`, whose escape set is `"<>&|^`: arguments containing those or whitespace get quoted, and an argument carrying an embedded quote throws outright.
+
+So the opt-in requires that mode, and adds the piece the JDK omits:
+
+1. **`-Djdk.lang.Process.allowAmbiguousCommands=false` is mandatory.** `connect()` throws `CLIConnectionException` if the property is anything other than `false` — matching the JDK's own `!"false".equalsIgnoreCase(value)` reading rather than inventing a separate notion of truthiness. The message names the flag to add.
+2. **Every CLI argument is swept** for `& | < > ^ % ! "` and CR/LF, throwing `IllegalArgumentException` that names the offending option. `%` and `!` are absent from the JDK's escape set, and quoting does *not* stop `%VAR%` expansion — an unquoted `%FOO%` expanding to `x&calc` is re-parsed. This closes that argument-side vector. The executable path at argv[0] is not swept: it is not caller-supplied argument data and has already been classified.
+3. **A `WARNING` is logged once per transport**, naming the path and the accepted risk.
+
+The result is a *narrower* attack surface than simply not having the check.
+
+```java
+// JVM started without the flag:
+// CLIConnectionException: allowUnsafeWindowsBatchCli(true) was set for '...claude.cmd',
+//   but jdk.lang.Process.allowAmbiguousCommands is unset (defaults to true). ...
+
+// With the flag, but a hostile argument value:
+ClaudeAgentOptions.builder()
+    .cliPath(Path.of("C:\\...\\claude.cmd"))
+    .allowUnsafeWindowsBatchCli(true)
+    .resume("%USERPROFILE%")
+    .build();
+// IllegalArgumentException: Refusing to pass the value of --resume to a Windows
+//   batch CLI: it contains cmd.exe metacharacters [%], which cmd.exe re-parses.
+```
+
+#### Residual risk
+
+cmd.exe expands `%VAR%` from the **environment**. The argv sweep closes the argument-side vector; it cannot help if an attacker controls the environment the JVM passes to the CLI. Use the opt-in only where the CLI path and every argument value are administrator-controlled, and treat it as a migration bridge rather than a destination.
+
+POSIX is unaffected throughout — there is no cmd.exe hop, so a `.cmd` file is an ordinary filename and neither the refusal nor the opt-in's conditions apply.
+
+See [`examples/WindowsBatchCliExample.java`](../examples/src/main/java/examples/WindowsBatchCliExample.java).
 
 ### Skill-name `--allowedTools` injection (0.1.22)
 
