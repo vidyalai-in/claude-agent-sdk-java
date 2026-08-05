@@ -215,10 +215,12 @@
                             <!-- Matches the <server> id in settings.xml holding
                                  the Central Portal user token. -->
                             <publishingServerId>central</publishingServerId>
-                            <!-- Upload and validate, but leave the final release
-                                 as a manual click in the Portal UI. Flip to true
-                                 once the process is proven. -->
-                            <autoPublish>false</autoPublish>
+                            <!-- Upload, validate, and release automatically - no
+                                 manual click in the Portal UI. The build blocks
+                                 until validation passes, so a rejected bundle
+                                 fails the deploy before anything is released;
+                                 once validated, the Portal publishes on its own. -->
+                            <autoPublish>true</autoPublish>
                             <waitUntil>validated</waitUntil>
                         </configuration>
                     </plugin>

@@ -519,13 +519,12 @@ active only in the `central` profile) and a Central Portal user token in
 
 4. **Monitor workflow execution** in the Actions tab
 
-5. **Release the Central deployment:**
-   - Go to: https://central.sonatype.com/publishing/deployments
-   - The deployment sits in `VALIDATED` state — click **Publish**
-   - (Set `<autoPublish>true</autoPublish>` in the `central` profile to skip
-     this click once the process is proven)
-   - Artifacts reach `repo1.maven.org` in ~10-30 minutes, search indexing lags
-     a few hours
+5. **Central releases itself:** `<autoPublish>true</autoPublish>` is set in the
+   `central` profile, so no click is needed in the Portal UI. The deploy blocks
+   until the bundle reaches `VALIDATED`; if validation fails the build fails and
+   nothing is released (retry the same version). Track progress at
+   https://central.sonatype.com/publishing/deployments — artifacts reach
+   `repo1.maven.org` in ~10-30 minutes, search indexing lags a few hours
 
 6. **Verify publication:**
    - Maven Central: https://central.sonatype.com/artifact/in.vidyalai/claude-agent-sdk-java
@@ -574,7 +573,7 @@ active only in the `central` profile) and a Central Portal user token in
 
 3. **Deploy, Central first:**
    ```bash
-   mvn clean deploy -Pcentral -DskipTests    # then click Publish in the Portal
+   mvn clean deploy -Pcentral -DskipTests    # validates, then auto-releases
    mvn deploy -Pgithub -DskipTests -pl sdk
    ```
 
