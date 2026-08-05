@@ -134,6 +134,24 @@ ClaudeAgentOptions.builder().resume("Refactor the parser (part 2)").build();
 | `Map.of("some-flag", "--evil")` | `--some-flag=--evil` |
 | `Map.of("verbose-thing", "")` | `--verbose-thing` (bare boolean flag) |
 
+### Skill-name `--allowedTools` injection (0.1.22)
+
+The three hardening entries above concern *argv* boundaries — one argument per option, no shell involved. This one is different: it is an injection **inside a single argument's value**.
+
+`applySkillsDefaults()` formats each `ClaudeAgentOptions.skills(List)` entry into `Skill(<name>)` and joins the result into the one `--allowedTools` string. The CLI then splits that string back into permission rules on commas and spaces outside parentheses, and **that tokenizer honors no escape sequences** — escaping exists only in the per-rule grammar, which is applied after splitting. A name carrying a delimiter therefore cannot be passed through reliably; what it tokenizes into depends on what surrounds it.
+
+```java
+// Before 0.1.22:  --allowedTools "Skill(x),Bash(*)"
+//                                          ^^^^^^^ an extra rule, never requested
+ClaudeAgentOptions.builder().skills(List.of("x),Bash(*")).build();
+```
+
+`validateSkillName()` now runs on every entry before formatting, so the rejection surfaces from `buildCommand()` — at `connect()`, before the subprocess is spawned. It rejects parentheses, commas, control characters (C0, DEL, C1), byte-order marks, empty names, a literal `*`, and wildcard suffixes; and, so a dead rule cannot silently grant nothing, also surrounding whitespace, a leading `/`, consecutive backslashes, a trailing unpaired backslash, and lone surrogates. Ordinary names — plugin-qualified, interior spaces, single backslashes, non-ASCII — build exactly the argv they did before.
+
+`rejectNonListSkills()` guards the value shape itself. The builder's `skills(List)` / `skillsAll()` pair already makes a bare string or non-list iterable unreachable — Java's type system does here what the Python SDK enforces at runtime — but the check is kept so a raw-typed or reflective caller fails closed rather than silently installing no skill filter at all.
+
+Full rejection table, accepted-name list, and the two deliberate divergences from the Python SDK (lone-vs-any surrogates, non-breaking-space stripping): see [Skills → Name Validation](./feature-skills.md#name-validation-0122).
+
 ## Custom Transport
 
 Implement `Transport` interface for custom communication:

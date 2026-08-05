@@ -89,7 +89,7 @@ options.toBuilder()
 - `includePartialMessages(boolean)` - Enable streaming
 - `agents(Map<String, AgentDefinition>)` - Custom agents
 - `settingSources(List<SettingSource>)` - Settings sources (empty list disables all sources via `--setting-sources=`; omitted keeps CLI defaults)
-- `skills(List<String>)` - Skills allowlist (auto-injects `Skill(name)` into `allowedTools` and defaults `settingSources` to user/project)
+- `skills(List<String>)` - Skills allowlist (auto-injects `Skill(name)` into `allowedTools` and defaults `settingSources` to user/project). Names must be exact — wildcards, rule delimiters, and surrounding whitespace throw `IllegalArgumentException` at `connect()`
 - `skillsAll()` - Enable every discovered skill (auto-injects bare `Skill` tool)
 - `sandbox(SandboxSettings)` - Sandbox config
 - `plugins(List<SdkPluginConfig>)` - Plugin configs

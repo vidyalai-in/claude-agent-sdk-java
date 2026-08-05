@@ -682,6 +682,7 @@ Behavior details:
 - **Idempotent injection** — if `allowedTools` already contains `Skill` or `Skill(name)`, the SDK does not duplicate it.
 - **Non-mutating** — applying skills defaults builds a new list; the original `ClaudeAgentOptions` is never modified.
 - **Explicit `settingSources` wins** — if you set `.settingSources(...)` alongside `.skills(...)`, your value is preserved.
+- **Names are validated** (0.1.22) — each listed name must be the skill's SKILL.md `name` / directory name, or `plugin:skill`. Rule delimiters (parentheses, commas), control characters, wildcards (`"*"`, `"pdf:*"`), a leading `/`, and surrounding whitespace throw `IllegalArgumentException` at `connect()`. **Breaking:** `skills(List.of("*"))` and `skills(List.of("plugin:*"))` previously built a wildcard rule and now throw — use `.skillsAll()`. See [Skills → Name Validation](./feature-skills.md#name-validation-0122).
 - **Context filter, not a sandbox** — unlisted skills are hidden from the model's listing and cannot be invoked via the `Skill` tool, but their files remain on disk; a session with `Read`/`Bash` can still access `.claude/skills/**` directly.
 
 ### sandbox()

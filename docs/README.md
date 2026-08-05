@@ -100,6 +100,7 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Auto-injects `Skill(name)` into `allowedTools` and defaults `settingSources`
   - Wire-protocol propagation via initialize control request
   - Idempotent injection; explicit settings always win
+  - Skill-name validation — blocks `--allowedTools` rule injection, rejects names that can never match
 
 - **[W3C Trace Context Propagation](./feature-trace-context.md)** - Distributed tracing across SDK and CLI
   - Best-effort `TRACEPARENT`/`TRACESTATE` injection into the CLI subprocess
