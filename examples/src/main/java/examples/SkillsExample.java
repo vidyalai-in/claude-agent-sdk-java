@@ -31,6 +31,16 @@ import in.vidyalai.claude.sdk.types.message.TextBlock;
  * </ul>
  *
  * <p>
+ * Listed names must be exact — the skill's SKILL.md {@code name} / directory
+ * name, or {@code plugin:skill} when it comes from a plugin. Wildcards
+ * ({@code "*"}, {@code "myplugin:*"}), rule delimiters, and surrounding
+ * whitespace throw {@link IllegalArgumentException} when the session connects,
+ * because such names either inject extra permission rules into the CLI's
+ * {@code --allowedTools} value or build a rule that can never match. Use
+ * {@code .skillsAll()} instead of a wildcard.
+ * </p>
+ *
+ * <p>
  * <b>Note:</b> The {@code skills} option is a context filter, not a sandbox.
  * Unlisted skills are hidden from the model's listing and cannot be invoked via
  * the {@code Skill} tool, but their files remain on disk — a session with

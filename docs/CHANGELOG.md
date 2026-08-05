@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.22] - 2026-08-05
+
+### Security
+- **Validate skill names before they reach `--allowedTools`** (Python SDK v0.2.129, PR #1145): names passed to `ClaudeAgentOptions.builder().skills(List)` were formatted into the CLI's `--allowedTools` value unchecked. The CLI splits that value into permission rules on commas and spaces outside parentheses, and its tokenizer honors no escape sequences — escaping exists only in the per-rule grammar, applied *after* splitting — so a name carrying a delimiter cannot be passed through reliably: what it tokenizes into depends on what surrounds it. `skills(List.of("x),Bash(*"))` emitted `Skill(x),Bash(*)`, granting the session unrestricted `Bash`. `applySkillsDefaults()` now validates each name before formatting it, so the rejection surfaces at `connect()` before the CLI is spawned. Rejected with `IllegalArgumentException`: parentheses, commas, control characters (C0, DEL, C1), byte-order marks, and empty or whitespace-only names. Ordinary names are unaffected — plugin-qualified (`myplugin:pdf`), interior spaces, single backslashes, and non-ASCII all still build the same argv as before.
+
+### Changed
+- **Skill names that could never match are now rejected instead of silently ignored** (same PR). **Breaking:** `skills(List.of("*"))` and `skills(List.of("plugin:*"))` throw — use `.skillsAll()` to enable every skill, or add a `Skill(...)` entry to `allowedTools` directly for prefix matching. A leading `/` (`"/commit"` — the slash-command form rather than the canonical name), surrounding whitespace (the Skill tool trims the invoked name before matching), consecutive backslashes (the per-rule parser collapses them, so the rule would name a different skill), and a trailing unpaired backslash now throw as well. Each previously built a well-formed rule that matched nothing, leaving the skill quietly unavailable.
+- Two checks diverge from the Python SDK, deliberately. **Surrogates:** Python rejects every surrogate code point — sound there, since a `str` holds code points and an astral character is one non-surrogate item, so any surrogate present is unpaired by construction. Java strings are UTF-16, where an astral character *is* a high/low pair, so that rule would reject ordinary names like `"𝕤kill"`; only lone surrogates are rejected here. **Whitespace:** `String.strip()` follows `Character.isWhitespace`, which leaves the non-breaking spaces (U+00A0, U+2007, U+202F) that Python's `str.strip()` removes, so the padding check unions it with `Character.isSpaceChar`. U+FEFF stays out of both and is rejected as an invalid character, exactly as in Python.
+- Python's `_reject_non_list_skills` guard is ported as `rejectNonListSkills` even though Java's builder (`skills(List)` / `skillsAll()`) already makes a bare string or non-list iterable unreachable — a raw-typed or reflective caller now fails closed rather than silently installing no skill filter.
+
+### Notes
+- Python SDK v0.2.130 is a bundled-CLI version bump only (2.1.222). The Java SDK resolves the CLI from `PATH` rather than bundling it, so there is nothing to track.
+
+[0.1.22]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.22
+
 ## [0.1.21] - 2026-07-29
 
 ### Security

@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 import org.jspecify.annotations.Nullable;
 
@@ -189,6 +190,23 @@ public class SubprocessCLITransport implements Transport {
      * {@link #rejectWindowsCmdMetacharacters}.
      */
     private static final String CMD_EXE_METACHARACTERS = "&|<>^%!\"";
+
+    /**
+     * Characters that may never appear in a skill name. Parentheses and commas
+     * are delimiters to the {@code --allowedTools} tokenizer; control characters
+     * (C0, DEL, C1) never appear in a skill directory name. U+FEFF is here
+     * rather than in the surrounding-whitespace check because the CLI trims it
+     * as whitespace while {@link Character#isWhitespace} does not. See
+     * {@link #validateSkillName}.
+     */
+    private static final Pattern SKILL_NAME_INVALID_CHARS =
+            Pattern.compile("[(),\\x00-\\x1f\\x7f-\\x9f\\ufeff]");
+
+    /**
+     * The {@code skills} value meaning "every discovered skill". Mirrors the
+     * Python SDK's {@code _SKILLS_ALL}.
+     */
+    private static final String SKILLS_ALL = "all";
 
     // Track live CLI subprocesses so we can terminate them when the parent
     // JVM exits. Mirrors the Python SDK's atexit handler and the TypeScript
@@ -739,6 +757,171 @@ public class SubprocessCLITransport implements Transport {
     }
 
     /**
+     * Rejects {@code skills} values that are neither a list nor {@code "all"}.
+     *
+     * <p>
+     * The builder's {@code skills(List)} / {@code skillsAll()} pair makes this
+     * unreachable through the public API — Java's type system does here what
+     * the Python SDK's {@code _reject_non_list_skills} does at runtime, where a
+     * bare string iterates as characters and any other iterable builds rules
+     * that are then dropped from the initialize request, installing no skill
+     * filter at all. The check is kept so a raw-typed or reflective caller gets
+     * the same fail-closed behavior rather than a silent no-op.
+     *
+     * @param skills the caller-supplied value
+     * @throws IllegalArgumentException if the value is not a list or
+     *                                  {@code "all"}
+     */
+    static void rejectNonListSkills(Object skills) {
+        if ((skills instanceof List<?>) || SKILLS_ALL.equals(skills)) {
+            return;
+        }
+        // Mirrors the Python SDK's `Did you mean [...]?` hint, rendered as the
+        // Java call the caller should have written.
+        String suggestion = (skills instanceof String s)
+                ? (" Did you mean List.of(\"" + s + "\")?")
+                : "";
+        throw new IllegalArgumentException(
+                "ClaudeAgentOptions.skills must be a list of skill names or \"all\", got "
+                        + describeSkillValue(skills) + "." + suggestion);
+    }
+
+    /**
+     * Rejects skill names that cannot ride safely in a {@code Skill(name)} rule.
+     *
+     * <p>
+     * Names from {@code options.skills()} are formatted into the
+     * {@code --allowedTools} value, which the CLI splits into rules on commas
+     * and spaces outside parentheses. That tokenizer honors no escape sequences
+     * — escaping exists only in the per-rule grammar, applied after splitting —
+     * so a name carrying a delimiter cannot be passed through reliably: what it
+     * tokenizes into depends on what surrounds it. A crafted name could
+     * otherwise close its own rule and append others, e.g.
+     * {@code "x),Bash(*"} yielding {@code Skill(x),Bash(*)}.
+     *
+     * <p>
+     * Names that tokenize cleanly but can never match the listed skill are
+     * rejected too, so a dead rule fails loudly here instead of silently
+     * granting nothing. Each check below states its own reason.
+     *
+     * @param name the caller-supplied skill name
+     * @throws IllegalArgumentException if the name is unusable
+     */
+    static void validateSkillName(@Nullable Object name) {
+        if (!(name instanceof String skillName)) {
+            throw new IllegalArgumentException(
+                    "Skill names must be strings, got " + describeSkillValue(name));
+        }
+        if (skillNameStrip(skillName).isEmpty()) {
+            throw new IllegalArgumentException("Skill names must be non-empty strings");
+        }
+        if (hasUnpairedSurrogate(skillName)) {
+            throw new IllegalArgumentException(
+                    "Invalid skill name '" + skillName + "': contains an unpaired surrogate"
+                            + " code point, which can never match a skill the CLI discovered.");
+        }
+        if (!skillName.equals(skillNameStrip(skillName))) {
+            throw new IllegalArgumentException(
+                    "Invalid skill name '" + skillName + "': leading or trailing whitespace"
+                            + " can never match — the Skill tool trims the invoked name.");
+        }
+        if (SKILL_NAME_INVALID_CHARS.matcher(skillName).find()) {
+            throw new IllegalArgumentException(
+                    "Invalid skill name '" + skillName + "': parentheses, commas, control"
+                            + " characters, and byte-order marks are not allowed. Names match"
+                            + " the skill's directory name, or 'plugin:skill' for"
+                            + " plugin-qualified skills.");
+        }
+        if ("*".equals(skillName)) {
+            throw new IllegalArgumentException(
+                    "Invalid skill name '*': use skillsAll() to enable every skill.");
+        }
+        if (skillName.endsWith(":*") || skillName.endsWith(" *")) {
+            throw new IllegalArgumentException(
+                    "Invalid skill name '" + skillName + "': wildcard-suffix names are not"
+                            + " allowed; list each skill by its exact name.");
+        }
+        if (skillName.startsWith("/")) {
+            throw new IllegalArgumentException(
+                    "Invalid skill name '" + skillName + "': skill names may not start with"
+                            + " '/'. The skills option takes the canonical name, not the"
+                            + " slash-command form.");
+        }
+        if (skillName.contains("\\\\")) {
+            throw new IllegalArgumentException(
+                    "Invalid skill name '" + skillName + "': consecutive backslashes are not"
+                            + " allowed — the per-rule parser collapses them, so the rule"
+                            + " would name a different skill.");
+        }
+        if (skillName.endsWith("\\")) {
+            throw new IllegalArgumentException(
+                    "Invalid skill name '" + skillName + "': names may not end with an"
+                            + " unpaired backslash.");
+        }
+    }
+
+    /**
+     * Strips the characters the CLI treats as surrounding whitespace.
+     *
+     * <p>
+     * {@link String#strip()} alone is not enough: it follows
+     * {@link Character#isWhitespace}, which excludes the non-breaking spaces
+     * (U+00A0, U+2007, U+202F) that Python's {@code str.strip()} does remove.
+     * {@link Character#isSpaceChar} covers those, so the union matches the
+     * Python SDK's notion of a padded name. U+FEFF is deliberately not included
+     * — like Python, this SDK rejects it through
+     * {@link #SKILL_NAME_INVALID_CHARS} instead.
+     */
+    private static String skillNameStrip(String name) {
+        int start = 0;
+        int end = name.length();
+        while ((start < end) && isSkillNamePad(name.charAt(start))) {
+            start++;
+        }
+        while ((end > start) && isSkillNamePad(name.charAt(end - 1))) {
+            end--;
+        }
+        return name.substring(start, end);
+    }
+
+    private static boolean isSkillNamePad(char c) {
+        return Character.isWhitespace(c) || Character.isSpaceChar(c);
+    }
+
+    /**
+     * Reports whether the name contains a surrogate that is not part of a
+     * well-formed pair.
+     *
+     * <p>
+     * This diverges from the Python SDK, which rejects <em>every</em> surrogate
+     * code point: a Python {@code str} holds code points, so an astral
+     * character is one non-surrogate item and any surrogate present is
+     * necessarily unpaired. Java strings are UTF-16, where astral characters are
+     * legitimately stored as a high/low pair, so the Python rule would reject
+     * ordinary names like {@code "𝕤kill"}. Only lone surrogates — which no
+     * CLI-discovered name can contain — are rejected here.
+     */
+    private static boolean hasUnpairedSurrogate(String name) {
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (Character.isHighSurrogate(c)) {
+                if ((i + 1 >= name.length()) || !Character.isLowSurrogate(name.charAt(i + 1))) {
+                    return true;
+                }
+                i++;
+            } else if (Character.isLowSurrogate(c)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Renders a rejected value for an error message, quoting strings. */
+    private static String describeSkillValue(@Nullable Object value) {
+        return (value instanceof String s) ? ("'" + s + "'") : String.valueOf(value);
+    }
+
+    /**
      * Computes the effective allowedTools and settingSources after applying
      * the {@code skills} option. When {@code skills} is {@code "all"},
      * injects the bare {@code Skill} tool; when it is a list, injects
@@ -747,7 +930,14 @@ public class SubprocessCLITransport implements Transport {
      * so the CLI discovers installed skills without the caller having to
      * wire up both options manually. {@code null} is a no-op.
      *
+     * <p>Each listed skill name is validated before being formatted into a
+     * rule; see {@link #validateSkillName}.
+     *
      * <p>Does not mutate the original options.
+     *
+     * @throws IllegalArgumentException if {@code skills} is neither a list nor
+     *                                  {@code "all"}, or if any listed name is
+     *                                  unusable
      */
     SkillsDefaultsResult applySkillsDefaults() {
         List<String> allowedTools = new ArrayList<>(options.allowedTools());
@@ -759,13 +949,15 @@ public class SubprocessCLITransport implements Transport {
         if (skills == null) {
             return new SkillsDefaultsResult(allowedTools, settingSources);
         }
+        rejectNonListSkills(skills);
 
-        if ("all".equals(skills)) {
+        if (SKILLS_ALL.equals(skills)) {
             if (!allowedTools.contains("Skill")) {
                 allowedTools.add("Skill");
             }
         } else if (skills instanceof List<?> skillList) {
             for (Object name : skillList) {
+                validateSkillName(name);
                 String pattern = "Skill(" + name + ")";
                 if (!allowedTools.contains(pattern)) {
                     allowedTools.add(pattern);

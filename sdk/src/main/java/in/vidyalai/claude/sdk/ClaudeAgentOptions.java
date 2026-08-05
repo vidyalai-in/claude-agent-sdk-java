@@ -165,7 +165,9 @@ public final class ClaudeAgentOptions {
     //     defaults still apply, so this is **not** "skills off" — to
     //     suppress every skill from the listing, use an empty list.
     //   * ``"all"``: enable every discovered skill.
-    //   * ``[name, ...]``: enable only the listed skills.
+    //   * ``[name, ...]``: enable only the listed skills. Names must be
+    //     exact: wildcards, rule delimiters, and surrounding whitespace
+    //     throw at connect().
     //
     // <p><b>Note:</b> This is a context filter, not a sandbox. Unlisted
     // skills are hidden from the model's listing and cannot be invoked
@@ -1387,6 +1389,12 @@ public final class ClaudeAgentOptions {
          * <p>When set, the SDK auto-injects {@code Skill(name)} entries into
          * {@code allowedTools} and defaults {@code settingSources} to user/project
          * so the CLI discovers installed skills without extra wiring.
+         *
+         * <p>Names match the skill's SKILL.md {@code name} / directory name, or
+         * {@code plugin:skill} for plugin-qualified skills, and must be exact:
+         * wildcards ({@code "*"}, {@code "pdf:*"}), rule delimiters, a leading
+         * {@code /}, and surrounding whitespace all throw
+         * {@link IllegalArgumentException} when the session connects.
          *
          * @param skills list of skill names (empty list disables all skills)
          * @return this builder
