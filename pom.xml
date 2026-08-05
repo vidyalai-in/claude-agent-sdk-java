@@ -36,7 +36,7 @@
 
     <properties>
         <!-- CI Friendly Versions - Define version once here -->
-        <revision>0.1.22-SNAPSHOT</revision>
+        <revision>0.1.22</revision>
 
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
