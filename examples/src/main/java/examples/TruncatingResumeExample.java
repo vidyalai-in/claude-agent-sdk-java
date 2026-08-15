@@ -1,6 +1,8 @@
 package examples;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
 
@@ -127,8 +129,10 @@ public class TruncatingResumeExample {
                 .resumeDropsTurn(UUID.randomUUID().toString())
                 .build();
         try {
-            for (Message ignored : ClaudeSDK.query(TURN_3, refusedOptions)) {
-                // Drain; the refusal surfaces as an exception.
+            // Drain; the refusal surfaces as an exception.
+            Iterator<Message> refused = ClaudeSDK.query(TURN_3, refusedOptions).iterator();
+            while (refused.hasNext()) {
+                refused.next();
             }
             System.out.println("Unexpected: the mismatched fork was accepted.");
         } catch (ClaudeSDKException e) {
@@ -153,11 +157,14 @@ public class TruncatingResumeExample {
 
     /** The string prompts of a session, in transcript order. */
     private static List<String> prompts(String sessionId, Path cwd) {
-        return ClaudeSDK.getSessionMessages(sessionId, cwd).stream()
-                .filter(m -> "user".equals(m.type()))
-                .map(TruncatingResumeExample::promptText)
-                .filter(java.util.Objects::nonNull)
-                .toList();
+        List<String> texts = new ArrayList<>();
+        for (SessionMessage entry : ClaudeSDK.getSessionMessages(sessionId, cwd)) {
+            String text = "user".equals(entry.type()) ? promptText(entry) : null;
+            if (text != null) {
+                texts.add(text);
+            }
+        }
+        return texts;
     }
 
     /** UUID of the first user prompt following {@code afterUuid} in the transcript. */

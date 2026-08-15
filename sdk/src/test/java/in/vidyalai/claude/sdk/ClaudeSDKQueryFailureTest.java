@@ -48,8 +48,8 @@ class ClaudeSDKQueryFailureTest {
     void errorResult_carriesCollectedMessagesOnTheException() {
         try (ScriptedTransport transport = new ScriptedTransport("error_max_budget_usd")) {
             QueryFailedException failure = catchThrowableOfType(
-                    () -> ClaudeSDK.query("hi", ClaudeAgentOptions.defaults(), transport),
-                    QueryFailedException.class);
+                    QueryFailedException.class,
+                    () -> ClaudeSDK.query("hi", ClaudeAgentOptions.defaults(), transport));
 
             assertThat(failure).as("collecting query must surface the error").isNotNull();
             assertThat(failure.getMessage()).isEqualTo(ERROR_TEXT);
@@ -71,12 +71,13 @@ class ClaudeSDKQueryFailureTest {
         }
     }
 
+    @SuppressWarnings("null")
     @Test
     void partialMessagesAreUnmodifiable() {
         try (ScriptedTransport transport = new ScriptedTransport("error_max_turns")) {
             QueryFailedException failure = catchThrowableOfType(
-                    () -> ClaudeSDK.query("hi", ClaudeAgentOptions.defaults(), transport),
-                    QueryFailedException.class);
+                    QueryFailedException.class,
+                    () -> ClaudeSDK.query("hi", ClaudeAgentOptions.defaults(), transport));
 
             assertThat(failure).isNotNull();
             assertThatThrownBy(() -> failure.partialMessages().clear())
@@ -126,7 +127,7 @@ class ClaudeSDKQueryFailureTest {
                 return;
             }
             try {
-                @SuppressWarnings("unchecked")
+                @SuppressWarnings({"unchecked", "null"})
                 Map<String, Object> frame = mapper.readValue(data, Map.class);
                 @SuppressWarnings("unchecked")
                 Map<String, Object> request = (Map<String, Object>) frame.get("request");

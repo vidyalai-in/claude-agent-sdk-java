@@ -685,6 +685,7 @@ class StreamingClientTest {
      * Reads the {@code message.content} of every user frame the client wrote,
      * in write order.
      */
+    @SuppressWarnings("null")
     private static List<String> writtenPrompts(MockTransport transport) {
         ObjectMapper mapper = new ObjectMapper();
         List<String> prompts = new ArrayList<>();
@@ -705,6 +706,7 @@ class StreamingClientTest {
         return Map.of("type", "user", "message", Map.of("role", "user", "content", content));
     }
 
+    @SuppressWarnings("null")
     @Test
     void queryWithIterator_doesNotCloseStdin_soItCanBeCalledAgain() {
         // Regression: this used to hand the iterator to QueryHandler.streamInput,
@@ -730,6 +732,7 @@ class StreamingClientTest {
         }
     }
 
+    @SuppressWarnings("null")
     @Test
     void queryWithIterator_defaultsSessionIdWithoutMutatingCallerMaps() {
         MockTransport mockTransport = createMockTransport();

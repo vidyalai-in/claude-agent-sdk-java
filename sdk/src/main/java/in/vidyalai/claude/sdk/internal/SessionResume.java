@@ -403,6 +403,7 @@ public final class SessionResume {
      * doesn't parse as a JSON object, is returned untouched so the subprocess
      * sees exactly what the CLI would have read.
      */
+    @SuppressWarnings("null")
     static byte[] stripSettingsForResume(byte[] content) {
         Map<String, Object> parsed;
         try {
@@ -507,6 +508,7 @@ public final class SessionResume {
      * config dir, so an unreadable one must not abort — or, for a FIFO, hang —
      * the resume.
      */
+    @SuppressWarnings("null")
     private static byte @Nullable [] readIfPresent(Path src) {
         try {
             if (!Files.readAttributes(src, BasicFileAttributes.class).isRegularFile()) {

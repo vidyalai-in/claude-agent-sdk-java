@@ -298,6 +298,7 @@ class QueryHandlerErrorResultReplacementTest {
                 .hasMessage("Claude Code returned an error result: oops");
     }
 
+    @SuppressWarnings("null")
     @Test
     void pendingInitializeGetsResultErrorText() {
         // An error result emitted during CLI startup (e.g. a resume refused by

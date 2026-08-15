@@ -1552,6 +1552,7 @@ class MessageParserTest {
         assertThat(reset.type()).isEqualTo("conversation_reset");
     }
 
+    @SuppressWarnings("null")
     @Test
     void parseConversationReset_missingFieldRaises() {
         Map<String, Object> data = Map.of(

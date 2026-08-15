@@ -255,7 +255,6 @@ class SessionResumeTest {
         return result;
     }
 
-    @SuppressWarnings("null")
     @Test
     void userSettingsAreSeededIntoTempConfigDir(@TempDir Path configDir) throws IOException {
         // settings.json (apiKeyHelper etc.) and cowork_settings.json are seeded
@@ -279,7 +278,6 @@ class SessionResumeTest {
         }
     }
 
-    @SuppressWarnings("null")
     @Test
     void absentUserSettingsWriteNothing(@TempDir Path configDir) throws IOException {
         MaterializedResume result = materializeWithConfigDir(configDir);
@@ -328,7 +326,6 @@ class SessionResumeTest {
         }
     }
 
-    @SuppressWarnings("null")
     @Test
     void malformedUserSettingsAreCopiedThrough(@TempDir Path configDir) throws IOException {
         // Valid JSON but not an object, and an object whose `env` is not an
@@ -349,7 +346,6 @@ class SessionResumeTest {
         }
     }
 
-    @SuppressWarnings("null")
     @Test
     void overflowFloatInSettingsFallsBackToOriginalBytes(@TempDir Path configDir) throws IOException {
         // `1e999` is valid JSON that parses to infinity; re-serializing after a
@@ -366,7 +362,6 @@ class SessionResumeTest {
         }
     }
 
-    @SuppressWarnings("null")
     @Test
     void unreadableSeedFilesDoNotAbortResume(@TempDir Path configDir) throws IOException {
         // A directory where a file is expected must be skipped, not fatal.
@@ -409,7 +404,6 @@ class SessionResumeTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void userSettingsComeFromTheConfiguredConfigDir(@TempDir Path configDir,
             @TempDir Path decoyDir) throws IOException {
@@ -428,7 +422,6 @@ class SessionResumeTest {
         }
     }
 
-    @SuppressWarnings("null")
     @Test
     void nonUtf8SettingsAreCopiedThroughByteForByte(@TempDir Path configDir) throws IOException {
         // Invalid UTF-8 must be passed through untouched rather than rewritten
@@ -465,6 +458,7 @@ class SessionResumeTest {
         return joined;
     }
 
+    @SuppressWarnings("null")
     @Test
     void seededFilesAreOwnerReadableOnlyInAnOwnerOnlyDir(@TempDir Path configDir)
             throws IOException {

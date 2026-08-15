@@ -469,6 +469,7 @@ public class ClaudeSDKClient implements AutoCloseable {
      * @throws CLIConnectionException if not connected or a write fails
      * @throws IllegalStateException  if client is closed
      */
+    @SuppressWarnings("null")
     public void query(Iterator<Map<String, Object>> messageStream, String sessionId)
             throws CLIConnectionException {
         ensureConnected();

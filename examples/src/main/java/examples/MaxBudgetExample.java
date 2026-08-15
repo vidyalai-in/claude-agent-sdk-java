@@ -128,8 +128,9 @@ public class MaxBudgetExample {
 
             ResultMessage result = e.resultMessage();
             if ((result != null) && "error_max_budget_usd".equals(result.subtype())) {
+                Double spent = result.totalCostUsd();
                 System.out.printf("Stopped by the budget cap after spending $%.4f%n",
-                        (result.totalCostUsd() != null) ? result.totalCostUsd() : 0.0);
+                        (spent != null) ? spent : 0.0);
                 System.out.println("Note: the cost may exceed the budget by up to one API call's");
                 System.out.println("worth, because the check runs after each call completes.");
             } else {
