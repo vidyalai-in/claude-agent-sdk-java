@@ -1,9 +1,12 @@
 package in.vidyalai.claude.sdk.internal;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
@@ -17,6 +20,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
+import java.util.function.UnaryOperator;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 
@@ -328,6 +332,22 @@ public final class SessionResume {
         }
     }
 
+    /**
+     * Seed {@code tmpBase} with the caller's auth and user config:
+     * {@code .credentials.json} (refreshToken redacted), {@code .claude.json},
+     * and user {@code settings.json} / {@code cowork_settings.json} (plugin
+     * declarations stripped).
+     *
+     * <p>Source resolution mirrors the CLI:
+     * <ul>
+     * <li>{@code .credentials.json}, {@code settings.json} and
+     * {@code cowork_settings.json} live under the config dir (default
+     * {@code ~/.claude/})</li>
+     * <li>{@code .claude.json} lives at {@code $CLAUDE_CONFIG_DIR/.claude.json}
+     * when set, else {@code ~/.claude.json} (NOT
+     * {@code ~/.claude/.claude.json})</li>
+     * </ul>
+     */
     private static void copyAuthFiles(Path tmpBase, Map<String, String> optEnv) {
         String callerConfigDir = optEnv.get("CLAUDE_CONFIG_DIR");
         if (callerConfigDir == null) {
@@ -338,13 +358,8 @@ public final class SessionResume {
                 : Path.of(System.getProperty("user.home"), ".claude");
 
         // Copy .credentials.json with refreshToken redacted.
-        Path credsSrc = sourceConfigDir.resolve(".credentials.json");
-        String credsJson = null;
-        try {
-            credsJson = Files.readString(credsSrc);
-        } catch (IOException ignored) {
-            // Missing file is fine.
-        }
+        byte[] credsBytes = readIfPresent(sourceConfigDir.resolve(".credentials.json"));
+        String credsJson = credsBytes != null ? new String(credsBytes, StandardCharsets.UTF_8) : null;
         writeRedactedCredentials(credsJson, tmpBase.resolve(".credentials.json"));
 
         // Copy .claude.json from CLAUDE_CONFIG_DIR or ~/.claude.json (NOT ~/.claude/.claude.json).
@@ -352,6 +367,106 @@ public final class SessionResume {
                 ? Path.of(callerConfigDir).resolve(".claude.json")
                 : Path.of(System.getProperty("user.home"), ".claude.json");
         copyIfPresent(claudeJsonSrc, tmpBase.resolve(".claude.json"));
+
+        // User settings carry `apiKeyHelper` (a fourth auth mechanism alongside
+        // .credentials.json / Keychain / env) plus env/hooks/permissions.
+        // Without it the resumed subprocess sees no user settings at all, and an
+        // apiKeyHelper-only host fails with "Not logged in". cowork_settings.json
+        // is the alternate filename the CLI reads in cowork-plugins mode. Both
+        // pass through stripSettingsForResume so plugin declarations don't
+        // reconcile against the empty tmpBase plugin cache.
+        for (String name : SETTINGS_FILE_NAMES) {
+            copyIfPresent(sourceConfigDir.resolve(name), tmpBase.resolve(name),
+                    SessionResume::stripSettingsForResume);
+        }
+    }
+
+    /** User-settings filenames seeded into the temp config dir on resume. */
+    private static final List<String> SETTINGS_FILE_NAMES =
+            List.of("settings.json", "cowork_settings.json");
+
+    /**
+     * User-settings keys that only misbehave under the redirected
+     * {@code CLAUDE_CONFIG_DIR}: plugin declarations reconcile against the
+     * always-empty {@code tmpBase/plugins} cache and would network-install each
+     * declared marketplace on every resume.
+     */
+    private static final List<String> RESUME_SETTINGS_STRIPPED_KEYS =
+            List.of("enabledPlugins", "extraKnownMarketplaces");
+
+    /**
+     * Drop settings keys that misbehave under a redirected config dir.
+     *
+     * <p>Removes {@link #RESUME_SETTINGS_STRIPPED_KEYS} and
+     * {@code env.CLAUDE_CONFIG_DIR} (which would point the subprocess's config
+     * reads away from {@code tmpBase}). Content that isn't valid UTF-8, or
+     * doesn't parse as a JSON object, is returned untouched so the subprocess
+     * sees exactly what the CLI would have read.
+     */
+    static byte[] stripSettingsForResume(byte[] content) {
+        Map<String, Object> parsed;
+        try {
+            // Decoding reports malformed input rather than substituting U+FFFD:
+            // non-UTF-8 content must be passed through byte-for-byte, not
+            // silently rewritten with replacement characters. Mirrors Python,
+            // where a UnicodeDecodeError falls back to the original bytes.
+            String text = StandardCharsets.UTF_8.newDecoder()
+                    .decode(java.nio.ByteBuffer.wrap(content))
+                    .toString();
+            // The CLI's settings reader tolerates a UTF-8 BOM (PowerShell
+            // writes settings.json with one), which a plain JSON parse rejects.
+            if (text.startsWith("\uFEFF")) {
+                text = text.substring(1);
+            }
+            Object value = MAPPER.readValue(text, Object.class);
+            if (!(value instanceof Map<?, ?> map)) {
+                return content;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> asObject = (Map<String, Object>) map;
+            parsed = asObject;
+        } catch (java.nio.charset.CharacterCodingException | JsonProcessingException
+                | RuntimeException e) {
+            return content;
+        }
+
+        boolean stripped = false;
+        for (String key : RESUME_SETTINGS_STRIPPED_KEYS) {
+            if (parsed.containsKey(key)) {
+                parsed.remove(key);
+                stripped = true;
+            }
+        }
+        if (parsed.get("env") instanceof Map<?, ?> envBlock
+                && envBlock.containsKey("CLAUDE_CONFIG_DIR")) {
+            envBlock.remove("CLAUDE_CONFIG_DIR");
+            stripped = true;
+        }
+        if (!stripped) {
+            return content;
+        }
+        // A spec-valid overflow like 1e999 parses to infinity, and
+        // re-serializing it would produce JSON the CLI rejects. Fall back to
+        // the original bytes instead. (Python guards this with allow_nan=False.)
+        if (containsNonFiniteNumber(parsed)) {
+            return content;
+        }
+        try {
+            return MAPPER.writeValueAsBytes(parsed);
+        } catch (JsonProcessingException e) {
+            return content;
+        }
+    }
+
+    /** Whether {@code value} holds a NaN or infinite number at any depth. */
+    private static boolean containsNonFiniteNumber(@Nullable Object value) {
+        return switch (value) {
+            case Double d -> d.isNaN() || d.isInfinite();
+            case Float f -> f.isNaN() || f.isInfinite();
+            case Map<?, ?> m -> m.values().stream().anyMatch(SessionResume::containsNonFiniteNumber);
+            case List<?> l -> l.stream().anyMatch(SessionResume::containsNonFiniteNumber);
+            case null, default -> false;
+        };
     }
 
     private static void writeRedactedCredentials(@Nullable String credsJson, Path dst) {
@@ -383,11 +498,56 @@ public final class SessionResume {
         }
     }
 
-    private static void copyIfPresent(Path src, Path dst) {
+    /**
+     * Read a regular file, or return {@code null}.
+     *
+     * <p>A missing source is skipped silently. Any other reason it can't be
+     * read (permissions, a directory or FIFO where a file was expected, ...) is
+     * logged and skipped: these files are best-effort enrichment of the temp
+     * config dir, so an unreadable one must not abort — or, for a FIFO, hang —
+     * the resume.
+     */
+    private static byte @Nullable [] readIfPresent(Path src) {
         try {
-            Files.copy(src, dst);
-        } catch (IOException ignored) {
-            // Missing is fine.
+            if (!Files.readAttributes(src, BasicFileAttributes.class).isRegularFile()) {
+                logger.warning("[SessionStore] resume: skipping " + src + " (not a regular file)");
+                return null;
+            }
+            return Files.readAllBytes(src);
+        } catch (NoSuchFileException e) {
+            return null;
+        } catch (IOException | RuntimeException e) {
+            logger.warning("[SessionStore] resume: skipping " + src + " (" + e + ")");
+            return null;
+        }
+    }
+
+    private static void copyIfPresent(Path src, Path dst) {
+        copyIfPresent(src, dst, null);
+    }
+
+    /**
+     * Copy {@code src} to {@code dst} (mode {@code 0600}) if it exists, through
+     * an optional {@code transform}. See {@link #readIfPresent} for the skip
+     * policy.
+     */
+    private static void copyIfPresent(Path src, Path dst,
+            @Nullable UnaryOperator<byte[]> transform) {
+        byte[] content = readIfPresent(src);
+        if (content == null) {
+            return;
+        }
+        try {
+            Files.write(dst, transform != null ? transform.apply(content) : content);
+            setOwnerOnlyPermissions(dst);
+        } catch (IOException | RuntimeException e) {
+            // Don't leave a truncated dst behind for the subprocess to misparse.
+            try {
+                Files.deleteIfExists(dst);
+            } catch (IOException ignored) {
+                // Best effort.
+            }
+            logger.warning("[SessionStore] resume: skipping " + src + " (" + e + ")");
         }
     }
 

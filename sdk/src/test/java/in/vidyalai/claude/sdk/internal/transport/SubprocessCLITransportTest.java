@@ -345,6 +345,81 @@ class SubprocessCLITransportTest {
     }
 
     @Test
+    void testBuildCommandResumeSessionAtAndDropsTurn() {
+        // Truncating-resume options are passed as --flag=value single tokens.
+        String at = "0d78eb23-2d48-4741-b970-4ed0a3356cce";
+        String drops = "ce0a8011-2c8d-40f2-86e5-d6e1b0c041c0";
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .resume("abc123")
+                .forkSession(true)
+                .resumeSessionAt(at)
+                .resumeDropsTurn(drops)
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).contains("--resume-session-at=" + at);
+        assertThat(cmd).contains("--resume-drops-turn=" + drops);
+        // Never emitted as two separate argv tokens.
+        assertThat(cmd).doesNotContain("--resume-session-at");
+        assertThat(cmd).doesNotContain("--resume-drops-turn");
+        assertThat(cmd).doesNotContain(at);
+        assertThat(cmd).doesNotContain(drops);
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandResumeDropsTurnOmittedByDefault() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .resume("abc123")
+                .resumeSessionAt("x")
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).contains("--resume-session-at=x");
+        assertThat(cmd).noneMatch(arg -> arg.startsWith("--resume-drops-turn"));
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandEmptyResumeDropsTurnIsForwarded() {
+        // An empty declaration must reach the CLI (which rejects it) rather
+        // than being dropped here and silently disarming the guard.
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .resume("abc123")
+                .resumeSessionAt("x")
+                .resumeDropsTurn("")
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).contains("--resume-drops-turn=");
+        transport.close();
+    }
+
+    @Test
+    void testBuildCommandTruncatingResumeDoesNotInjectFlags() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .resume("abc123")
+                .resumeSessionAt("--evil")
+                .resumeDropsTurn("-r")
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        assertThat(cmd).contains("--resume-session-at=--evil");
+        assertThat(cmd).contains("--resume-drops-turn=-r");
+        assertThat(cmd).doesNotContain("--evil");
+        assertThat(cmd).doesNotContain("-r");
+        transport.close();
+    }
+
+    @Test
     void testBuildCommandIncludeHookEvents_addedWhenEnabled() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .includeHookEvents(true)

@@ -3,11 +3,9 @@ package in.vidyalai.claude.sdk;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -120,7 +118,6 @@ import in.vidyalai.claude.sdk.types.permission.PermissionMode;
  * {@link #close()}:
  * <ul>
  * <li>QueryHandler and its thread pools (reader and control executors)</li>
- * <li>Streaming ExecutorService for background message streaming</li>
  * <li>Transport and CLI subprocess</li>
  * <li>Message iterators and queues</li>
  * </ul>
@@ -143,9 +140,6 @@ public class ClaudeSDKClient implements AutoCloseable {
     // Thread safety: AtomicBoolean for state management
     private final AtomicBoolean connected = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
-
-    // Executor service for streaming input in background
-    private volatile ExecutorService streamingExecutor;
 
     // Thread safety: Volatile for visibility across threads
     @Nullable
@@ -222,12 +216,6 @@ public class ClaudeSDKClient implements AutoCloseable {
             logger.fine("Already connected, ignoring duplicate connect() call");
             return;
         }
-
-        // Create executor service for streaming tasks with named virtual threads
-        this.streamingExecutor = Executors.newThreadPerTaskExecutor(
-                Thread.ofVirtual()
-                        .name("ClaudeSDKClient-Streaming-", 0)
-                        .factory());
 
         // Fail fast on invalid sessionStore option combinations before
         // spawning the subprocess.
@@ -434,7 +422,6 @@ public class ClaudeSDKClient implements AutoCloseable {
      *
      * <p>
      * Each message in the iterator should have the structure:
-     * NOTE: Ensure that session_id is set correctly in each message
      *
      * <pre>{@code
      * {
@@ -444,16 +431,63 @@ public class ClaudeSDKClient implements AutoCloseable {
      * }
      * }</pre>
      *
+     * <p>
+     * {@code session_id} is filled in with {@code "default"} on any message
+     * that omits it; supply it yourself, or use
+     * {@link #query(Iterator, String)}, to address a specific session.
+     *
+     * <p>
+     * Use this overload rather than {@link #query(String)} when a message needs
+     * fields the string form does not build — {@code origin} attribution,
+     * structured content blocks, an explicit {@code uuid}. Like
+     * {@link #query(String)}, this leaves the CLI's stdin open, so it can be
+     * called repeatedly across a session.
+     *
+     * <p>
+     * The messages are written before this method returns, which keeps
+     * successive calls in order. Drive a lazy or unbounded iterator from your
+     * own thread if you need to read responses while it is still producing.
+     *
      * @param messageStream an iterator of message dictionaries
-     * @throws CLIConnectionException if not connected
+     * @throws CLIConnectionException if not connected or a write fails
      * @throws IllegalStateException  if client is closed
      */
-    @SuppressWarnings("null")
     public void query(Iterator<Map<String, Object>> messageStream) throws CLIConnectionException {
+        query(messageStream, "default");
+    }
+
+    /**
+     * Sends a stream of messages to Claude, addressed to a specific session.
+     *
+     * <p>
+     * Messages are written verbatim except that {@code session_id} is filled in
+     * with {@code sessionId} when a message omits it; the caller's maps are
+     * never mutated. See {@link #query(Iterator)} for the full contract.
+     *
+     * @param messageStream an iterator of message dictionaries
+     * @param sessionId     the session identifier to default onto each message
+     * @throws CLIConnectionException if not connected or a write fails
+     * @throws IllegalStateException  if client is closed
+     */
+    public void query(Iterator<Map<String, Object>> messageStream, String sessionId)
+            throws CLIConnectionException {
         ensureConnected();
 
-        // Stream messages in background using executor service
-        streamingExecutor.submit(() -> query.streamInput(messageStream));
+        while (messageStream.hasNext()) {
+            Map<String, Object> message = messageStream.next();
+            if (!message.containsKey("session_id")) {
+                // Copy rather than mutate: the caller's map may be immutable,
+                // and a query() call should not rewrite its inputs.
+                Map<String, Object> withSession = new LinkedHashMap<>(message);
+                withSession.put("session_id", sessionId);
+                message = withSession;
+            }
+            try {
+                transport.write(MAPPER.writeValueAsString(message) + "\n");
+            } catch (JsonProcessingException e) {
+                throw new CLIConnectionException("Failed to serialize streamed message", e);
+            }
+        }
     }
 
     /**
@@ -739,9 +773,9 @@ public class ClaudeSDKClient implements AutoCloseable {
      * Disconnects from Claude Code and releases resources.
      *
      * <p>
-     * This method closes the QueryHandler (which closes the transport), shuts down
-     * the streaming executor, and clears all cached state. It is called by
-     * {@link #close()} and can be called directly.
+     * This method closes the QueryHandler (which closes the transport) and
+     * clears all cached state. It is called by {@link #close()} and can be
+     * called directly.
      *
      * <p>
      * This method is safe to call multiple times (idempotent).
@@ -761,9 +795,6 @@ public class ClaudeSDKClient implements AutoCloseable {
             query = null;
         }
 
-        // Shutdown streaming executor gracefully
-        shutdownStreamingExecutor();
-
         // Clear cached state
         transport = null;
 
@@ -780,28 +811,6 @@ public class ClaudeSDKClient implements AutoCloseable {
 
         // Reset connection flag
         connected.set(false);
-    }
-
-    /**
-     * Shuts down the streaming executor gracefully.
-     */
-    private void shutdownStreamingExecutor() {
-        streamingExecutor.shutdown();
-        try {
-            if (!streamingExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                logger.fine("Streaming executor did not terminate gracefully, forcing shutdown");
-                streamingExecutor.shutdownNow();
-                boolean terminated = streamingExecutor.awaitTermination(2, TimeUnit.SECONDS);
-                if (!terminated) {
-                    logger.warning("Streaming executor did not terminate even after shutdownNow()");
-                }
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            streamingExecutor.shutdownNow();
-        } finally {
-            streamingExecutor = null;
-        }
     }
 
     /**

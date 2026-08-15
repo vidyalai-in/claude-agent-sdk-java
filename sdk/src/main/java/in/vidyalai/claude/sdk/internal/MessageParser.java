@@ -14,11 +14,14 @@ import in.vidyalai.claude.sdk.exceptions.MessageParseException;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.AssistantMessageError;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
+import in.vidyalai.claude.sdk.types.message.ConversationResetMessage;
 import in.vidyalai.claude.sdk.types.message.DeferredToolUse;
 import in.vidyalai.claude.sdk.types.message.DocumentBlock;
 import in.vidyalai.claude.sdk.types.message.ImageBlock;
 import in.vidyalai.claude.sdk.types.message.HookEventMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.message.MessageOrigin;
+import in.vidyalai.claude.sdk.types.message.MessageOriginKind;
 import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
 import in.vidyalai.claude.sdk.types.message.RateLimitInfo;
 import in.vidyalai.claude.sdk.types.message.RateLimitStatus;
@@ -31,6 +34,7 @@ import in.vidyalai.claude.sdk.types.message.ModelUsage;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
+import in.vidyalai.claude.sdk.types.message.TaskNotificationOriginSubkind;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationStatus;
 import in.vidyalai.claude.sdk.types.message.TaskProgressMessage;
 import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
@@ -89,6 +93,7 @@ public final class MessageParser {
                 case "result" -> parseResultMessage(data);
                 case "stream_event" -> parseStreamEvent(data);
                 case "rate_limit_event" -> parseRateLimitEvent(data);
+                case "conversation_reset" -> parseConversationResetMessage(data);
                 default -> {
                     // Forward-compatible: skip unrecognized message types so newer
                     // CLI versions don't crash older SDK versions.
@@ -103,11 +108,60 @@ public final class MessageParser {
         }
     }
 
+    /**
+     * Reads {@code data["origin"]} when it is a well-formed origin object.
+     *
+     * <p>
+     * The CLI's object is retained verbatim on {@link MessageOrigin#raw()} —
+     * including keys this SDK version doesn't model — so newer origin
+     * kinds/fields stay visible to callers. Anything that is not an object with
+     * a string {@code kind} is treated as absent. An unrecognized {@code kind}
+     * or {@code subkind} leaves the corresponding enum null rather than
+     * rejecting the frame; the wire strings remain readable via
+     * {@link MessageOrigin#kindValue()} and {@link MessageOrigin#raw()}.
+     */
+    @SuppressWarnings("unchecked")
+    private static @Nullable MessageOrigin parseOrigin(Map<String, Object> data) {
+        if (!(data.get("origin") instanceof Map<?, ?> originMap)
+                || !(originMap.get("kind") instanceof String kindValue)) {
+            return null;
+        }
+        Map<String, Object> raw = (Map<String, Object>) originMap;
+        MessageOriginKind kind;
+        try {
+            kind = MessageOriginKind.fromValue(kindValue);
+        } catch (IllegalArgumentException e) {
+            logger.fine("Unknown MessageOriginKind value: " + kindValue);
+            kind = null;
+        }
+        TaskNotificationOriginSubkind subkind = null;
+        if (raw.get("subkind") instanceof String subkindValue) {
+            try {
+                subkind = TaskNotificationOriginSubkind.fromValue(subkindValue);
+            } catch (IllegalArgumentException e) {
+                logger.fine("Unknown TaskNotificationOriginSubkind value: " + subkindValue);
+            }
+        }
+        return new MessageOrigin(
+                kind,
+                kindValue,
+                raw.get("server") instanceof String s ? s : null,
+                raw.get("from") instanceof String s ? s : null,
+                raw.get("name") instanceof String s ? s : null,
+                raw.get("fromSession") instanceof String s ? s : null,
+                raw.get("senderTaskId") instanceof String s ? s : null,
+                raw.get("body") instanceof String s ? s : null,
+                raw.get("verifiedPeerPid") instanceof Number n ? n.intValue() : null,
+                subkind,
+                raw);
+    }
+
     @SuppressWarnings("unchecked")
     private static UserMessage parseUserMessage(Map<String, Object> data) throws MessageParseException {
         try {
             String parentToolUseId = (String) data.get("parent_tool_use_id");
             String uuid = (String) data.get("uuid");
+            MessageOrigin origin = parseOrigin(data);
             Object tuResult = data.get("tool_use_result");
             Map<String, Object> toolUseResult = switch (tuResult) {
                 case null -> null;
@@ -134,10 +188,10 @@ public final class MessageParser {
                     Map<String, Object> block = (Map<String, Object>) item;
                     blocks.add(parseContentBlock(block));
                 }
-                return new UserMessage(blocks, uuid, parentToolUseId, toolUseResult);
+                return new UserMessage(blocks, uuid, parentToolUseId, toolUseResult, origin);
             }
 
-            return new UserMessage(content, uuid, parentToolUseId, toolUseResult);
+            return new UserMessage(content, uuid, parentToolUseId, toolUseResult, origin);
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in user message: " + e.getMessage(), data, e);
         }
@@ -406,7 +460,7 @@ public final class MessageParser {
                     subtype, durationMs, durationApiMs, isError, numTurns,
                     sessionId, stopReason, totalCostUsd, usage, result, structuredOutput,
                     modelUsage, permissionDenials, deferredToolUse, errors, apiErrorStatus,
-                    uuid, terminalReason);
+                    uuid, terminalReason, parseOrigin(data));
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in result message: " + e.getMessage(), data, e);
         }
@@ -481,6 +535,19 @@ public final class MessageParser {
             throw new MessageParseException("Invalid field type in rate_limit_event message: " + e.getMessage(), data, e);
         } catch (MessageParseException e) {
             throw new MessageParseException("Missing required field in rate_limit_event message: " + e.getMessage(), data, e);
+        }
+    }
+
+    private static ConversationResetMessage parseConversationResetMessage(Map<String, Object> data)
+            throws MessageParseException {
+        try {
+            String newConversationId = getRequired(data, "new_conversation_id", String.class);
+            String uuid = getRequired(data, "uuid", String.class);
+            String sessionId = getRequired(data, "session_id", String.class);
+            return new ConversationResetMessage(newConversationId, uuid, sessionId);
+        } catch (MessageParseException e) {
+            throw new MessageParseException(
+                    "Missing required field in conversation_reset message: " + e.getMessage(), data, e);
         }
     }
 

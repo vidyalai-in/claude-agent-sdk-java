@@ -298,6 +298,79 @@ class QueryHandlerErrorResultReplacementTest {
                 .hasMessage("Claude Code returned an error result: oops");
     }
 
+    @Test
+    void pendingInitializeGetsResultErrorText() {
+        // An error result emitted during CLI startup (e.g. a resume refused by
+        // --resume-drops-turn) arrives before the initialize response. The
+        // in-flight initialize must fail with the same actionable text, not the
+        // bare exit code.
+        GatedTransport transport = new GatedTransport(
+                List.of(errorResult("error_during_execution",
+                        List.of("Resume rejected by --resume-drops-turn: nope"))),
+                new ProcessException("Command failed with exit code 1", 1, ""));
+        transportsToClose.add(transport);
+
+        QueryHandler handler = new QueryHandler(
+                transport, true, null, null, Duration.ofSeconds(60));
+        handlersToClose.add(handler);
+        transport.connect();
+        handler.start();
+
+        assertThatThrownBy(handler::initialize)
+                .isInstanceOf(ClaudeSDKException.class)
+                .hasMessageContaining("Claude Code returned an error result: "
+                        + "Resume rejected by --resume-drops-turn: nope")
+                .hasMessageNotContaining("Command failed with exit code 1");
+    }
+
+    /**
+     * A {@link ScriptedTransport} whose read loop is held until the first
+     * {@code write()} — i.e. until the control request under test is actually
+     * pending. Without the gate the reader can fail before {@code initialize()}
+     * registers its future, and the test would pass for the wrong reason.
+     */
+    static class GatedTransport extends ScriptedTransport {
+
+        private final java.util.concurrent.CountDownLatch written =
+                new java.util.concurrent.CountDownLatch(1);
+
+        GatedTransport(List<Map<String, Object>> messages, RuntimeException terminalException) {
+            super(messages, terminalException);
+        }
+
+        @Override
+        public Iterator<Map<String, Object>> readMessages() {
+            Iterator<Map<String, Object>> delegate = super.readMessages();
+            return new Iterator<>() {
+                private boolean gateOpened = false;
+
+                @Override
+                public boolean hasNext() {
+                    if (!gateOpened) {
+                        try {
+                            written.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        gateOpened = true;
+                    }
+                    return delegate.hasNext();
+                }
+
+                @Override
+                public Map<String, Object> next() {
+                    return delegate.next();
+                }
+            };
+        }
+
+        @Override
+        public void write(String data) throws CLIConnectionException {
+            super.write(data);
+            written.countDown();
+        }
+    }
+
     /**
      * Mock transport that yields a fixed list of messages then throws on the
      * next {@code hasNext()} call, mirroring how the real

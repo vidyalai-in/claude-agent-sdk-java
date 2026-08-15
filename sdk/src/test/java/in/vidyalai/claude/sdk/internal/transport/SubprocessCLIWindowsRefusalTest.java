@@ -379,6 +379,34 @@ class SubprocessCLIWindowsRefusalTest {
                     .hasMessageContaining("sessionId");
         }
 
+        @SuppressWarnings("null")
+        @Test
+        void resumeSessionAtWithCmdMetacharactersIsRejectedOnWindows() {
+            pretendWindows();
+            ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                    .resume("abc")
+                    .resumeSessionAt("x&calc")
+                    .cliPath(Path.of("C:\\bin\\claude.exe"))
+                    .build();
+            assertThatThrownBy(() -> buildWith(options))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("resumeSessionAt");
+        }
+
+        @SuppressWarnings("null")
+        @Test
+        void resumeDropsTurnWithCmdMetacharactersIsRejectedOnWindows() {
+            pretendWindows();
+            ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                    .resume("abc")
+                    .resumeDropsTurn("x&calc")
+                    .cliPath(Path.of("C:\\bin\\claude.exe"))
+                    .build();
+            assertThatThrownBy(() -> buildWith(options))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("resumeDropsTurn");
+        }
+
         @Test
         void ordinarySessionTitlesArePermittedOnWindows() {
             pretendWindows();

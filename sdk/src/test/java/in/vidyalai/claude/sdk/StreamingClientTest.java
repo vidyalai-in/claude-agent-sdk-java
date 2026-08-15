@@ -679,6 +679,121 @@ class StreamingClientTest {
         client.close();
     }
 
+    // ============ query(Iterator) is repeatable, like Python's ============
+
+    /**
+     * Reads the {@code message.content} of every user frame the client wrote,
+     * in write order.
+     */
+    private static List<String> writtenPrompts(MockTransport transport) {
+        ObjectMapper mapper = new ObjectMapper();
+        List<String> prompts = new ArrayList<>();
+        for (String line : transport.getWrittenData()) {
+            try {
+                Map<?, ?> frame = mapper.readValue(line, Map.class);
+                if ("user".equals(frame.get("type")) && frame.get("message") instanceof Map<?, ?> m) {
+                    prompts.add(String.valueOf(m.get("content")));
+                }
+            } catch (Exception ignored) {
+                // Control frames and other traffic are not of interest here.
+            }
+        }
+        return prompts;
+    }
+
+    private static Map<String, Object> userFrame(String content) {
+        return Map.of("type", "user", "message", Map.of("role", "user", "content", content));
+    }
+
+    @Test
+    void queryWithIterator_doesNotCloseStdin_soItCanBeCalledAgain() {
+        // Regression: this used to hand the iterator to QueryHandler.streamInput,
+        // which closes stdin once the iterator is exhausted. The CLI then exited
+        // and any further write failed with "ProcessTransport is not ready for
+        // writing", making the only origin-stamping API single-shot. Python's
+        // ClaudeSDKClient.query() writes straight to the transport and keeps
+        // stdin open, so the call is repeatable across a session.
+        MockTransport mockTransport = createMockTransport();
+
+        try (var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport)) {
+            client.connect();
+
+            client.query(List.of(userFrame("first")).iterator());
+            client.query(List.of(userFrame("second")).iterator());
+            client.query("third");
+
+            assertThat(mockTransport.getEndInputCalls())
+                    .as("client queries must never close the CLI's stdin")
+                    .isZero();
+            assertThat(writtenPrompts(mockTransport))
+                    .containsExactly("first", "second", "third");
+        }
+    }
+
+    @Test
+    void queryWithIterator_defaultsSessionIdWithoutMutatingCallerMaps() {
+        MockTransport mockTransport = createMockTransport();
+
+        Map<String, Object> noSession = new HashMap<>(userFrame("no session"));
+        Map<String, Object> ownSession = new HashMap<>(userFrame("own session"));
+        ownSession.put("session_id", "explicit-session");
+
+        try (var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport)) {
+            client.connect();
+            client.query(List.of(noSession, ownSession).iterator());
+
+            ObjectMapper mapper = new ObjectMapper();
+            List<String> sessionIds = new ArrayList<>();
+            for (String line : mockTransport.getWrittenData()) {
+                try {
+                    Map<?, ?> frame = mapper.readValue(line, Map.class);
+                    if ("user".equals(frame.get("type"))) {
+                        sessionIds.add(String.valueOf(frame.get("session_id")));
+                    }
+                } catch (Exception ignored) {
+                    // Not a user frame.
+                }
+            }
+            // Missing session_id is filled in; an explicit one is left alone.
+            assertThat(sessionIds).containsExactly("default", "explicit-session");
+        }
+
+        // The caller's maps are copied, never rewritten in place.
+        assertThat(noSession).doesNotContainKey("session_id");
+        assertThat(ownSession).containsEntry("session_id", "explicit-session");
+    }
+
+    @Test
+    void queryWithIterator_honoursExplicitSessionIdArgument() {
+        MockTransport mockTransport = createMockTransport();
+
+        try (var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport)) {
+            client.connect();
+            client.query(List.of(userFrame("hi")).iterator(), "session-abc");
+
+            assertThat(mockTransport.getWrittenData())
+                    .anyMatch(line -> line.contains("\"session_id\":\"session-abc\""));
+        }
+    }
+
+    @Test
+    void queryWithIterator_preservesExtraFieldsSuchAsOrigin() {
+        // Stamping `origin` is the reason to reach for this overload at all, so
+        // unmodelled keys must survive the write untouched.
+        MockTransport mockTransport = createMockTransport();
+
+        Map<String, Object> stamped = new HashMap<>(userFrame("hi"));
+        stamped.put("origin", Map.of("kind", "human"));
+
+        try (var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport)) {
+            client.connect();
+            client.query(List.of(stamped).iterator());
+
+            assertThat(mockTransport.getWrittenData())
+                    .anyMatch(line -> line.contains("\"origin\":{\"kind\":\"human\"}"));
+        }
+    }
+
     // ==================== Mock Transport Implementation ====================
 
     /**
@@ -694,6 +809,8 @@ class StreamingClientTest {
         private boolean interruptSupported = false;
         private final ObjectMapper objectMapper = new ObjectMapper();
         private final AtomicBoolean endSent = new AtomicBoolean(false);
+        private final java.util.concurrent.atomic.AtomicInteger endInputCalls =
+                new java.util.concurrent.atomic.AtomicInteger();
         private volatile Map<String, Object> mcpStatusResponseData = null;
 
         void setMcpStatusResponseData(Map<String, Object> data) {
@@ -864,7 +981,12 @@ class StreamingClientTest {
 
         @Override
         public void endInput() {
-            // No-op for mock
+            endInputCalls.incrementAndGet();
+        }
+
+        /** How many times stdin was closed — must stay 0 for client queries. */
+        int getEndInputCalls() {
+            return endInputCalls.get();
         }
 
         @Override

@@ -52,6 +52,14 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *                          the CLI did not report a terminal reason (older CLI
  *                          versions, or a result that bypassed the query loop
  *                          such as a local slash command).
+ * @param origin            origin of the user message that triggered this turn
+ *                          — see {@link MessageOrigin}. Lets a
+ *                          streaming-input consumer distinguish the result of
+ *                          its own prompt (null, or
+ *                          {@link MessageOriginKind#HUMAN} if it stamped that)
+ *                          from results of injected turns such as
+ *                          background-task notifications
+ *                          ({@link MessageOriginKind#TASK_NOTIFICATION}).
  */
 public record ResultMessage(
         @JsonProperty("subtype") String subtype,
@@ -71,7 +79,8 @@ public record ResultMessage(
         @JsonProperty("errors") @Nullable List<String> errors,
         @JsonProperty("api_error_status") @Nullable Integer apiErrorStatus,
         @JsonProperty("uuid") @Nullable String uuid,
-        @JsonProperty("terminal_reason") @Nullable String terminalReason) implements Message {
+        @JsonProperty("terminal_reason") @Nullable String terminalReason,
+        @JsonProperty("origin") @Nullable MessageOrigin origin) implements Message {
 
     /**
      * Backwards-compatible constructor without modelUsage, permissionDenials,
@@ -84,7 +93,7 @@ public record ResultMessage(
             @Nullable Object structuredOutput) {
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -102,7 +111,7 @@ public record ResultMessage(
             @Nullable String uuid) {
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
-                modelUsage, permissionDenials, null, errors, null, uuid, null);
+                modelUsage, permissionDenials, null, errors, null, uuid, null, null);
     }
 
     /**
@@ -122,7 +131,28 @@ public record ResultMessage(
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
                 modelUsage, permissionDenials, deferredToolUse, errors,
-                apiErrorStatus, uuid, null);
+                apiErrorStatus, uuid, null, null);
+    }
+
+    /**
+     * Backwards-compatible constructor without {@code origin}.
+     */
+    public ResultMessage(String subtype, int durationMs, int durationApiMs,
+            boolean isError, int numTurns, String sessionId,
+            @Nullable String stopReason, @Nullable Double totalCostUsd,
+            @Nullable Map<String, Object> usage, @Nullable String result,
+            @Nullable Object structuredOutput,
+            @Nullable Map<String, ModelUsage> modelUsage,
+            @Nullable List<Object> permissionDenials,
+            @Nullable DeferredToolUse deferredToolUse,
+            @Nullable List<String> errors,
+            @Nullable Integer apiErrorStatus,
+            @Nullable String uuid,
+            @Nullable String terminalReason) {
+        this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
+                stopReason, totalCostUsd, usage, result, structuredOutput,
+                modelUsage, permissionDenials, deferredToolUse, errors,
+                apiErrorStatus, uuid, terminalReason, null);
     }
 
     @Override

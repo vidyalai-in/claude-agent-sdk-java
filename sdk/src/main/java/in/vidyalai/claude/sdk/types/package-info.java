@@ -18,6 +18,10 @@
  *   <li>{@link in.vidyalai.claude.sdk.types.message.DeferredToolUse} - Tool call deferred by a
  *       {@code PreToolUse} hook returning {@code "defer"}</li>
  *   <li>{@link in.vidyalai.claude.sdk.types.message.StreamEvent} - Partial streaming events</li>
+ *   <li>{@link in.vidyalai.claude.sdk.types.message.ConversationResetMessage} - The conversation
+ *       was replaced mid-session (e.g. after {@code /clear})</li>
+ *   <li>{@link in.vidyalai.claude.sdk.types.message.MessageOrigin} - Provenance of a user-role
+ *       message, and of the message that triggered a result</li>
  * </ul>
  *
  * <h3>Content Blocks</h3>

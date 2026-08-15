@@ -14,6 +14,8 @@ import java.util.concurrent.TimeUnit;
 import org.jspecify.annotations.Nullable;
 
 import in.vidyalai.claude.sdk.internal.CanUseToolShadow;
+import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
+import in.vidyalai.claude.sdk.exceptions.QueryFailedException;
 import in.vidyalai.claude.sdk.internal.QueryHandler;
 import in.vidyalai.claude.sdk.internal.SdkVersion;
 import in.vidyalai.claude.sdk.internal.SessionImport;
@@ -297,10 +299,24 @@ public final class ClaudeSDK {
             // Stream input messages in background
             streamingExecutor.submit(() -> qh.streamInput(messageStream));
 
-            // Collect all response messages
+            // Collect all response messages.
+            //
+            // A run that ends in an error result (error_max_turns,
+            // error_max_budget_usd, a refused resume, ...) delivers its
+            // messages first and only then raises, so the collected list is
+            // usually a complete turn. Rethrowing bare would discard it and
+            // leave the caller with only an error string, where a streaming
+            // consumer — or Python's generator — would have seen every message
+            // before the raise. Carry them on the exception instead.
             Iterator<Message> responseIterator = queryHandler.receiveMessages();
-            while (responseIterator.hasNext()) {
-                messages.add(responseIterator.next());
+            try {
+                while (responseIterator.hasNext()) {
+                    messages.add(responseIterator.next());
+                }
+            } catch (QueryFailedException e) {
+                throw e;
+            } catch (ClaudeSDKException e) {
+                throw new QueryFailedException(e.getMessage(), e, messages);
             }
         } finally {
             // Shutdown streaming executor

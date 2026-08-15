@@ -93,6 +93,7 @@ mvn exec:java -Dexec.mainClass="examples.IncludePartialMessagesExample" -pl exam
 mvn exec:java -Dexec.mainClass="examples.LargeAgentsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.MaxBudgetExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples
+mvn exec:java -Dexec.mainClass="examples.MessageOriginExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation" -pl examples
 mvn exec:java -Dexec.mainClass="examples.PermissionCallbacks" -pl examples
 mvn exec:java -Dexec.mainClass="examples.PluginsExample" -pl examples
@@ -108,6 +109,7 @@ mvn exec:java -Dexec.mainClass="examples.SubagentTranscriptExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.SystemPromptExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolsConfigurationExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolUsage" -pl examples
+mvn exec:java -Dexec.mainClass="examples.TruncatingResumeExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.WindowsBatchCliExample" -pl examples
 ```
 
@@ -180,7 +182,9 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
 │   ├── CLINotFoundException.java    # CLI not found
 │   ├── ProcessException.java        # Process failures
 │   ├── CLIJSONDecodeException.java  # JSON parsing errors
-│   └── MessageParseException.java   # Message parsing errors
+│   ├── MessageParseException.java   # Message parsing errors
+│   └── QueryFailedException.java    # Run ended in an error result; carries
+│                                    # the messages collected before it
 ├── transport/                  # Transport layer
 │   └── Transport.java              # Transport interface
 ├── internal/                   # Internal implementation
@@ -202,6 +206,10 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
     │   ├── SystemMessage.java          # System message record
     │   ├── ResultMessage.java          # Result message record
     │   ├── StreamEvent.java            # Stream event record
+    │   ├── ConversationResetMessage.java # Conversation replaced mid-session
+    │   ├── MessageOrigin.java          # Provenance of a user-role message
+    │   ├── MessageOriginKind.java      # Origin kind enum
+    │   ├── TaskNotificationOriginSubkind.java # Task-notification origin sub-kind enum
     │   ├── ContentBlock.java           # Sealed interface for content
     │   ├── TextBlock.java              # Text content record
     │   ├── ThinkingBlock.java          # Thinking content record
@@ -325,6 +333,8 @@ examples/src/main/java/examples/
 ├── SystemPromptExample.java        # Custom system prompt usage
 ├── IncludePartialMessagesExample.java # Streaming with partial message updates
 ├── SessionStoreExample.java        # Mirror transcripts to a custom SessionStore
+├── TruncatingResumeExample.java    # Rewind a session with resumeSessionAt/resumeDropsTurn
+├── MessageOriginExample.java       # Message provenance + conversation resets
 ├── WindowsBatchCliExample.java     # Windows .cmd CLI opt-in (Windows-only)
 └── plugins/                        # Example plugin implementations
 ```
@@ -367,7 +377,8 @@ Interactive client methods:
 - `sendMessage(String prompt, String sessionId)` - Send message with session ID
 - `query(String prompt)` - Send query message
 - `query(String prompt, String sessionId)` - Send query with session ID
-- `query(Iterator<Map> stream)` - Send streaming messages
+- `query(Iterator<Map> stream)` - Send streaming messages (keeps stdin open; repeatable)
+- `query(Iterator<Map> stream, String sessionId)` - Send streaming messages to a session
 - `receiveMessages()` - Get all messages iterator
 - `receiveResponse()` - Get messages until ResultMessage
 - `getMcpStatus()` - Get MCP server connection status

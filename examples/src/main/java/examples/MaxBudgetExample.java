@@ -4,6 +4,8 @@ import java.util.List;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDK;
+import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
+import in.vidyalai.claude.sdk.exceptions.QueryFailedException;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
@@ -64,23 +66,32 @@ public class MaxBudgetExample {
      * Example with budget that won't be exceeded.
      */
     static void withReasonableBudget() {
-        System.out.println("=== With Reasonable Budget ($0.10) ===");
+        System.out.println("=== With Reasonable Budget ($1.00) ===");
 
+        // A budget the query is not expected to reach. Note that a single turn
+        // costs more than you might guess — a long system prompt and a large
+        // tool set are billed on every call — so keep the headroom generous.
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
-                .maxBudgetUsd(0.10) // 10 cents - plenty for a simple query
+                .maxBudgetUsd(1.00)
                 .build();
 
-        List<Message> messages = ClaudeSDK.query("What is 2 + 2?", options);
+        try {
+            List<Message> messages = ClaudeSDK.query("What is 2 + 2?", options);
 
-        for (Message msg : messages) {
-            if (msg instanceof AssistantMessage assistant) {
-                System.out.println("Claude: " + assistant.getTextContent());
-            } else if (msg instanceof ResultMessage result) {
-                if (result.totalCostUsd() != null) {
-                    System.out.printf("Total cost: $%.4f\n", result.totalCostUsd());
+            for (Message msg : messages) {
+                if (msg instanceof AssistantMessage assistant) {
+                    System.out.println("Claude: " + assistant.getTextContent());
+                } else if (msg instanceof ResultMessage result) {
+                    if (result.totalCostUsd() != null) {
+                        System.out.printf("Total cost: $%.4f\n", result.totalCostUsd());
+                    }
+                    System.out.println("Status: " + result.subtype());
                 }
-                System.out.println("Status: " + result.subtype());
             }
+        } catch (ClaudeSDKException e) {
+            // Reaching the budget here means the headroom above was too small
+            // for this environment, not that the API misbehaved.
+            System.out.println("Budget was reached after all: " + e.getMessage());
         }
         System.out.println();
     }
@@ -95,10 +106,41 @@ public class MaxBudgetExample {
                 .maxBudgetUsd(0.0001) // Very small budget - will be exceeded quickly
                 .build();
 
-        List<Message> messages = ClaudeSDK.query(
-                "Read the README.md file and summarize it",
-                options);
+        // Exceeding the budget is the point of this section, and it surfaces as
+        // an exception rather than a returned list: the CLI reports an
+        // `error_max_budget_usd` result and then exits non-zero on purpose, so
+        // the SDK raises. A budget cap you set yourself is an expected outcome,
+        // not a crash — catch it.
+        //
+        // QueryFailedException still carries everything that arrived before the
+        // run stopped, so the turn is not lost: the final ResultMessage names
+        // the condition and reports what was actually spent.
+        try {
+            List<Message> messages = ClaudeSDK.query(
+                    "Read the README.md file and summarize it",
+                    options);
 
+            printMessages(messages);
+            System.out.println("Budget was not reached.");
+        } catch (QueryFailedException e) {
+            System.out.println("Budget limit exceeded, as expected.");
+            printMessages(e.partialMessages());
+
+            ResultMessage result = e.resultMessage();
+            if ((result != null) && "error_max_budget_usd".equals(result.subtype())) {
+                System.out.printf("Stopped by the budget cap after spending $%.4f%n",
+                        (result.totalCostUsd() != null) ? result.totalCostUsd() : 0.0);
+                System.out.println("Note: the cost may exceed the budget by up to one API call's");
+                System.out.println("worth, because the check runs after each call completes.");
+            } else {
+                System.out.println("Ended with: " + e.getMessage());
+            }
+        }
+        System.out.println();
+    }
+
+    /** Prints the assistant text and the final cost/status of a collected turn. */
+    static void printMessages(List<Message> messages) {
         for (Message msg : messages) {
             if (msg instanceof AssistantMessage assistant) {
                 System.out.println("Claude: " + assistant.getTextContent());
@@ -107,15 +149,8 @@ public class MaxBudgetExample {
                     System.out.printf("Total cost: $%.4f\n", result.totalCostUsd());
                 }
                 System.out.println("Status: " + result.subtype());
-
-                // Check if budget was exceeded
-                if ("error_max_budget_usd".equals(result.subtype())) {
-                    System.out.println("⚠️  Budget limit exceeded!");
-                    System.out.println("Note: The cost may exceed the budget by up to one API call's worth");
-                }
             }
         }
-        System.out.println();
     }
 
 }

@@ -747,19 +747,30 @@ public class QueryHandler implements AutoCloseable {
                 // structured error the CLI already reported so the exception
                 // is actionable. Mirrors the TS/Python SDKs.
                 String errorText;
+                Throwable pendingError = e;
                 boolean replaced = (e instanceof in.vidyalai.claude.sdk.exceptions.ProcessException
                         && lastErrorResultText[0] != null);
                 if (replaced) {
                     errorText = "Claude Code returned an error result: " + lastErrorResultText[0];
+                    // stderr deliberately not carried over: the transport's value
+                    // is a generic placeholder, and the result text is the real
+                    // cause.
+                    pendingError = new in.vidyalai.claude.sdk.exceptions.ProcessException(
+                            errorText,
+                            ((in.vidyalai.claude.sdk.exceptions.ProcessException) e).getExitCode(),
+                            null);
                     logger.fine("Replacing ProcessException with result error text: " + errorText);
                 } else {
                     errorText = e.getMessage();
                     logger.log(Level.SEVERE, "Fatal error in message reader: " + errorText, e);
                 }
-                // Signal all pending control requests
+                // Signal all pending control requests so they fail fast instead
+                // of timing out. This includes an `initialize` still in flight
+                // when the CLI reports an error result during startup (e.g. a
+                // refused resume), so that path sees the same actionable text.
                 for (Map.Entry<String, CompletableFuture<ControlResponse>> entry : pendingControlResponses
                         .entrySet()) {
-                    entry.getValue().completeExceptionally(e);
+                    entry.getValue().completeExceptionally(pendingError);
                 }
                 pendingControlResponses.clear();
 

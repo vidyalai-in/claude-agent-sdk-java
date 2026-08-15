@@ -14,7 +14,9 @@ import in.vidyalai.claude.sdk.exceptions.MessageParseException;
 import in.vidyalai.claude.sdk.internal.MessageParser;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
+import in.vidyalai.claude.sdk.types.message.ConversationResetMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.message.MessageOriginKind;
 import in.vidyalai.claude.sdk.types.message.ModelUsage;
 import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
 import in.vidyalai.claude.sdk.types.message.RateLimitStatus;
@@ -23,6 +25,7 @@ import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.message.StreamEvent;
 import in.vidyalai.claude.sdk.types.message.SystemMessage;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationMessage;
+import in.vidyalai.claude.sdk.types.message.TaskNotificationOriginSubkind;
 import in.vidyalai.claude.sdk.types.message.TaskNotificationStatus;
 import in.vidyalai.claude.sdk.types.message.TaskProgressMessage;
 import in.vidyalai.claude.sdk.types.message.TaskStartedMessage;
@@ -1460,6 +1463,152 @@ class MessageParserTest {
 
         ResultMessage rm = (ResultMessage) MessageParser.parse(data);
         assertThat(rm.terminalReason()).isEqualTo("max_turns");
+    }
+
+    @SuppressWarnings("null")
+    @ParameterizedTest
+    @ValueSource(strings = {"string", "blocks"})
+    void parseUserMessage_withOrigin(String contentShape) {
+        // origin is surfaced on user messages for both content shapes, and
+        // passed through with keys this SDK version doesn't model.
+        Map<String, Object> peer = new java.util.HashMap<>();
+        peer.put("kind", "peer");
+        peer.put("from", "peer-addr");
+        peer.put("name", "other-session");
+        peer.put("verifiedPeerPid", 4242);
+        peer.put("someFutureField", true);
+
+        Object content = "string".equals(contentShape)
+                ? "hi"
+                : List.of(Map.of("type", "text", "text", "hi"));
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "user");
+        data.put("message", Map.of("content", content));
+        data.put("origin", peer);
+
+        UserMessage um = (UserMessage) MessageParser.parse(data);
+        assertThat(um.origin()).isNotNull();
+        assertThat(um.origin().kind()).isEqualTo(MessageOriginKind.PEER);
+        assertThat(um.origin().from()).isEqualTo("peer-addr");
+        assertThat(um.origin().name()).isEqualTo("other-session");
+        assertThat(um.origin().verifiedPeerPid()).isEqualTo(4242);
+        assertThat(um.origin().raw()).containsEntry("someFutureField", true);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseUserMessage_originAbsentOrMalformedIsNull() {
+        // No origin, or a non-object / kind-less origin, parses to null.
+        List<Map<String, Object>> extras = List.of(
+                Map.of(),
+                java.util.Collections.singletonMap("origin", null),
+                Map.of("origin", "human"),
+                Map.of("origin", Map.of()),
+                Map.of("origin", Map.of("kind", 7)));
+
+        for (Map<String, Object> extra : extras) {
+            Map<String, Object> data = new java.util.HashMap<>();
+            data.put("type", "user");
+            data.put("message", Map.of("content", "hi"));
+            data.putAll(extra);
+
+            UserMessage um = (UserMessage) MessageParser.parse(data);
+            assertThat(um.origin()).as("extra=%s", extra).isNull();
+        }
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseUserMessage_unknownOriginKindKeepsWireValue() {
+        // Forward compatibility: a kind this SDK version doesn't model leaves
+        // kind() null but stays readable, and never reads as human.
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "user");
+        data.put("message", Map.of("content", "hi"));
+        data.put("origin", Map.of("kind", "some-future-kind"));
+
+        UserMessage um = (UserMessage) MessageParser.parse(data);
+        assertThat(um.origin()).isNotNull();
+        assertThat(um.origin().kind()).isNull();
+        assertThat(um.origin().kindValue()).isEqualTo("some-future-kind");
+        assertThat(um.origin().isHuman()).isFalse();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseConversationReset() {
+        Map<String, Object> data = Map.of(
+                "type", "conversation_reset",
+                "new_conversation_id", "d2f4a573-ca99-42a2-bb7a-905b40c908e8",
+                "uuid", "msg-1",
+                "session_id", "66694129-ce74-4ee1-9b0f-994155ac97ba");
+
+        Message message = MessageParser.parse(data);
+        assertThat(message).isInstanceOf(ConversationResetMessage.class);
+        ConversationResetMessage reset = (ConversationResetMessage) message;
+        assertThat(reset.newConversationId()).isEqualTo("d2f4a573-ca99-42a2-bb7a-905b40c908e8");
+        assertThat(reset.uuid()).isEqualTo("msg-1");
+        assertThat(reset.sessionId()).isEqualTo("66694129-ce74-4ee1-9b0f-994155ac97ba");
+        assertThat(reset.type()).isEqualTo("conversation_reset");
+    }
+
+    @Test
+    void parseConversationReset_missingFieldRaises() {
+        Map<String, Object> data = Map.of(
+                "type", "conversation_reset",
+                "uuid", "u",
+                "session_id", "s");
+
+        assertThatThrownBy(() -> MessageParser.parse(data))
+                .isInstanceOf(MessageParseException.class)
+                .hasMessageContaining("new_conversation_id");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_originAbsentIsNull() {
+        ResultMessage rm = (ResultMessage) MessageParser.parse(baseResultData());
+        assertThat(rm.origin()).isNull();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_withHumanOrigin() {
+        Map<String, Object> data = baseResultData();
+        data.put("origin", Map.of("kind", "human"));
+
+        ResultMessage rm = (ResultMessage) MessageParser.parse(data);
+        assertThat(rm.origin()).isNotNull();
+        assertThat(rm.origin().kind()).isEqualTo(MessageOriginKind.HUMAN);
+        assertThat(rm.origin().kindValue()).isEqualTo("human");
+        assertThat(rm.origin().isHuman()).isTrue();
+    }
+
+    @SuppressWarnings("null")
+    @ParameterizedTest
+    @ValueSource(strings = {"scheduled-trigger", "peer-send-message"})
+    void parseResultMessage_withTaskNotificationOriginSubkind(String subkind) {
+        Map<String, Object> data = baseResultData();
+        data.put("origin", Map.of("kind", "task-notification", "subkind", subkind));
+
+        ResultMessage rm = (ResultMessage) MessageParser.parse(data);
+        assertThat(rm.origin()).isNotNull();
+        assertThat(rm.origin().kind()).isEqualTo(MessageOriginKind.TASK_NOTIFICATION);
+        assertThat(rm.origin().subkind())
+                .isEqualTo(TaskNotificationOriginSubkind.fromValue(subkind));
+        assertThat(rm.origin().isHuman()).isFalse();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void parseResultMessage_withUnclassifiedOrigin() {
+        Map<String, Object> data = baseResultData();
+        data.put("origin", Map.of("kind", "unclassified"));
+
+        ResultMessage rm = (ResultMessage) MessageParser.parse(data);
+        assertThat(rm.origin()).isNotNull();
+        assertThat(rm.origin().kind()).isEqualTo(MessageOriginKind.UNCLASSIFIED);
+        assertThat(rm.origin().subkind()).isNull();
     }
 
     /** Minimal well-formed result frame for field-specific assertions. */

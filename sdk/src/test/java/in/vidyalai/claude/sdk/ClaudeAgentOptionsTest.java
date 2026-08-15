@@ -255,6 +255,43 @@ class ClaudeAgentOptionsTest {
     }
 
     @Test
+    void truncatingResumeOptions_defaultToNull() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder().resume("s").build();
+        assertThat(options.resumeSessionAt()).isNull();
+        assertThat(options.resumeDropsTurn()).isNull();
+    }
+
+    @Test
+    void truncatingResumeOptions_surviveToBuilderRoundTrip() {
+        // The materialized-resume path rebuilds options via toBuilder(), so a
+        // field missing from the copy would be silently dropped before the
+        // transport ever sees it.
+        ClaudeAgentOptions original = ClaudeAgentOptions.builder()
+                .resume("session-1")
+                .forkSession(true)
+                .resumeSessionAt("entry-uuid")
+                .resumeDropsTurn("prompt-uuid")
+                .build();
+
+        ClaudeAgentOptions copy = original.toBuilder().maxTurns(3).build();
+
+        assertThat(copy.resumeSessionAt()).isEqualTo("entry-uuid");
+        assertThat(copy.resumeDropsTurn()).isEqualTo("prompt-uuid");
+        assertThat(copy.forkSession()).isTrue();
+        assertThat(copy.resume()).isEqualTo("session-1");
+        assertThat(copy.maxTurns()).isEqualTo(3);
+    }
+
+    @Test
+    void resumeDropsTurn_distinguishesEmptyFromUnset() {
+        // An empty declaration must survive as "" (the transport forwards it so
+        // the CLI rejects it) rather than collapsing to unset.
+        ClaudeAgentOptions empty = ClaudeAgentOptions.builder().resumeDropsTurn("").build();
+        assertThat(empty.resumeDropsTurn()).isEmpty();
+        assertThat(empty.toBuilder().build().resumeDropsTurn()).isEmpty();
+    }
+
+    @Test
     void defaults() {
         ClaudeAgentOptions defaults = ClaudeAgentOptions.defaults();
         assertThat(defaults).isNotNull();

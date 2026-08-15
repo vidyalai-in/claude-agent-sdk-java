@@ -74,6 +74,13 @@ public final class ClaudeAgentOptions {
     // When true resumed sessions will fork to a new session ID rather than
     // continuing the previous session
     private final boolean forkSession;
+    // When resuming, load the conversation only up to and including this
+    // transcript-entry UUID
+    @Nullable
+    private final String resumeSessionAt;
+    // UUID of the user prompt whose turn a truncating resume intends to discard
+    @Nullable
+    private final String resumeDropsTurn;
 
     // Limits
     @Nullable
@@ -239,6 +246,8 @@ public final class ClaudeAgentOptions {
         this.resume = builder.resume;
         this.sessionId = builder.sessionId;
         this.forkSession = builder.forkSession;
+        this.resumeSessionAt = builder.resumeSessionAt;
+        this.resumeDropsTurn = builder.resumeDropsTurn;
         this.maxTurns = builder.maxTurns;
         this.maxBudgetUsd = builder.maxBudgetUsd;
         this.maxBufferSize = builder.maxBufferSize;
@@ -317,6 +326,8 @@ public final class ClaudeAgentOptions {
         builder.resume = this.resume;
         builder.sessionId = this.sessionId;
         builder.forkSession = this.forkSession;
+        builder.resumeSessionAt = this.resumeSessionAt;
+        builder.resumeDropsTurn = this.resumeDropsTurn;
         builder.maxTurns = this.maxTurns;
         builder.maxBudgetUsd = this.maxBudgetUsd;
         builder.maxBufferSize = this.maxBufferSize;
@@ -443,6 +454,29 @@ public final class ClaudeAgentOptions {
 
     public boolean forkSession() {
         return forkSession;
+    }
+
+    /**
+     * Returns the transcript-entry UUID to truncate a resumed conversation at.
+     *
+     * @return the UUID, or null when the whole conversation is loaded
+     * @see Builder#resumeSessionAt(String)
+     */
+    @Nullable
+    public String resumeSessionAt() {
+        return resumeSessionAt;
+    }
+
+    /**
+     * Returns the UUID of the user prompt whose turn a truncating resume
+     * intends to discard.
+     *
+     * @return the prompt UUID, or null when the truncation is unvalidated
+     * @see Builder#resumeDropsTurn(String)
+     */
+    @Nullable
+    public String resumeDropsTurn() {
+        return resumeDropsTurn;
     }
 
     /**
@@ -862,6 +896,10 @@ public final class ClaudeAgentOptions {
         private String sessionId;
         private boolean forkSession;
         @Nullable
+        private String resumeSessionAt;
+        @Nullable
+        private String resumeDropsTurn;
+        @Nullable
         private Integer maxTurns;
         @Nullable
         private Double maxBudgetUsd;
@@ -1117,6 +1155,74 @@ public final class ClaudeAgentOptions {
          */
         public Builder forkSession(boolean forkSession) {
             this.forkSession = forkSession;
+            return this;
+        }
+
+        /**
+         * When resuming, only load the conversation up to and including the
+         * message with this UUID. Use with {@link #resume(String)} (and usually
+         * {@link #forkSession(boolean)}) to branch from an earlier point in the
+         * conversation.
+         *
+         * <p>
+         * Accepts any transcript-entry UUID — typically an
+         * {@link in.vidyalai.claude.sdk.types.message.AssistantMessage#uuid()}
+         * observed live, or a
+         * {@link in.vidyalai.claude.sdk.types.message.SessionMessage#uuid()}
+         * from {@link ClaudeSDK#getSessionMessages(String)}. See
+         * {@link #resumeDropsTurn(String)} for guidance on choosing the fork
+         * point. For an offline copy truncated at a message (without resuming),
+         * see {@link ClaudeSDK#forkSession(String)}.
+         *
+         * @param resumeSessionAt the transcript-entry UUID to truncate at
+         * @return this builder
+         */
+        public Builder resumeSessionAt(String resumeSessionAt) {
+            this.resumeSessionAt = resumeSessionAt;
+            return this;
+        }
+
+        /**
+         * With {@link #resumeSessionAt(String)}: the UUID of the user prompt
+         * whose turn this truncating resume intends to discard.
+         *
+         * <p>
+         * When set, the CLI validates at load time that every transcript entry
+         * after the {@code resumeSessionAt} point is attributable to that turn,
+         * and refuses the resume otherwise — e.g. when the discarded range
+         * contains a queued user message or task notification the session
+         * absorbed mid-turn that the caller had not yet observed. A refusal
+         * surfaces as an exception thrown from {@link ClaudeSDK#query(String)}
+         * / {@link ClaudeSDKClient} (currently a
+         * {@link in.vidyalai.claude.sdk.exceptions.ProcessException}) whose
+         * message contains {@code "Resume rejected by --resume-drops-turn:"} —
+         * match on that text. Treat it as deterministic: clear the pending fork
+         * target and resume plainly rather than retrying the same request.
+         * Leave unset to keep the unvalidated truncation behavior.
+         *
+         * <p>
+         * Rule of thumb: set {@code resumeSessionAt} to the <i>last</i>
+         * transcript entry of the turn you are keeping (whatever its type), and
+         * {@code resumeDropsTurn} to the prompt UUID of the turn immediately
+         * after it (e.g. the next
+         * {@link in.vidyalai.claude.sdk.types.message.SessionMessage} of type
+         * {@code "user"} from {@link ClaudeSDK#getSessionMessages(String)}, or
+         * the {@code uuid} you supplied on a streamed user message). Note that
+         * with structured output ({@link #outputFormat(Map)}) or end-turn
+         * MCP tools, a kept turn ends on entries <i>after</i> its last
+         * assistant message, so forking at the assistant UUID is refused by
+         * design.
+         *
+         * <p>
+         * An empty string is forwarded to the CLI rather than dropped, so a
+         * malformed declaration is rejected there instead of silently disarming
+         * the guard the caller believes is armed.
+         *
+         * @param resumeDropsTurn the UUID of the discarded turn's user prompt
+         * @return this builder
+         */
+        public Builder resumeDropsTurn(String resumeDropsTurn) {
+            this.resumeDropsTurn = resumeDropsTurn;
             return this;
         }
 

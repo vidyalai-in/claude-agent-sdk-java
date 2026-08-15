@@ -19,6 +19,8 @@ package in.vidyalai.claude.sdk.types.message;
  * <li>{@link ResultMessage} - Final result with cost/usage info</li>
  * <li>{@link StreamEvent} - Partial streaming events</li>
  * <li>{@link RateLimitEvent} - Rate limit status change events</li>
+ * <li>{@link ConversationResetMessage} - The conversation was replaced
+ *     mid-session (e.g. after {@code /clear})</li>
  * </ul>
  *
  * <p>
@@ -38,12 +40,14 @@ package in.vidyalai.claude.sdk.types.message;
  *     case HookEventMessage hook -> System.out.println("Hook " + hook.subtype() + ": " + hook.hookEventName());
  *     case StreamEvent event -> handleStreamEvent(event);
  *     case RateLimitEvent rle -> handleRateLimit(rle);
+ *     case ConversationResetMessage reset -> snapshotTotals(reset.sessionId());
  * }
  * }</pre>
  */
 public sealed interface Message permits UserMessage, AssistantMessage, SystemMessage,
         TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage, TaskUpdatedMessage,
-        MirrorErrorMessage, HookEventMessage, ResultMessage, StreamEvent, RateLimitEvent {
+        MirrorErrorMessage, HookEventMessage, ResultMessage, StreamEvent, RateLimitEvent,
+        ConversationResetMessage {
 
     /**
      * Returns the type identifier for this message.

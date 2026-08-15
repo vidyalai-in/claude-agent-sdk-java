@@ -43,6 +43,7 @@ import in.vidyalai.claude.sdk.types.message.ThinkingBlock;
 import in.vidyalai.claude.sdk.types.message.ToolResultBlock;
 import in.vidyalai.claude.sdk.types.message.ToolUseBlock;
 import in.vidyalai.claude.sdk.types.message.UnknownBlock;
+import in.vidyalai.claude.sdk.types.message.ConversationResetMessage;
 import in.vidyalai.claude.sdk.types.message.RateLimitEvent;
 import in.vidyalai.claude.sdk.types.message.UserMessage;
 import in.vidyalai.claude.sdk.types.permission.PermissionBehavior;
@@ -269,6 +270,7 @@ class TypesTest {
             case ResultMessage r -> "result: " + r.result();
             case StreamEvent e -> "event: " + e.eventType();
             case RateLimitEvent rle -> "rate_limit: " + rle.rateLimitInfo().status();
+            case ConversationResetMessage c -> "conversation_reset: " + c.newConversationId();
         };
 
         assertThat(result).isEqualTo("assistant: Hello");

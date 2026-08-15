@@ -679,12 +679,12 @@ public class SubprocessCLITransport implements Transport {
      * <p>
      * With batch-script spawning refused ({@link #rejectWindowsBatchCli}) these
      * characters are harmless, because argument quoting is correct for native
-     * executables. They are rejected anyway so that {@code resume} and
-     * {@code sessionId} values, which applications commonly take from external
-     * input, stay inert even if a cmd.exe hop is ever reintroduced between the
-     * SDK and the CLI. No format is imposed beyond this — resume values may be
-     * arbitrary session titles, not only UUIDs — and POSIX behavior is
-     * unchanged.
+     * executables. They are rejected anyway so that {@code resume},
+     * {@code sessionId}, {@code resumeSessionAt} and {@code resumeDropsTurn}
+     * values, which applications commonly take from external input, stay inert
+     * even if a cmd.exe hop is ever reintroduced between the SDK and the CLI.
+     * No format is imposed beyond this — resume values may be arbitrary session
+     * titles, not only UUIDs — and POSIX behavior is unchanged.
      *
      * @param optionName the option being validated, for the error message
      * @param value      the caller-supplied value
@@ -1265,6 +1265,21 @@ public class SubprocessCLITransport implements Transport {
 
         if (options.forkSession()) {
             cmd.add("--fork-session");
+        }
+
+        // Equals form so the value can never be parsed as a separate flag, even
+        // if the CLI's declaration of these options ever changes.
+        if (options.resumeSessionAt() != null && !options.resumeSessionAt().isEmpty()) {
+            rejectWindowsCmdMetacharacters("resumeSessionAt", options.resumeSessionAt());
+            cmd.add("--resume-session-at=" + options.resumeSessionAt());
+        }
+
+        // Null check, not emptiness: an empty string is forwarded so the CLI
+        // rejects it as a malformed declaration instead of the SDK silently
+        // disarming the guard the caller believes is armed.
+        if (options.resumeDropsTurn() != null) {
+            rejectWindowsCmdMetacharacters("resumeDropsTurn", options.resumeDropsTurn());
+            cmd.add("--resume-drops-turn=" + options.resumeDropsTurn());
         }
 
         if (options.sessionStore() != null) {

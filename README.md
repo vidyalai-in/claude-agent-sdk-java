@@ -644,6 +644,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .continueConversation(true)
     .resume("session-id")
     .forkSession(false)
+    // Truncating resume: branch from an earlier transcript entry, and let the
+    // CLI refuse the fork if anything other than the named turn would be lost
+    .resumeSessionAt("transcript-entry-uuid")
+    .resumeDropsTurn("discarded-prompt-uuid")
 
     // Limits
     .maxTurns(10)
@@ -808,9 +812,40 @@ for (Message msg : messages) {
         case StreamEvent event -> {
             System.out.println("Stream event: " + event.eventType());
         }
+        case ConversationResetMessage reset -> {
+            // /clear (or another transcript-discarding flow) replaced the
+            // conversation; the CLI's running totals restart from zero.
+            System.out.println("Conversation reset: " + reset.newConversationId());
+        }
     }
 }
 ```
+
+`Message` is a sealed interface, so an exhaustive `switch` with no `default`
+stops compiling when a new message type is added. Add a `default ->` branch if
+you would rather absorb future additions silently.
+
+### Message Origin
+
+In streaming-input mode one connection interleaves the turns you send with turns
+the session injects on its own — background-task notifications, fired
+scheduled-task prompts, MCP channel messages, messages relayed from peer
+sessions. `origin()` on `UserMessage` and `ResultMessage` tells them apart:
+
+```java
+MessageOrigin origin = result.origin();
+if (origin == null || origin.isHuman()) {
+    // a turn this application submitted
+} else if (origin.kind() == MessageOriginKind.TASK_NOTIFICATION) {
+    // follow-up turn driven by a background task
+}
+```
+
+`origin()` is null when the CLI did not attribute the message. Prompts sent
+through `query()` arrive that way unless you stamp `"origin": {"kind": "human"}`
+on the streamed message map yourself — only the `human` kind is honored from an
+SDK host. A kind newer than this SDK models leaves `kind()` null with the wire
+string still readable from `kindValue()`, and never counts as human.
 
 ### Content Blocks
 
@@ -854,6 +889,15 @@ try {
 } catch (MessageParseException e) {
     System.err.println("Failed to parse message: " + e.getMessage());
     System.err.println("Data: " + e.getData());
+} catch (QueryFailedException e) {
+    // The run ended in an error result (max turns, max budget, a refused
+    // resume). The messages that arrived before it are still available.
+    System.err.println("Run ended early: " + e.getMessage());
+    ResultMessage result = e.resultMessage();
+    if (result != null) {
+        System.err.println("Stopped by: " + result.subtype());
+        System.err.println("Spent: $" + result.totalCostUsd());
+    }
 } catch (ClaudeSDKException e) {
     System.err.println("SDK error: " + e.getMessage());
 }
@@ -867,8 +911,21 @@ ClaudeSDKException (base)
 │   └── CLINotFoundException
 ├── ProcessException
 ├── CLIJSONDecodeException
-└── MessageParseException
+├── MessageParseException
+└── QueryFailedException
 ```
+
+`QueryFailedException` is specific to the collecting `ClaudeSDK.query(...)`
+family. The CLI reports conditions like `error_max_turns` and
+`error_max_budget_usd` by emitting a complete turn — including a final
+`ResultMessage` carrying the subtype and cost — and *then* exiting non-zero.
+A streaming consumer (`ClaudeSDKClient.receiveMessages()` /
+`receiveResponse()`) sees every one of those messages before the raise; a
+collecting call has to either return a list or throw, so it throws this and
+hands the collected messages back via `partialMessages()` and the
+`resultMessage()` convenience accessor. Catch it whenever you set `maxTurns`
+or `maxBudgetUsd`: reaching a cap you configured is an expected outcome, not
+a crash.
 
 ## Streaming Events
 

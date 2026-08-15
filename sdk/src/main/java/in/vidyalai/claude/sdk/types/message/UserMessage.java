@@ -26,12 +26,33 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param toolUseResult   metadata about tool execution results, including file
  *                        edit details like oldString, newString, and
  *                        structuredPatch
+ * @param origin          provenance of this message — see
+ *                        {@link MessageOrigin}. Null when the CLI did not
+ *                        attribute it. Populated on injected turns (task
+ *                        notifications, channel/peer messages, ...) and on
+ *                        user messages the CLI replays; tool-result messages
+ *                        never carry it.
  */
 public record UserMessage(
         @JsonProperty("content") Object content,
         @JsonProperty("uuid") @Nullable String uuid,
         @JsonProperty("parent_tool_use_id") @Nullable String parentToolUseId,
-        @JsonProperty("tool_use_result") @Nullable Map<String, Object> toolUseResult) implements Message {
+        @JsonProperty("tool_use_result") @Nullable Map<String, Object> toolUseResult,
+        @JsonProperty("origin") @Nullable MessageOrigin origin) implements Message {
+
+    /**
+     * Backwards-compatible constructor without {@code origin}.
+     *
+     * @param content         the message content (String or List of ContentBlock)
+     * @param uuid            unique identifier for the message
+     * @param parentToolUseId the tool use ID this message responds to, if any
+     * @param toolUseResult   metadata about tool execution results
+     */
+    public UserMessage(Object content, @Nullable String uuid,
+            @Nullable String parentToolUseId,
+            @Nullable Map<String, Object> toolUseResult) {
+        this(content, uuid, parentToolUseId, toolUseResult, null);
+    }
 
     @Override
     public String type() {

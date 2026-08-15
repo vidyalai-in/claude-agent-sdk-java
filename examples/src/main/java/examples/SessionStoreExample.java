@@ -37,6 +37,18 @@ import in.vidyalai.claude.sdk.types.session.SessionStoreEntry;
  * <p><b>Note:</b> Until the bundled CLI supports {@code --session-mirror}, this
  * example primarily demonstrates the API shape; the store will only collect
  * entries when the CLI is also versioned to emit mirror traffic.
+ *
+ * <p><b>Resuming from the store:</b> pairing {@code sessionStore} with
+ * {@code resume} (or {@code continueConversation}) makes the SDK load the
+ * session out of the store and materialize it into a temporary
+ * {@code CLAUDE_CONFIG_DIR} for the CLI subprocess. That temp directory is
+ * seeded from your real config directory so the subprocess can still
+ * authenticate: {@code .credentials.json} (with the refresh token redacted),
+ * {@code .claude.json}, and your user {@code settings.json} /
+ * {@code cowork_settings.json} — the last of which carries {@code apiKeyHelper}
+ * along with your {@code env}, {@code hooks} and {@code permissions}. Plugin
+ * declarations and {@code env.CLAUDE_CONFIG_DIR} are stripped from the copy,
+ * since both only misbehave under a redirected config directory.
  */
 public class SessionStoreExample {
 
