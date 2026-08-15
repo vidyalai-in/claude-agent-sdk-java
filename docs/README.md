@@ -54,6 +54,8 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Task lifecycle messages (TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage, TaskUpdatedMessage)
   - HookEventMessage (when `includeHookEvents` is enabled)
   - DeferredToolUse on ResultMessage; `apiErrorStatus` HTTP status field
+  - ConversationResetMessage — the conversation was replaced mid-session (e.g. `/clear`)
+  - Message origin — telling your own turns from session-injected ones
   - Content blocks (Text, Thinking, ToolUse, ToolResult)
   - Pattern matching
   - Examples and best practices
@@ -82,6 +84,7 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Tagging sessions for organization (`tagSession`)
   - Deleting sessions (`deleteSession`) — cascades subagent transcript dir
   - Forking sessions with UUID remapping (`forkSession`)
+  - Truncating resume (`resumeSessionAt` / `resumeDropsTurn`) — rewind safely to an earlier point
   - SDKSessionInfo (with tag, createdAt, nullable fileSize) and SessionMessage types
   - Pagination with offset and worktree support
 

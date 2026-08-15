@@ -22,10 +22,17 @@ Unknown message types return `null` instead of throwing an exception, allowing t
 sealed interface Message permits UserMessage, AssistantMessage,
     SystemMessage, TaskStartedMessage, TaskProgressMessage,
     TaskNotificationMessage, TaskUpdatedMessage, MirrorErrorMessage,
-    HookEventMessage, ResultMessage, StreamEvent, RateLimitEvent {
+    HookEventMessage, ResultMessage, StreamEvent, RateLimitEvent,
+    ConversationResetMessage {
     String type();
 }
 ```
+
+> **Compatibility note (v0.1.23).** `ConversationResetMessage` widened this
+> union. Because `Message` is sealed, an exhaustive `switch` with no `default`
+> branch stops compiling until a `ConversationResetMessage` case is added. Add a
+> `default ->` branch instead if you would rather absorb future additions
+> silently.
 
 ## UserMessage
 
@@ -34,13 +41,19 @@ record UserMessage(
     Object content,                               // String or List<ContentBlock>
     @Nullable String uuid,                        // Unique message identifier
     @Nullable String parentToolUseId,             // Set when inside a subagent tool use
-    @Nullable Map<String, Object> toolUseResult   // Tool execution metadata
+    @Nullable Map<String, Object> toolUseResult,  // Tool execution metadata
+    @Nullable MessageOrigin origin                // Provenance; null when unattributed
 ) implements Message {
     String type();                    // Returns "user"
     @Nullable String contentAsString();           // Content as String, or null if structured
     @Nullable List<ContentBlock> contentAsBlocks(); // Content as blocks, or null if string
 }
 ```
+
+A backwards-compatible 4-parameter constructor without `origin` remains
+available. `origin` is populated on injected turns (task notifications,
+channel/peer messages) and on user messages the CLI replays; tool-result
+messages never carry it. See [MessageOrigin](#messageorigin).
 
 ## AssistantMessage
 
@@ -117,13 +130,14 @@ record ResultMessage(
     @Nullable List<String> errors,                // Error messages from the CLI
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
-    @Nullable String terminalReason               // Why the query loop terminated
+    @Nullable String terminalReason,              // Why the query loop terminated
+    @Nullable MessageOrigin origin                // Origin of the triggering user message
 ) implements Message {
     String type();  // Returns "result"
 }
 ```
 
-Backwards-compatible constructors are also available for code that does not need the newer fields. The original 11-parameter constructor (without `modelUsage`, `permissionDenials`, `deferredToolUse`, `errors`, `apiErrorStatus`, `uuid`, and `terminalReason`) continues to work; a 15-parameter overload (without `deferredToolUse`, `apiErrorStatus`, and `terminalReason`) and a 17-parameter overload (without `terminalReason`) are also available for callers written against the earlier shapes.
+Backwards-compatible constructors are also available for code that does not need the newer fields. The original 11-parameter constructor (without `modelUsage`, `permissionDenials`, `deferredToolUse`, `errors`, `apiErrorStatus`, `uuid`, `terminalReason`, and `origin`) continues to work; 15-parameter (without `deferredToolUse`, `apiErrorStatus`, `terminalReason`, `origin`), 17-parameter (without `terminalReason`, `origin`) and 18-parameter (without `origin`) overloads are also available for callers written against the earlier shapes.
 
 ### terminalReason
 
@@ -363,6 +377,128 @@ record RateLimitEvent(
     String sessionId              // Session identifier
 ) implements Message {
     String type();  // Returns "rate_limit_event"
+}
+```
+
+## ConversationResetMessage
+
+Emitted when the session's conversation is replaced without ending the
+connection — after `/clear`, or any other flow that discards the transcript
+mid-session.
+
+```java
+record ConversationResetMessage(
+    String newConversationId,  // Opaque id for the fresh conversation
+    String uuid,               // Unique identifier of this message
+    String sessionId           // The session that was reset (the outgoing one)
+) implements Message {
+    String type();  // Returns "conversation_reset"
+}
+```
+
+In streaming-input mode a single connection carries many user turns, and a
+reset clears the conversation history *and* zeroes the running totals reported
+on subsequent `ResultMessage` objects (`totalCostUsd`, for instance). If you
+accumulate those totals across a long-lived session, snapshot them when this
+message arrives.
+
+`newConversationId` is a key for a UI to hang an empty transcript on (and to
+discard any cached session title). It is **not** the `sessionId` of subsequent
+messages — read that from the next message, which carries a new one.
+
+```java
+case ConversationResetMessage reset -> {
+    System.out.printf("session %s reset -> new conversation %s%n",
+            reset.sessionId(), reset.newConversationId());
+    snapshotTotals();   // subsequent results restart their counters at zero
+}
+```
+
+Missing any of the three required fields raises `MessageParseException`.
+
+## MessageOrigin
+
+Provenance of a user-role message, and — on a `ResultMessage` — of the message
+that triggered that turn.
+
+```java
+record MessageOrigin(
+    @Nullable MessageOriginKind kind,   // null when the CLI sent a kind this version doesn't model
+    String kindValue,                   // verbatim wire value of `kind`, never null
+    @Nullable String server,            // kind == CHANNEL: MCP server the message arrived on
+    @Nullable String from,              // kind == PEER/OBSERVER: sender address (sender-asserted)
+    @Nullable String name,              // kind == PEER: sender display name, CLI-normalized
+    @Nullable String fromSession,       // kind == PEER: sender's host-openable session id
+    @Nullable String senderTaskId,      // kind == PEER/OBSERVER: in-process subagent task id
+    @Nullable String body,              // kind == PEER: decoded body, envelope stripped
+    @Nullable Integer verifiedPeerPid,  // kind == PEER: kernel-verified pid of the connecting process
+    @Nullable TaskNotificationOriginSubkind subkind,  // kind == TASK_NOTIFICATION
+    Map<String, Object> raw             // full origin object from the CLI, verbatim
+) {
+    boolean isHuman();  // true when kind == MessageOriginKind.HUMAN
+}
+```
+
+In streaming-input mode one connection interleaves the turns your application
+sends with turns the session injects on its own — background-task
+notifications, fired scheduled-task prompts, MCP channel messages, messages
+relayed from peer sessions. `origin` tells them apart:
+
+```java
+MessageOrigin origin = result.origin();
+if (origin == null || origin.isHuman()) {
+    // a turn this application submitted
+} else if (origin.kind() == MessageOriginKind.TASK_NOTIFICATION) {
+    // follow-up turn driven by a background task
+}
+```
+
+A null `origin` means the CLI did not attribute the message. Prompts sent
+through `ClaudeSDK.query()` or `ClaudeSDKClient.query(String)` arrive that way
+unless you stamp `"origin": {"kind": "human"}` on the message map yourself via
+`ClaudeSDKClient.query(Iterator)` — only the `human` kind is honored from an
+SDK host, and doing so requires Claude Code >= 2.1.210.
+
+**Forward compatibility.** A `kind` newer than this SDK models leaves `kind()`
+null while `kindValue()` still carries the wire string, and `isHuman()` is
+false for it — treat anything unrecognized as "not human". The same applies to
+`subkind()`. The complete CLI object is retained on `raw()`, so keys this
+version does not model stay reachable.
+
+`from`, `name` and `fromSession` are **sender-asserted**. Use them for reply
+routing and display, never as proof of identity.
+
+### MessageOriginKind
+
+```java
+enum MessageOriginKind {
+    HUMAN,              // "human"              — submitted by the application/user
+    CHANNEL,            // "channel"            — arrived on an MCP channel
+    PEER,               // "peer"               — relayed from a peer session or subagent
+    TASK_NOTIFICATION,  // "task-notification"  — background task, or a fired scheduled prompt
+    COORDINATOR,        // "coordinator"        — injected by a multi-session coordinator
+    UNCLASSIFIED,       // "unclassified"       — CLI could not attribute the turn
+    OBSERVER,           // "observer"           — from an attached observer
+    AUTO_CONTINUATION,  // "auto-continuation"  — session continued its own prior work
+    OBSERVER_ACTIVITY;  // "observer-activity"  — activity report from an observer
+
+    String getValue();
+    static MessageOriginKind fromValue(String value);  // throws IllegalArgumentException if unknown
+}
+```
+
+### TaskNotificationOriginSubkind
+
+Present when `kind == TASK_NOTIFICATION`, absent for ordinary background-task
+notifications.
+
+```java
+enum TaskNotificationOriginSubkind {
+    SCHEDULED_TRIGGER,   // "scheduled-trigger"  — the fired prompt of a scheduled task
+    PEER_SEND_MESSAGE;   // "peer-send-message"  — sent from another of the user's sessions
+
+    String getValue();
+    static TaskNotificationOriginSubkind fromValue(String value);
 }
 ```
 

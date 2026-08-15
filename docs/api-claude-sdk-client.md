@@ -81,28 +81,63 @@ Send message to specific session.
 ### query(String prompt)
 
 ```java
-public List<Message> query(String prompt)
+public void query(String prompt)
 ```
 
-Send message and wait for complete response.
+Send a message. Returns as soon as the prompt is written — read the reply with
+[`receiveResponse()`](#receiveresponse) or [`receiveMessages()`](#receivemessages).
 
-**Returns**: `List<Message>` - Messages until ResultMessage
+Equivalent to `query(prompt, "default")`.
 
 ### query(String prompt, String sessionId)
 
 ```java
-public List<Message> query(String prompt, String sessionId)
+public void query(String prompt, String sessionId)
 ```
 
-Query specific session.
+Query a specific session.
 
-### query(Iterator<Map<String, Object>> messageStream)
+### query(Iterator&lt;Map&lt;String, Object&gt;&gt; messageStream)
 
 ```java
-public List<Message> query(Iterator<Map<String, Object>> messageStream)
+public void query(Iterator<Map<String, Object>> messageStream)
+public void query(Iterator<Map<String, Object>> messageStream, String sessionId)
 ```
 
-Send multiple messages as stream.
+Send raw message maps. Reach for this rather than `query(String)` when a message
+needs fields the string form does not build — `origin` attribution, structured
+content blocks, an explicit `uuid`:
+
+```java
+Map<String, Object> message = new HashMap<>();
+message.put("type", "user");
+message.put("message", Map.of("role", "user", "content", "Reply with exactly: one"));
+message.put("parent_tool_use_id", null);
+message.put("origin", Map.of("kind", "human"));   // attribute the turn
+
+client.query(List.of(message).iterator());
+for (Message msg : client.receiveResponse()) { /* ... */ }
+```
+
+`session_id` is filled in with `"default"` — or with `sessionId` on the
+two-argument overload — on any message that omits it. The caller's maps are
+copied rather than mutated when that field is added, so passing an immutable
+map is safe.
+
+Like `query(String)`, this leaves the CLI's stdin open, so it can be called
+repeatedly across a session and mixed freely with the string overload.
+
+> **Changed in v0.1.23.** This method previously handed the iterator to the
+> internal one-shot streaming path, which closes stdin once the iterator is
+> exhausted. That ended the session: the CLI exited, and the next `query()` or
+> `sendMessage()` failed with `ProcessTransport is not ready for writing`. It
+> now writes directly, matching the Python SDK. Callers that relied on the old
+> behavior to terminate a session should call `disconnect()` (or use
+> try-with-resources) instead.
+
+The messages are written before the call returns, which keeps successive calls
+in order. Drive a lazy or unbounded iterator from your own thread if you need to
+read responses while it is still producing.
 
 ## Receiving Messages
 

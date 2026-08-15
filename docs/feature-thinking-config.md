@@ -474,7 +474,7 @@ String effort()
 - [Configuration Options](./feature-configuration-options.md) - All configuration options
 - [Message Types](./feature-message-types.md) - ThinkingBlock messages
 - [Streaming Events](./feature-streaming-events.md) - Streaming thinking blocks
-- [Beta Features](./feature-configuration-options.md#beta-features) - Extended context and thinking
+- [Beta Features](./feature-configuration-options.md#betas) - Extended context and thinking
 
 ## Example Code
 

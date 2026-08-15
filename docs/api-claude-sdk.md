@@ -43,6 +43,7 @@ Execute query with custom options.
 - `IllegalArgumentException` - If canUseTool is set (requires streaming)
 - `CLIConnectionException` - Connection failed
 - `ProcessException` - CLI process failed
+- `QueryFailedException` - The run ended in an error result (`error_max_turns`, `error_max_budget_usd`, a resume refused by `resumeDropsTurn`). Carries the messages collected before it — see below.
 
 ### query(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options)
 
@@ -60,6 +61,37 @@ Execute streaming query with multiple messages.
 - `options` - Configuration options
 
 **Returns**: `List<Message>`
+
+**Throws**: same as above, including `QueryFailedException`.
+
+### Error results and partial messages
+
+The CLI reports `error_max_turns` and `error_max_budget_usd` by emitting a
+*complete* turn — assistant messages plus a final `ResultMessage` carrying the
+subtype, cost and usage — and only then exiting non-zero, on purpose, for shell
+consumers.
+
+These collecting methods must either return a list or throw, so when that
+happens they throw `QueryFailedException` and hand the collected messages back
+on it. Nothing is lost:
+
+```java
+try {
+    List<Message> messages = ClaudeSDK.query(prompt, options);
+} catch (QueryFailedException e) {
+    ResultMessage result = e.resultMessage();       // the final result, or null
+    List<Message> partial = e.partialMessages();    // everything received first
+    if (result != null && "error_max_budget_usd".equals(result.subtype())) {
+        System.out.printf("Stopped after $%.4f%n", result.totalCostUsd());
+    }
+}
+```
+
+Catch it whenever you set `maxTurns` or `maxBudgetUsd` — reaching a cap you
+configured is an expected outcome, not a crash. The streaming APIs on
+[`ClaudeSDKClient`](./api-claude-sdk-client.md) hand each message over as it
+arrives and raise only at the end, so they never needed this. See
+[Exceptions](./api-exceptions.md#queryfailedexception).
 
 ## Convenience Methods
 

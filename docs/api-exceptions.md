@@ -10,7 +10,8 @@ ClaudeSDKException (RuntimeException)
 ├── CLINotFoundException
 ├── ProcessException
 ├── CLIJSONDecodeException
-└── MessageParseException
+├── MessageParseException
+└── QueryFailedException
 ```
 
 ## ClaudeSDKException
@@ -103,6 +104,65 @@ public class MessageParseException extends ClaudeSDKException {
 - Missing required fields
 - Type conversion error
 
+## QueryFailedException
+
+A collecting query ended in an error result. Carries the messages that had
+already arrived.
+
+```java
+public class QueryFailedException extends ClaudeSDKException {
+    public QueryFailedException(String message, Throwable cause, List<Message> partialMessages);
+
+    public List<Message> partialMessages();   // never null; unmodifiable
+    public ResultMessage resultMessage();     // last ResultMessage received, or null
+}
+```
+
+**Causes**:
+- `error_max_turns` — `maxTurns` reached
+- `error_max_budget_usd` — `maxBudgetUsd` reached
+- `error_during_execution` — including a resume refused by `resumeDropsTurn`
+
+**Why it exists**: the CLI reports these conditions by emitting a *complete*
+turn — assistant messages plus a final `ResultMessage` carrying the subtype,
+cost and usage — and only then exiting non-zero, on purpose, for shell
+consumers. The streaming APIs (`ClaudeSDKClient.receiveMessages()` and
+`receiveResponse()`) hand each of those messages to the consumer as it arrives
+and raise only at the end, so nothing is lost there. A collecting call has to
+either return a list or throw; throwing this carries both the error and the
+messages, so `ClaudeSDK.query(...)` is as informative as the streaming path.
+
+Thrown only by the collecting `ClaudeSDK.query(...)` family (including
+`queryForText` and `queryForResult`, which delegate to it). Because it extends
+`ClaudeSDKException`, existing `catch (ClaudeSDKException e)` blocks keep
+working unchanged.
+
+```java
+try {
+    List<Message> messages = ClaudeSDK.query("Summarize the README", options);
+    // ... normal path
+} catch (QueryFailedException e) {
+    // The turn is usually complete — inspect what actually happened.
+    ResultMessage result = e.resultMessage();
+    if (result != null && "error_max_budget_usd".equals(result.subtype())) {
+        System.out.printf("Stopped by the budget cap after $%.4f%n", result.totalCostUsd());
+    }
+    for (Message msg : e.partialMessages()) {
+        if (msg instanceof AssistantMessage a) {
+            System.out.println(a.getTextContent());
+        }
+    }
+}
+```
+
+`partialMessages()` is empty when the run failed before producing anything (a
+CLI that could not start, for instance). It is not serialized — a deserialized
+instance reports an empty list rather than null, because `Message` is not
+declared `Serializable`.
+
+Catch this whenever you set `maxTurns` or `maxBudgetUsd`: reaching a cap you
+configured yourself is an expected outcome, not a crash.
+
 ## Error Handling Examples
 
 ### Basic Try-Catch
@@ -116,10 +176,16 @@ try {
     System.err.println("Connection failed: " + e.getMessage());
 } catch (ProcessException e) {
     System.err.println("CLI crashed: " + e.getMessage());
+} catch (QueryFailedException e) {
+    // Run stopped at a limit; the messages so far are still available.
+    System.err.println("Run ended early: " + e.getMessage());
 } catch (ClaudeSDKException e) {
     System.err.println("SDK error: " + e.getMessage());
 }
 ```
+
+Order matters: `QueryFailedException` must be caught before
+`ClaudeSDKException`, since it is a subclass.
 
 ### With Resource Management
 

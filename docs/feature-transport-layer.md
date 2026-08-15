@@ -330,5 +330,5 @@ List<Message> messages = ClaudeSDK.query(
 5. **JSON Format**: Messages must be JSON objects, one per line
 
 ## See Also
-- [Architecture](./architecture.md#transport-layer) - Transport layer design
+- [Architecture](./architecture.md#4-transport-layer) - Transport layer design
 - Transport source code: `sdk/src/main/java/in/vidyalai/claude/sdk/transport/`

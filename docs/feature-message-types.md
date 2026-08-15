@@ -67,8 +67,13 @@ Message (sealed interface)
 ├── HookEventMessage (record) - Hook lifecycle events (when includeHookEvents enabled)
 ├── ResultMessage (record) - Final result with cost/usage/timing
 ├── StreamEvent (record) - Partial streaming updates
-└── RateLimitEvent (record) - Rate limit status change notifications
+├── RateLimitEvent (record) - Rate limit status change notifications
+└── ConversationResetMessage (record) - Conversation replaced mid-session (e.g. /clear)
 ```
+
+> **Compatibility note (v0.1.23).** `ConversationResetMessage` widened this
+> sealed union, so an exhaustive `switch` with no `default` branch stops
+> compiling until a case is added. See [Pattern Matching](#pattern-matching).
 
 ## UserMessage
 
@@ -681,6 +686,98 @@ for (Message msg : ClaudeSDK.query(prompt, options)) {
 }
 ```
 
+## ConversationResetMessage
+
+Emitted when the session's conversation is replaced without ending the
+connection — after `/clear`, or any other flow that discards the transcript
+mid-session. Before v0.1.23 the parser dropped this frame silently, so
+applications never saw resets, including ones they did not initiate.
+
+### Fields
+
+```java
+record ConversationResetMessage(
+    String newConversationId,  // Opaque id for the fresh conversation
+    String uuid,               // Unique identifier of this message
+    String sessionId           // The session that was reset (the outgoing one)
+) implements Message
+```
+
+### Why it matters
+
+A reset clears the conversation history *and* zeroes the running totals reported
+on subsequent `ResultMessage` objects. If you accumulate cost or token usage
+across a long-lived streaming session, this frame is your only signal to
+snapshot them before they restart at zero.
+
+It also marks a session-id boundary: `newConversationId` is a key for a UI to
+hang an empty transcript on, **not** the `sessionId` of what follows. Messages
+after the reset carry a new `sessionId` — read it from the next message.
+
+```java
+double runningCostUsd = 0.0;
+
+for (Message msg : client.receiveResponse()) {
+    switch (msg) {
+        case ResultMessage r -> {
+            if (r.totalCostUsd() != null) runningCostUsd += r.totalCostUsd();
+        }
+        case ConversationResetMessage reset -> {
+            System.out.printf("Reset: %s -> new conversation %s%n",
+                    reset.sessionId(), reset.newConversationId());
+            archive(runningCostUsd);   // CLI counters restart from zero here
+        }
+        default -> { }
+    }
+}
+```
+
+## Message Origin
+
+`UserMessage.origin()` and `ResultMessage.origin()` expose *why* a turn was
+initiated. In streaming-input mode one connection interleaves the turns your
+application sends with turns the session injects on its own — background-task
+notifications, fired scheduled-task prompts, MCP channel messages, messages
+relayed from peer sessions. On a `ResultMessage` the field reports the origin of
+the message that *triggered* that turn, which is what lets you tell "this
+answers my prompt" from "this answers a background task".
+
+```java
+MessageOrigin origin = result.origin();
+if (origin == null || origin.isHuman()) {
+    // a turn this application submitted
+} else if (origin.kind() == MessageOriginKind.TASK_NOTIFICATION) {
+    // follow-up turn driven by a background task
+    render(origin.subkind());   // scheduled-trigger / peer-send-message, or null
+}
+```
+
+`origin` is null when the CLI did not attribute the message — which is the
+normal case for prompts you send. To have your own turns attributed, stamp the
+message map yourself and send it through `ClaudeSDKClient.query(Iterator)`:
+
+```java
+Map<String, Object> message = new HashMap<>();
+message.put("type", "user");
+message.put("message", Map.of("role", "user", "content", prompt));
+message.put("parent_tool_use_id", null);
+message.put("origin", Map.of("kind", "human"));
+
+client.query(List.of(message).iterator());
+```
+
+Only the `human` kind is honored from an SDK host, and it requires Claude Code
+>= 2.1.210. Tool-result user messages never carry an origin.
+
+Unrecognized kinds stay visible rather than becoming errors: `kind()` is null
+while `kindValue()` holds the wire string, and `isHuman()` is false — so
+unknown attribution always reads as "not human". The full CLI object is retained
+on `raw()`. Field-by-field reference:
+[MessageOrigin](./api-message-types.md#messageorigin).
+
+Fields such as `from`, `name` and `fromSession` are **sender-asserted** — use
+them for reply routing and display, never as proof of identity.
+
 ## Content Blocks
 
 Assistant messages (and structured user messages) contain content blocks.
@@ -863,6 +960,24 @@ String result = switch (message) {
     case ResultMessage r -> "Cost: $" + r.totalCostUsd();
     case StreamEvent e -> "Streaming: " + e.eventType();
     case RateLimitEvent rle -> "Rate limit: " + rle.rateLimitInfo().status();
+    case ConversationResetMessage c -> "Conversation reset: " + c.newConversationId();
+};
+```
+
+Because `Message` is sealed, a `switch` like this one — with no `default` —
+must list every permitted type, and the compiler enforces it. That is the point:
+when a new message type is added, you get a compile error at each exhaustive
+switch rather than silently dropping frames at runtime.
+
+The trade-off is that adding a type is a source-breaking change for such code.
+`ConversationResetMessage` did exactly that in v0.1.23. If you would rather
+absorb future additions silently, add a `default` branch:
+
+```java
+String result = switch (message) {
+    case AssistantMessage a -> "Claude: " + a.getTextContent();
+    case ResultMessage r -> "Cost: $" + r.totalCostUsd();
+    default -> "(other)";        // future message types land here
 };
 ```
 

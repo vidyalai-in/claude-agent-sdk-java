@@ -330,6 +330,71 @@ ForkSessionResult result = ClaudeSDK.forkSession(
 - Throws `FileNotFoundException` if the source session is not found.
 - Throws `IllegalArgumentException` if the session has no messages or `upToMessageId` is not found.
 
+`forkSession()` produces an offline copy without running the CLI. To *resume*
+from an earlier point and keep talking, use truncating resume instead.
+
+## Truncating Resume
+
+`resumeSessionAt` loads a resumed conversation only up to and including a given
+transcript-entry UUID, so everything after it is dropped. Paired with
+`forkSession(true)` it branches into a new session and leaves the original
+untouched.
+
+`resumeDropsTurn` makes that truncation **safe**. Give it the UUID of the user
+prompt whose turn you intend to discard, and the CLI validates at load time
+that every entry past the fork point belongs to that turn — refusing otherwise.
+Without it, a queued user message or a background-task notification the session
+absorbed mid-turn, which you never observed, would be silently discarded.
+
+```java
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .cwd(projectDir)
+    .resume(sessionId)
+    .forkSession(true)               // branch; leave the source session intact
+    .resumeSessionAt(keepAtUuid)     // last transcript entry of the turn to keep
+    .resumeDropsTurn(nextPromptUuid) // prompt UUID of the turn being discarded
+    .build();
+
+for (Message msg : ClaudeSDK.query("Reply with exactly: three", options)) {
+    if (msg instanceof ResultMessage r) {
+        System.out.println("Forked session: " + r.sessionId());
+    }
+}
+```
+
+**Choosing the two UUIDs.** Set `resumeSessionAt` to the *last* transcript entry
+of the turn you are keeping — whatever its type — and `resumeDropsTurn` to the
+prompt UUID of the turn immediately after it. Both are readable from
+`ClaudeSDK.getSessionMessages(sessionId, cwd)`: find the entry you want to keep,
+then take the `uuid()` of the next `SessionMessage` whose `type()` is `"user"`.
+An `AssistantMessage.uuid()` observed live works as the fork point too.
+
+Note that with structured output (`outputFormat`) or end-turn MCP tools, a kept
+turn ends on entries *after* its last assistant message — so forking at the
+assistant UUID is refused by design in those cases.
+
+**Handling a refusal.** The refusal arrives as an exception whose message
+contains `Resume rejected by --resume-drops-turn:`:
+
+```java
+try {
+    ClaudeSDK.query(prompt, options);
+} catch (ClaudeSDKException e) {
+    if (String.valueOf(e.getMessage()).contains("Resume rejected by --resume-drops-turn:")) {
+        // Deterministic — the transcript is not what we assumed.
+        // Clear the fork target and resume plainly; do not retry as-is.
+    }
+}
+```
+
+Treat it as deterministic: retrying the identical request will fail identically.
+Leave `resumeDropsTurn` unset to keep the older, unvalidated truncation
+behavior.
+
+Both options are also forwarded when resuming from a `SessionStore`. See
+[`TruncatingResumeExample`](../examples/src/main/java/examples/TruncatingResumeExample.java)
+for a runnable end-to-end demonstration.
+
 ## Examples
 
 ### Example 1: List recent sessions

@@ -335,7 +335,7 @@ When `options.sessionStore` is set together with `options.resume` (or `options.c
 
 1. Calls `store.load()` for the requested session ID (or, for `continueConversation`, picks the most-recently-modified non-sidechain session via `store.listSessions()`).
 2. Writes the entries to a temporary directory laid out exactly like `~/.claude/`.
-3. Copies `.credentials.json` (with `refreshToken` redacted) and `.claude.json` from your real config dir so the subprocess can authenticate.
+3. Seeds the temp dir from your real config dir so the subprocess can authenticate and behave as it normally would — `.credentials.json` (with `refreshToken` redacted), `.claude.json`, and your user `settings.json` / `cowork_settings.json`. See [What gets seeded](#what-gets-seeded).
 4. Materializes any subagent transcripts and `.meta.json` sidecars from the store (when `listSubkeys` is implemented).
 5. Spawns the CLI with `CLAUDE_CONFIG_DIR=<temp dir>` so it resumes from local disk as usual.
 6. Cleans up the temp dir on disconnect (with retry on transient Windows AV/indexer locks).
@@ -349,6 +349,49 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```
 
 The `loadTimeoutMs` option (default 60 000) bounds each individual store call during materialization; if an adapter doesn't settle within this window the query fails fast with a clear error rather than hanging the iterator.
+
+### What gets seeded
+
+Because the subprocess runs under a redirected `CLAUDE_CONFIG_DIR`, it would
+otherwise see none of your configuration. The SDK copies four files from the
+caller's config dir — resolved as `options.env["CLAUDE_CONFIG_DIR"]` → the
+process environment → `~/.claude` (`.claude.json` lives at
+`$CLAUDE_CONFIG_DIR/.claude.json` when set, else `~/.claude.json`, *not*
+`~/.claude/.claude.json`):
+
+| File | Why it matters |
+|------|----------------|
+| `.credentials.json` | OAuth credentials, with `claudeAiOauth.refreshToken` removed |
+| `.claude.json` | User-level CLI state |
+| `settings.json` | `apiKeyHelper`, plus your `env`, `hooks` and `permissions` |
+| `cowork_settings.json` | The alternate settings filename read in cowork-plugins mode |
+
+Seeding `settings.json` matters more than it looks: `apiKeyHelper` is a fourth
+authentication mechanism alongside the credentials file, the macOS Keychain and
+environment variables. Before v0.1.23 it was not copied, so a host that
+authenticated solely through `apiKeyHelper` failed with **"Not logged in"** the
+moment it resumed from a store.
+
+Both settings files pass through a transform that drops only the keys that
+misbehave under a redirected config dir:
+
+- `enabledPlugins` and `extraKnownMarketplaces` — these reconcile against the
+  always-empty temp plugin cache and would network-install every declared
+  marketplace on each resume.
+- `env.CLAUDE_CONFIG_DIR` — would point the subprocess's config reads back out
+  of the temp dir.
+
+Everything else is preserved. A UTF-8 BOM (PowerShell writes one) is tolerated,
+and content that is not valid UTF-8, or does not parse as a JSON object, is
+copied byte-for-byte so the subprocess sees exactly what the CLI would have
+read. Files are written owner-only (`0600`) inside the owner-only (`0700`) temp
+dir.
+
+Seeding is best-effort: a file that cannot be read for any reason other than
+"missing" — a permissions error, or a directory or FIFO where a file was
+expected — is logged and skipped rather than aborting a resume that would
+otherwise succeed. A copy that fails midway removes the partial destination so
+the subprocess cannot misparse a truncated file.
 
 ### Validation guards
 
