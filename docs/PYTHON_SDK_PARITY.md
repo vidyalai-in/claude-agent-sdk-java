@@ -438,12 +438,12 @@ cause.
 
 ## 3. MCP (MODEL CONTEXT PROTOCOL) PARITY ✅ 100%
 
-> **One known behavioral divergence** in the in-process SDK MCP server, pre-dating
-> the v0.2.140 sync: a failed `tools/call` (unknown tool, handler exception) is
-> answered with a JSON-RPC error rather than Python's `isError: true` result, and
-> Java does not validate arguments against the tool's input schema before calling
-> the handler. Feature coverage below is unaffected. See §7 and the v0.2.140 notes
-> in the Executive Summary.
+> **Tool-failure reporting** in the in-process SDK MCP server now matches Python
+> for the cases that matter: arguments are validated against a tool's declared
+> `inputSchema` before the handler runs, and a handler that throws is reported as
+> an `isError` result rather than a JSON-RPC error. One deliberate divergence
+> remains — an unknown tool is still answered with `-32601`, which is what the
+> MCP specification prescribes. See §7.
 
 ### MCP Features
 
@@ -585,7 +585,9 @@ All 37+ configuration options are implemented with 100% parity:
 
 | Area | Python | Java | Assessment |
 |------|--------|------|------------|
-| **SDK-MCP tool failure reporting** | Unknown tool, schema-invalid arguments, and handler exceptions all come back as a successful `tools/call` response with `isError: true`; arguments are validated against the tool's input schema before the handler runs (`Input validation error: ...`) | Answered with a JSON-RPC error instead (`-32601` unknown tool, `-32603` handler exception); no input-schema validation, so a schema-invalid call reaches the handler | ⚠️ Open. Pre-dates the v0.2.140 sync — Python got this from the mcp library's `@call_tool` decorator long before PR #1218 moved it into SDK code. Java's `SdkMcpServer` hand-rolls dispatch with no such library. Changing it alters what the model sees when a tool fails, so it is tracked here rather than folded into a version sync. |
+| **SDK-MCP unknown tool** | A successful `tools/call` response with `isError: true` (`Tool 'x' not found`) | A JSON-RPC `-32601` error (`Tool not found: x`) | ✅ Deliberate. The MCP specification's error-handling section lists "Unknown tools" as a *protocol* error, so Java follows the spec here. Python's choice follows from delegating dispatch to the `mcp` library in PR #1218, not from a reading of the spec. A model can only call tools the server listed, so the case is close to unreachable in practice. |
+| **SDK-MCP invalid arguments** | Validated against `inputSchema`; `Input validation error: ...` as an `isError` result, handler not called | Same | ✅ Aligned (0.1.24). Previously Java did not validate at all, so bad arguments reached the handler and surfaced as a leaked `ClassCastException`/NPE. |
+| **SDK-MCP handler exception** | `isError` result carrying the exception text | Same | ✅ Aligned (0.1.24). Previously a JSON-RPC `-32603`, which the CLI degraded into an `isError` result prefixed `Tool invocation failed: `. |
 
 ---
 

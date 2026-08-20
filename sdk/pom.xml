@@ -37,6 +37,14 @@
         </dependency>
 
         <!-- Nullable annotations -->
+        <!-- Validates tool arguments against a tool's declared inputSchema
+             before the handler runs; the MCP spec requires servers to validate
+             tool inputs. -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>

@@ -479,8 +479,22 @@ Thread.startVirtualThread(() -> {
 
 - Jackson (JSON processing)
 - JSpecify (Nullability annotations)
+- networknt json-schema-validator (validates SDK MCP tool arguments against a
+  tool's declared `inputSchema`). Pinned to the 2.x line: 3.x is built against
+  Jackson 3 (`tools.jackson`) and would add a second JSON stack next to the
+  Jackson 2 this SDK ships. Brings `slf4j-api` transitively — see below.
 - JUnit 5 (Testing)
 - AssertJ (Test assertions)
+
+## A note on SLF4J
+
+The schema validator logs through `slf4j-api`, so it appears on the SDK's
+runtime classpath. SLF4J does not log anything by itself: an application with
+no SLF4J provider gets a one-time `No SLF4J providers were found` notice on
+stderr the first time an SDK MCP server is constructed. Adding any binding
+(`slf4j-simple`, Logback, `slf4j-jdk14` to route into `java.util.logging`, or
+`slf4j-nop` to silence it) removes the notice. The SDK deliberately does not
+ship a binding: choosing one is the application's call, not a library's.
 
 # Publishing
 

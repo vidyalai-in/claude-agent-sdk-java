@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
 
@@ -221,6 +223,28 @@ class SdkMcpTest {
         assertThat(error.get("message").toString()).contains("Tool not found");
     }
 
+    /** The {@code content}/{@code isError} of a successful tools/call response. */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> resultOf(Map<String, Object> response) {
+        assertThat(response).as("expected a result, got: %s", response).containsKey("result");
+        return (Map<String, Object>) response.get("result");
+    }
+
+    private static String textOf(Map<String, Object> result) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) result.get("content");
+        return content.stream().map(c -> String.valueOf(c.get("text"))).collect(Collectors.joining("\n"));
+    }
+
+    private static Map<String, Object> callTool(SdkMcpServer server, String tool, Map<String, Object> arguments)
+            throws ExecutionException, InterruptedException {
+        return server.handleMessage(Map.of(
+                "jsonrpc", "2.0",
+                "id", 5,
+                "method", "tools/call",
+                "params", Map.of("name", tool, "arguments", arguments))).get();
+    }
+
     @Test
     void testServerErrorHandling() throws ExecutionException, InterruptedException {
         SdkMcpTool<Map<String, Object>> failingTool = SdkMcpTool.create(
@@ -231,18 +255,126 @@ class SdkMcpTest {
                 });
 
         SdkMcpServer server = SdkMcpServer.create("test", List.of(failingTool));
+        Map<String, Object> response = callTool(server, "fail", Map.of());
 
-        Map<String, Object> response = server.handleMessage(Map.of(
-                "jsonrpc", "2.0",
-                "id", 5,
-                "method", "tools/call",
-                "params", Map.of("name", "fail", "arguments", Map.of()))).get();
+        // A tool that fails while running has produced a *result*, not a broken
+        // request: the MCP spec reports those with isError so the model can see
+        // what went wrong and adapt. A JSON-RPC error would say the call could
+        // not be processed at all.
+        assertThat(response).doesNotContainKey("error");
+        Map<String, Object> result = resultOf(response);
+        assertThat(result).containsEntry("isError", true);
+        assertThat(textOf(result)).isEqualTo("Intentional failure");
+    }
 
-        // The response should indicate an error per JSON-RPC spec
-        assertThat(response).containsKey("error");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> error = (Map<String, Object>) response.get("error");
-        assertThat(error.get("message").toString()).contains("Intentional failure");
+    @Test
+    void testHandlerFailureWithoutAMessageStillReportsSomething() throws Exception {
+        SdkMcpTool<Map<String, Object>> failingTool = SdkMcpTool.create(
+                "npe", "Throws without a message", Map.of("type", "object"),
+                args -> {
+                    throw new NullPointerException();
+                });
+
+        Map<String, Object> result = resultOf(
+                callTool(SdkMcpServer.create("test", List.of(failingTool)), "npe", Map.of()));
+
+        assertThat(result).containsEntry("isError", true);
+        assertThat(textOf(result)).isEqualTo("NullPointerException");
+    }
+
+    // --- input validation (MCP spec: "Servers MUST validate all tool inputs")
+
+    private static final Map<String, Object> COUNT_SCHEMA = Map.of(
+            "type", "object",
+            "properties", Map.of("count", Map.of("type", "integer")),
+            "required", List.of("count"));
+
+    private SdkMcpServer serverWithCounter(AtomicBoolean handlerRan) {
+        SdkMcpTool<Map<String, Object>> doubler = SdkMcpTool.create(
+                "doubler", "Doubles 'count'", COUNT_SCHEMA,
+                args -> {
+                    handlerRan.set(true);
+                    int n = ((Number) args.get("count")).intValue();
+                    return CompletableFuture.completedFuture(ToolResult.text(String.valueOf(n * 2)));
+                });
+        return SdkMcpServer.create("test", List.of(doubler));
+    }
+
+    @Test
+    void validArgumentsReachTheHandler() throws Exception {
+        AtomicBoolean handlerRan = new AtomicBoolean();
+        Map<String, Object> result = resultOf(
+                callTool(serverWithCounter(handlerRan), "doubler", Map.of("count", 21)));
+
+        assertThat(handlerRan).isTrue();
+        assertThat(result).doesNotContainEntry("isError", true);
+        assertThat(textOf(result)).isEqualTo("42");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void missingRequiredArgumentIsRejectedBeforeTheHandlerRuns() throws Exception {
+        AtomicBoolean handlerRan = new AtomicBoolean();
+        Map<String, Object> response = callTool(serverWithCounter(handlerRan), "doubler", Map.of());
+
+        // Not a protocol error: the text has to reach the model as tool output
+        // so it can correct the call.
+        assertThat(response).doesNotContainKey("error");
+        Map<String, Object> result = resultOf(response);
+        assertThat(result).containsEntry("isError", true);
+        assertThat(textOf(result)).startsWith("Input validation error:").contains("count");
+        // The handler never sees arguments it did not agree to accept, so a
+        // side effect cannot be half-applied before the call blows up.
+        assertThat(handlerRan).isFalse();
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void wronglyTypedArgumentIsRejectedBeforeTheHandlerRuns() throws Exception {
+        AtomicBoolean handlerRan = new AtomicBoolean();
+        Map<String, Object> result = resultOf(
+                callTool(serverWithCounter(handlerRan), "doubler", Map.of("count", "twenty-one")));
+
+        assertThat(result).containsEntry("isError", true);
+        assertThat(textOf(result)).startsWith("Input validation error:").contains("integer");
+        assertThat(handlerRan).isFalse();
+    }
+
+    @Test
+    void aToolWithoutASchemaIsNotValidated() throws Exception {
+        AtomicBoolean handlerRan = new AtomicBoolean();
+        SdkMcpTool<Map<String, Object>> loose = SdkMcpTool.create(
+                "loose", "Accepts anything", Map.of(),
+                args -> {
+                    handlerRan.set(true);
+                    return CompletableFuture.completedFuture(ToolResult.text("ok"));
+                });
+
+        Map<String, Object> result = resultOf(
+                callTool(SdkMcpServer.create("test", List.of(loose)), "loose", Map.of("anything", 1)));
+
+        assertThat(handlerRan).isTrue();
+        assertThat(textOf(result)).isEqualTo("ok");
+    }
+
+    @Test
+    void anUncompilableSchemaLeavesTheToolCallable() throws Exception {
+        // Fail open: a schema this server cannot understand must not make an
+        // otherwise working tool uncallable.
+        AtomicBoolean handlerRan = new AtomicBoolean();
+        SdkMcpTool<Map<String, Object>> odd = SdkMcpTool.create(
+                "odd", "Has a nonsense schema",
+                Map.of("type", "object", "properties", "not-an-object"),
+                args -> {
+                    handlerRan.set(true);
+                    return CompletableFuture.completedFuture(ToolResult.text("ok"));
+                });
+
+        Map<String, Object> result = resultOf(
+                callTool(SdkMcpServer.create("test", List.of(odd)), "odd", Map.of()));
+
+        assertThat(handlerRan).isTrue();
+        assertThat(textOf(result)).isEqualTo("ok");
     }
 
     @Test

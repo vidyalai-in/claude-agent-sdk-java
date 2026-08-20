@@ -18,7 +18,12 @@ import java.util.logging.Logger;
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.networknt.schema.Error;
+import com.networknt.schema.Schema;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.SpecificationVersion;
 
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 
@@ -95,14 +100,28 @@ public final class SdkMcpServer {
 
     // JSON-RPC error codes
     private static final int ERROR_CODE_METHOD_NOT_FOUND = -32601;
-    private static final int ERROR_CODE_INTERNAL_ERROR = -32603;
 
     // JSON-RPC version
     private static final String JSONRPC_VERSION = "2.0";
 
+    /**
+     * MCP declares tool input schemas as JSON Schema. Absent a {@code $schema}
+     * keyword, 2020-12 is the dialect the specification is written against.
+     */
+    private static final SchemaRegistry DEFAULT_SCHEMA_REGISTRY =
+            SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12);
+
     private final String name;
     private final String version;
     private final Map<String, SdkMcpTool<?>> tools;
+
+    /**
+     * Compiled {@code inputSchema} per tool name, used to validate arguments
+     * before a handler runs. A tool whose schema could not be compiled is
+     * absent here and is simply not validated — a schema this server cannot
+     * understand must not make an otherwise working tool uncallable.
+     */
+    private final Map<String, Schema> inputSchemas;
 
     private SdkMcpServer(String name, String version, List<SdkMcpTool<?>> tools) {
         this.name = name;
@@ -111,6 +130,75 @@ public final class SdkMcpServer {
         for (SdkMcpTool<?> tool : tools) {
             this.tools.put(tool.name(), tool);
         }
+        this.inputSchemas = compileInputSchemas(this.tools.values());
+    }
+
+    private static Map<String, Schema> compileInputSchemas(Collection<SdkMcpTool<?>> tools) {
+        Map<String, Schema> compiled = new HashMap<>();
+        for (SdkMcpTool<?> tool : tools) {
+            Map<String, Object> schema = tool.inputSchema();
+            if ((schema == null) || schema.isEmpty()) {
+                continue;
+            }
+            try {
+                JsonNode node = MAPPER.valueToTree(schema);
+                SchemaRegistry registry = SpecificationVersion.fromSchemaNode(node)
+                        .map(SchemaRegistry::withDefaultDialect)
+                        .orElse(DEFAULT_SCHEMA_REGISTRY);
+                compiled.put(tool.name(), registry.getSchema(node));
+            } catch (RuntimeException e) {
+                logger.log(Level.WARNING,
+                        "Tool '" + tool.name() + "' has an inputSchema this server cannot compile; "
+                                + "its arguments will not be validated: " + e.getMessage(),
+                        e);
+            }
+        }
+        return Map.copyOf(compiled);
+    }
+
+    /**
+     * Validates {@code arguments} against a tool's declared {@code inputSchema}.
+     *
+     * @return the error text to report, or null when the arguments are valid
+     *         (or the tool has no usable schema)
+     */
+    @Nullable
+    private String validateArguments(String toolName, Map<String, Object> arguments) {
+        Schema schema = inputSchemas.get(toolName);
+        if (schema == null) {
+            return null;
+        }
+        List<Error> errors;
+        try {
+            errors = schema.validate(MAPPER.valueToTree(arguments));
+        } catch (RuntimeException e) {
+            // Validation itself failing must not be reported as the tool
+            // failing; let the handler decide.
+            logger.log(Level.WARNING, "Could not validate arguments for tool '" + toolName + "'", e);
+            return null;
+        }
+        if ((errors == null) || errors.isEmpty()) {
+            return null;
+        }
+        // Sorted and de-duplicated so the same bad call always reports the
+        // same way.
+        List<String> described = new ArrayList<>();
+        for (Error error : errors) {
+            String text = describe(error);
+            if (!described.contains(text)) {
+                described.add(text);
+            }
+        }
+        described.sort(null);
+        return String.join("; ", described);
+    }
+
+    private static String describe(Error error) {
+        String location = String.valueOf(error.getInstanceLocation());
+        String message = error.getMessage();
+        return (location.isEmpty() || "$".equals(location))
+                ? message
+                : location + " " + message;
     }
 
     /**
@@ -544,8 +632,25 @@ public final class SdkMcpServer {
 
         SdkMcpTool<?> tool = tools.get(toolName);
         if (tool == null) {
+            // A protocol error, per the MCP specification's error-handling
+            // section, which lists "Unknown tools" as such. The model can only
+            // call tools we listed, so this is a client/host bug rather than
+            // something a model should try to work around.
             return CompletableFuture.completedFuture(
                     errorResponse(id, ERROR_CODE_METHOD_NOT_FOUND, "Tool not found: " + toolName));
+        }
+
+        // "Servers MUST validate all tool inputs" (MCP spec, Security
+        // Considerations). Reported as a tool-execution error rather than a
+        // protocol one so the text reaches the model as tool output it can act
+        // on — an unreadable JVM ClassCastException from a handler that was
+        // handed arguments it never agreed to accept helps nobody, and running
+        // the handler at all risks half-applying a side effect before it
+        // throws.
+        String validationError = validateArguments(toolName, arguments);
+        if (validationError != null) {
+            return CompletableFuture.completedFuture(
+                    successResponse(id, toolErrorResult("Input validation error: " + validationError)));
         }
 
         try {
@@ -561,14 +666,34 @@ public final class SdkMcpServer {
                     .exceptionally(ex -> {
                         Throwable cause = ((ex.getCause() != null) ? ex.getCause() : ex);
                         logger.log(Level.WARNING, "Tool execution failed: " + toolName, cause);
-                        return errorResponse(id, ERROR_CODE_INTERNAL_ERROR,
-                                "Tool execution failed: " + cause.getMessage());
+                        return successResponse(id, toolErrorResult(describeFailure(cause)));
                     });
         } catch (Exception e) {
             logger.log(Level.WARNING, "Tool invocation failed: " + toolName, e);
             return CompletableFuture.completedFuture(
-                    errorResponse(id, ERROR_CODE_INTERNAL_ERROR, "Tool invocation failed: " + e.getMessage()));
+                    successResponse(id, toolErrorResult(describeFailure(e))));
         }
+    }
+
+    /**
+     * A {@code tools/call} result carrying {@code isError: true}.
+     *
+     * <p>
+     * A tool that fails while running has produced a result, not a broken
+     * request: the MCP specification reports those "in tool results with
+     * {@code isError: true}" so the model can see what went wrong and adapt.
+     * A JSON-RPC error would instead say the call could not be processed.
+     */
+    private static Map<String, Object> toolErrorResult(String message) {
+        return ToolResult.builder().addText(message).isError(true).build().toMap();
+    }
+
+    /** Exception text for a model to read; never null, never empty. */
+    private static String describeFailure(Throwable cause) {
+        String message = cause.getMessage();
+        return ((message != null) && !message.isBlank())
+                ? message
+                : cause.getClass().getSimpleName();
     }
 
     private static Map<String, Object> successResponse(Object id, Map<String, Object> result) {

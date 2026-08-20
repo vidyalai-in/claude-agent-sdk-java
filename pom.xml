@@ -59,6 +59,12 @@
              sdk POM, and the examples module is reference code, not a library.
              sdk/pom.xml overrides this back to false. -->
         <maven.deploy.skip>true</maven.deploy.skip>
+        <!-- json-schema-validator 3.x is the newest release line, but it is
+             built against Jackson 3 (the `tools.jackson` coordinates). This SDK
+             is on Jackson 2, so 3.x would add a second, complete JSON stack to
+             every consumer's classpath. 2.0.4 is the newest release on the
+             Jackson-2 line and reuses the databind we already ship. -->
+        <json.schema.validator.version>2.0.4</json.schema.validator.version>
         <jackson.databind.version>2.21.0</jackson.databind.version>
         <jackson.annotations.version>2.21</jackson.annotations.version>
         <jspecify.version>1.0.0</jspecify.version>
@@ -84,6 +90,25 @@
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
                 <version>${jackson.databind.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.networknt</groupId>
+                <artifactId>json-schema-validator</artifactId>
+                <version>${json.schema.validator.version}</version>
+                <exclusions>
+                    <!-- Declared compile-scope by mistake upstream: a Surefire
+                         report formatter has no business on a runtime path. -->
+                    <exclusion>
+                        <groupId>me.fabriciorby</groupId>
+                        <artifactId>maven-surefire-junit5-tree-reporter</artifactId>
+                    </exclusion>
+                    <!-- Only needed to read schemas written as YAML. Tool input
+                         schemas reach us as already-parsed maps. -->
+                    <exclusion>
+                        <groupId>com.fasterxml.jackson.dataformat</groupId>
+                        <artifactId>jackson-dataformat-yaml</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
