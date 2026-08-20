@@ -29,9 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Closing a client no longer waits out the control-executor join timeout** when a tool is in flight: `QueryHandler.close()` now tells each SDK MCP server to abandon its pending calls, which nothing else can interrupt.
 - **An `Error` thrown while handling a control request no longer vanishes.** Control requests run on a `submit()`ed task whose `Future` nobody reads, so an `Error` disappeared silently and left the CLI waiting forever for a response that could never arrive. It is now logged at `SEVERE`, answered with an error control response, and rethrown. This was found the hard way: a stale IDE-compiled class carrying an "unresolved compilation problem" `Error` made every MCP control request hang with no trace whatsoever.
 
+### Examples
+- **`ToolUsage` no longer aborts halfway through.** Three of its four sections capped `maxTurns(3)`. The CLI now spends a turn loading a tool's schema before using it, so `writeFiles()` overran the budget, threw `QueryFailedException`, and killed the process before the Bash and Multiple Tools sections ever ran. Those budgets are 8 now — the failing run needed the headroom for an ordinary retry, having first tried a path outside the working directory.
+- **`PermissionCallbacks` actually exercises its callbacks.** Only one of its four sections disabled setting sources; in the other three an allow rule in the user's `settings.json` shadowed the callback exactly as an `allowedTools` entry would, so it never fired — "Simple Allow/Deny" printed an empty tool-use summary, and the input-modification section's redirect never happened, which is how a stray `hello.txt` ended up in the repository root instead of `/tmp`. All four sections now load no settings files. `feature-permissions.md` gains a "Keeping a callback deterministic" section recording the trap and the remedy.
+- **`SubagentTranscriptExample` finds transcripts that exist.** It scanned only the 10 most recent sessions, so on a machine with any history it reported "none found" while transcripts sat a few sessions further back. It scans 100 now and says how many it looked through.
+- **`McpServer` gains a cancellation and result-content section**, and `examples/README.md` lists all 30 examples rather than 15.
+
 ### Notes
 - **The official MCP Java SDK was evaluated and deliberately not adopted.** `io.modelcontextprotocol.sdk` 2.0.1 is published by Anthropic, targets Java 17, and `mcp-json-jackson2` pins the very `json-schema-validator` 2.0.4 this SDK already uses. But `mcp-core` hard-depends on `reactor-core`, which would add roughly 2.5MB (three quarters of it Reactor) to a ~3MB runtime footprint and sit oddly beside this SDK's virtual-thread idiom — and 2.0.1 has no `notifications/cancelled` support of its own, so the headline gap would have remained ours to fix regardless. The `McpMessageHandler` SPI is the answer instead: anyone who wants the full protocol surface can adapt the official SDK in their own project and pay for Reactor there.
 - **Tests:** 50 new (1032 total), including the first end-to-end coverage of an `mcp_message` control request. That hole is how four of these defects survived.
+
+[0.1.25]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.25
 
 ## [0.1.24] - 2026-08-19
 
@@ -63,7 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Synced
 - Python SDK v0.2.138 → v0.2.140 (commits 961aff8c..a4eaba4a)
 
-[0.1.25]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.25
 [0.1.24]: https://github.com/vidyalai-in/claude-agent-sdk-java/releases/tag/v0.1.24
 
 ## [0.1.23] - 2026-08-14
