@@ -96,6 +96,13 @@ public class PermissionCallbacks {
                 .canUseTool(callback)
                 .cwd(Path.of("/tmp"))
                 .permissionMode(PermissionMode.DEFAULT)
+                // Load no settings files, for the same reason as the
+                // one-shot section below: an allow rule in the user's or
+                // the project's settings.json shadows the callback exactly
+                // like an allowedTools entry does, and a plain `Write(*)`
+                // in ~/.claude/settings.json is enough to make this section
+                // silently do nothing.
+                .settingSources(List.of())
                 .build();
 
         try (var client = ClaudeSDK.createClient(options)) {
@@ -164,6 +171,13 @@ public class PermissionCallbacks {
                 .canUseTool(callback)
                 .permissionMode(PermissionMode.DEFAULT)
                 .maxTurns(3)
+                // Load no settings files, for the same reason as the
+                // one-shot section below: an allow rule in the user's or
+                // the project's settings.json shadows the callback exactly
+                // like an allowedTools entry does, and a plain `Write(*)`
+                // in ~/.claude/settings.json is enough to make this section
+                // silently do nothing.
+                .settingSources(List.of())
                 .build();
 
         try (var client = ClaudeSDK.createClient(options)) {
@@ -218,6 +232,13 @@ public class PermissionCallbacks {
                 .cwd(Path.of("/tmp"))
                 .permissionMode(PermissionMode.DEFAULT)
                 .maxTurns(3)
+                // Load no settings files, for the same reason as the
+                // one-shot section below: an allow rule in the user's or
+                // the project's settings.json shadows the callback exactly
+                // like an allowedTools entry does, and a plain `Write(*)`
+                // in ~/.claude/settings.json is enough to make this section
+                // silently do nothing.
+                .settingSources(List.of())
                 .build();
 
         System.out.println("Permission updates would be applied during execution");

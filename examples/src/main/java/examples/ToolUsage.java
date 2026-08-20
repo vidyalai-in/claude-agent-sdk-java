@@ -47,7 +47,9 @@ public class ToolUsage {
                 .allowedTools(List.of("Read"))
                 .permissionMode(PermissionMode.ACCEPT_EDITS)
                 .cwd(Path.of(System.getProperty("user.dir")))
-                .maxTurns(3)
+                // Enough headroom for the CLI to load a tool's schema
+                // before using it, which costs a turn of its own.
+                .maxTurns(8)
                 .build();
 
         List<Message> messages = ClaudeSDK.query(
@@ -93,7 +95,9 @@ public class ToolUsage {
                 .allowedTools(List.of("Write"))
                 .permissionMode(PermissionMode.ACCEPT_EDITS)
                 .cwd(Path.of("/tmp"))
-                .maxTurns(3)
+                // Enough headroom for the CLI to load a tool's schema
+                // before using it, which costs a turn of its own.
+                .maxTurns(8)
                 .build();
 
         List<Message> messages = ClaudeSDK.query(
@@ -123,7 +127,9 @@ public class ToolUsage {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .allowedTools(List.of("Bash"))
                 .permissionMode(PermissionMode.ACCEPT_EDITS)
-                .maxTurns(3)
+                // Enough headroom for the CLI to load a tool's schema
+                // before using it, which costs a turn of its own.
+                .maxTurns(8)
                 .build();
 
         List<Message> messages = ClaudeSDK.query(

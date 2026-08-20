@@ -25,6 +25,21 @@ This module contains usage examples demonstrating various features of the Claude
 - **SettingSourcesExample.java** - Settings sources (user, project, local)
 - **StderrCallbackExample.java** - Capturing CLI stderr output
 - **PluginsExample.java** - Plugin system usage
+- **StructuredOutputExample.java** - Structured output with JSON Schema validation
+- **DynamicControlExample.java** - setPermissionMode, setModel and interrupt mid-run
+- **AgentsExample.java** - Programmatic subagent definitions
+- **FilesystemAgentsExample.java** - Agents loaded from `.claude/agents/`
+- **LargeAgentsExample.java** - Agent payloads too large for a command line
+- **SubagentTranscriptExample.java** - Reading a subagent's transcript and its parent ids
+- **ForwardSubagentTextExample.java** - Forwarding a subagent's text and thinking blocks
+- **SkillsExample.java** - Filtering which skills the CLI loads
+- **SystemPromptExample.java** - Custom and preset system prompts
+- **IncludePartialMessagesExample.java** - Partial message streaming
+- **MessageOriginExample.java** - Message provenance and conversation resets
+- **SessionListingExample.java** - Listing and reading past sessions
+- **SessionStoreExample.java** - Mirroring transcripts to a custom SessionStore
+- **TruncatingResumeExample.java** - Rewinding a session with `resumeSessionAt`
+- **WindowsBatchCliExample.java** - Windows `.cmd` CLI opt-in (Windows only)
 
 ## Running Examples
 

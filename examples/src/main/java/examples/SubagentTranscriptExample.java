@@ -30,10 +30,20 @@ import in.vidyalai.claude.sdk.types.message.SessionMessage;
  */
 public class SubagentTranscriptExample {
 
+    /**
+     * How many recent sessions to look through.
+     *
+     * <p>
+     * Most sessions spawn no subagents at all, so a handful is not enough to
+     * find one on a machine that has been used for a while — the search has to
+     * reach back past all the ordinary sessions in between.
+     */
+    private static final int SESSIONS_TO_SCAN = 100;
+
     public static void main(String[] args) {
         System.out.println("=== Subagent Transcript Example ===\n");
 
-        List<SDKSessionInfo> sessions = ClaudeSDK.listSessions(null, 10, false);
+        List<SDKSessionInfo> sessions = ClaudeSDK.listSessions(null, SESSIONS_TO_SCAN, false);
         if (sessions.isEmpty()) {
             System.out.println("No sessions found in ~/.claude/projects/");
             return;
@@ -72,7 +82,10 @@ public class SubagentTranscriptExample {
             return;
         }
 
-        System.out.println("No sessions with subagent transcripts were found.");
+        System.out.printf("No subagent transcripts in the %d most recent session(s).%n",
+                sessions.size());
+        System.out.println("Run an example that spawns one first — AgentsExample or "
+                + "ForwardSubagentTextExample — then run this again.");
     }
 
 }
