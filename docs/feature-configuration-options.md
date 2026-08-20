@@ -555,7 +555,8 @@ Pass arbitrary CLI flags.
 
 ### canUseTool()
 
-Custom permission callback for tools (requires streaming mode).
+Custom permission callback for tools. Mutually exclusive with
+`permissionPromptToolName`.
 
 ```java
 .canUseTool((toolName, input, context) -> {
@@ -643,6 +644,24 @@ Enable partial message streaming.
 ```
 
 Receive `StreamEvent` messages with deltas as content is generated.
+
+### forwardSubagentText()
+
+Forward a subagent's text and thinking blocks into the message stream.
+
+```java
+.forwardSubagentText(true)
+```
+
+By default only a subagent's `tool_use` / `tool_result` blocks reach the parent
+stream, as `AssistantMessage` / `UserMessage` objects whose `parentToolUseId`
+is the id of the Agent `tool_use` block that spawned the subagent — enough for
+a progress heartbeat, not enough to render what the subagent said. With this
+enabled, its text and thinking blocks arrive the same way.
+
+Sent to the CLI on the `initialize` control request rather than as a flag, and
+only when enabled; older CLIs ignore it. See
+[Agents → Observing a subagent's output](./feature-agents.md#observing-a-subagents-output).
 
 ### agents()
 

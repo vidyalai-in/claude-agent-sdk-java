@@ -31,6 +31,9 @@ import com.fasterxml.jackson.annotation.JsonTypeName;
  *                                skills are loaded into the system prompt. Only included
  *                                when the caller passed an explicit list (the wire protocol
  *                                treats omission and {@code "all"} as equivalent).
+ * @param forwardSubagentText     Ask the CLI to forward subagent text/thinking blocks, not
+ *                                just {@code tool_use}/{@code tool_result}. Only included
+ *                                when true (omission is the default behavior)
  */
 @JsonTypeName("initialize")
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -38,7 +41,8 @@ public record SDKControlInitializeRequest(
         @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
         @Nullable Map<String, AgentDefinition> agents,
         @Nullable Boolean excludeDynamicSections,
-        @Nullable List<String> skills) implements SDKControlRequestData {
+        @Nullable List<String> skills,
+        @Nullable Boolean forwardSubagentText) implements SDKControlRequestData {
 
     /**
      * Backwards-compatible constructor without excludeDynamicSections.
@@ -46,7 +50,7 @@ public record SDKControlInitializeRequest(
     public SDKControlInitializeRequest(
             @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
             @Nullable Map<String, AgentDefinition> agents) {
-        this(hooks, agents, null, null);
+        this(hooks, agents, null, null, null);
     }
 
     /**
@@ -56,7 +60,18 @@ public record SDKControlInitializeRequest(
             @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
             @Nullable Map<String, AgentDefinition> agents,
             @Nullable Boolean excludeDynamicSections) {
-        this(hooks, agents, excludeDynamicSections, null);
+        this(hooks, agents, excludeDynamicSections, null, null);
+    }
+
+    /**
+     * Backwards-compatible constructor without forwardSubagentText.
+     */
+    public SDKControlInitializeRequest(
+            @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
+            @Nullable Map<String, AgentDefinition> agents,
+            @Nullable Boolean excludeDynamicSections,
+            @Nullable List<String> skills) {
+        this(hooks, agents, excludeDynamicSections, skills, null);
     }
 
     @Override

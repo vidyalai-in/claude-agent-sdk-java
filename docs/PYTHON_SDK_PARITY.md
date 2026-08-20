@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-08-14 (Updated)
-**Java SDK Version:** 0.1.23
-**Python SDK Version:** [0.2.138](https://github.com/anthropics/claude-agent-sdk-python/commit/961aff8ca220b2a9c91837ba4353d7ef0b7ad27f) (latest)
+**Analysis Date:** 2026-08-19 (Updated)
+**Java SDK Version:** 0.1.24
+**Python SDK Version:** [0.2.140](https://github.com/anthropics/claude-agent-sdk-python/commit/a4eaba4a56f9ad1833fca646030a4b160b2a61f9) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,16 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.2.138):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.138. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.140):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.140. These updates include:
+- **v0.2.139-0.2.140** - Four behavioral changes and one Python-packaging change, all landed in v0.2.140; v0.2.139 is a CLI-version bump only (2.1.233), and v0.2.140 bumps it again (2.1.235). Ported to Java:
+  - **`ResultException` (Python `ResultError`)** (PR #1205, v0.2.140): the CLI ends a failed run by emitting a `result` with `is_error: true` and then exiting non-zero. The SDK already swapped the bare "exit code 1" `ProcessException` for one carrying the result's error text, but the text was all the caller got. The replacement is now a typed `ResultException extends ProcessException` exposing `subtype()`, `errors()`, `result()`, `apiErrorStatus()`, `terminalReason()`, `sessionId()` and the raw `data()`, with the original exit error as its cause. Two text fixes come with it: a run that ends on an API failure arrives as `subtype: "success"` with the prose in `result`, which used to render as the self-contradictory "returned an error result: success" (the text is now `errors[]` → `result` → non-`success` `subtype` → `API error (HTTP n)`), and blank or non-list `errors` no longer produce an empty suffix. The synthetic error frame the reader puts on the message queue now carries the exception object, so the consumer iterator rethrows it as-is instead of flattening every failure to `ClaudeSDKException(String)` — a `CLIConnectionException` or `CLIJSONDecodeException` keeps its type and payload too.
+    - *Java-side follow-through.* `MessageParser` cast the result frame's `errors` to `List<String>` unchecked, so the malformed shapes Python's tests exercise (a bare string, an int) raised `MessageParseException` and the caller lost the whole result. Python type-checks nothing there; Java now keeps a bare string as a single-element list and ignores any other shape. Separately, `initialize()` and `sendControlRequest()` wrapped every failure in a base `ClaudeSDKException`, which re-flattened the very exception this PR exists to type; an already-typed `ClaudeSDKException` now propagates as-is, matching Python's `raise result`, and only opaque failures keep the wrapper.
+  - **`forwardSubagentText`** (PR #1206, v0.2.140): a subagent spawned through the Agent tool surfaces only its `tool_use` / `tool_result` blocks in the parent stream, as messages whose `parentToolUseId` is the spawning Agent `tool_use` id — enough for a progress heartbeat, not enough to render the nested transcript. The new option asks the CLI to forward the subagent's text and thinking blocks the same way. Sent on the `initialize` control request (there is no CLI flag) and only when true, so older CLIs see the request byte-for-byte unchanged. 2 tests asserting the wire shape in both states, plus builder/`toBuilder()` coverage and `ForwardSubagentTextExample`.
+  - **Parent ids on subagent session reads** (PR #1207, v0.2.140): a subagent's transcript lines do not say which Agent `tool_use` spawned it; the `agent-<id>.meta.json` sidecar beside the transcript does (and the synthetic `agent_metadata` entry a `SessionStore` gets in its place). `getSubagentMessages()` and `getSubagentMessagesFromStore()` now read it, so `SessionMessage.parentToolUseId()` is populated for subagent reads and the new `parentAgentId()` names the spawning subagent for nested ones. A missing, corrupt, non-object, or non-string-valued sidecar degrades to null rather than failing the read; top-level session reads stay null on both fields, as in Python. The same PR fixed a real bug in the import path that Java shared verbatim: `importSessionToStore()` wrote the synthetic `"type": "agent_metadata"` discriminator *before* merging the CLI-owned sidecar over it, so a sidecar carrying its own `type` silently replaced the marker and the entry was read back as a transcript line. A corrupt sidecar also aborted the whole import; it is now treated as absent.
+    - *Java-side note.* `Sessions.toSessionMessage()` used to read `parentToolUseId` off the transcript entry. Python hardcoded `None` there and now takes both ids as explicit arguments; Java follows, so top-level reads are documented-and-enforced null rather than incidentally null.
+  - **`canUseTool` with string prompts, and stdin held open for it** (PR #1204, v0.2.140): `ClaudeSDK.query(String, options)` rejected a `canUseTool` callback outright. The restriction never matched the transport — a string prompt is written over stdin as one streamed message like any other, so the control protocol was available for it all along — and it is now gone; the callback and `permissionPromptToolName` stay mutually exclusive, with the validation shared by `query()` and `ClaudeSDKClient.connect()` rather than duplicated. The matching fix: `streamInput()` held stdin open for hooks and SDK MCP servers but not for a `canUseTool` callback, so a run configured with only a callback closed stdin at end of input and every later permission request failed CLI-side with "Stream closed". Two edges come with it — a prompt iterator that throws now still closes stdin (it used to skip `endInput()` entirely, leaving the CLI waiting for input forever), and when nothing was written stdin closes at once, since no result can arrive to release the hold. 5 tests in `StdinCloseBehaviorTest`.
+  - **Not applicable: mcp 2.x support** (PR #1218, v0.2.140): the Python SDK's in-process MCP server is an `mcp.server.Server` from the `mcp` PyPI package, and its JSON-RPC dispatch reached into that library's 1.x internals. The PR replaces the hand-rolled dispatch with the library's own in-memory transport so both majors work. The Java SDK's `SdkMcpServer` is self-contained — there is no third-party MCP library in its dependency set to be compatible with — so the change has no Java counterpart. The user-visible behaviors it brings to Python (real negotiated `initialize` capabilities, `notifications/cancelled` cancelling a running tool, in-flight request-id reuse refused) are properties of delegating to that library, not of the wire contract with the CLI.
+    - *Known divergence in how SDK-MCP tool failures are reported* (pre-dates this sync; see §7). Python answers an unknown tool, schema-invalid arguments, or a handler exception with a **successful** `tools/call` response carrying `isError: true` — before #1218 the mcp 1.x `@server.call_tool()` decorator did that conversion implicitly, and #1218 moved it into SDK code so both majors behave the same. Java's hand-rolled dispatch instead answers with a **JSON-RPC error** (`-32601` unknown tool, `-32603` handler exception) and performs no input-schema validation at all, so a schema-invalid call reaches the handler. Not introduced by this sync and not a wire-contract change the CLI requires, so it is left as-is rather than folded into a version sync; changing it would alter what the model sees when a tool fails.
 - **v0.2.131-0.2.138** - Three type/API additions and two bug fixes, all landed in v0.2.137; v0.2.131-0.2.136 and v0.2.138 are CLI-version bumps only (2.1.223-2.1.228, 2.1.231-2.1.232). Ported to Java:
   - **`ConversationResetMessage`** (PR #1196, v0.2.137): the CLI's top-level `conversation_reset` frame — emitted when `/clear`, or any other flow that discards the transcript mid-session, replaces the conversation without ending the connection. `MessageParser` dropped it through the forward-compatibility fallthrough, so applications never saw resets (including ones they did not initiate) and had no signal to snapshot running totals before a reset zeroes them. Parsed into a record with `newConversationId`, `uuid` and `sessionId`; a missing required field raises `MessageParseException`, matching its siblings. **Breaking, as in Python:** this widens the sealed `Message` interface, so an exhaustive `switch` over `Message` with no `default` stops compiling until a `ConversationResetMessage` case is added (`TypesTest.patternMatchingOnMessage` needed exactly that). Mirrors the TS SDK's `SDKConversationResetMessage`.
   - **`MessageOrigin` on `UserMessage` and `ResultMessage`** (PR #1199, v0.2.137): in streaming-input mode one connection interleaves the turns the application sends with turns the session injects on its own (background-task notifications, fired scheduled-task prompts, MCP channel messages, peer-relayed messages). The CLI attributes these with an `origin` object on user messages and forwards the triggering message's origin on each result; the parser dropped it, so a consumer could not tell its own result from a task-notification follow-up. New `origin()` on both types, plus `MessageOriginKind` (`human`, `channel`, `peer`, `task-notification`, `coordinator`, `unclassified`, `observer`, `auto-continuation`, `observer-activity`) and `TaskNotificationOriginSubkind` (`scheduled-trigger`, `peer-send-message`). Null when the CLI did not attribute the message — prompts sent through `query()` arrive that way unless the host stamps `"origin": {"kind": "human"}` on the message map (only `human` is honored from an SDK host). Both records keep a backwards-compatible constructor without the field. Mirrors the TS SDK's `SDKMessageOrigin`.
@@ -404,7 +413,7 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | Network config | `SandboxNetworkConfig` TypedDict | `SandboxNetworkConfig` class | ✅ |
 | Ignore violations | `SandboxIgnoreViolations` TypedDict | `SandboxIgnoreViolations` class | ✅ |
 
-### Exception Types (6 exceptions)
+### Exception Types (7 exceptions)
 
 | Exception | Python | Java | Status |
 |-----------|--------|------|--------|
@@ -412,14 +421,29 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | Connection error | `CLIConnectionError` | `CLIConnectionException` | ✅ |
 | CLI not found | `CLINotFoundError` | `CLINotFoundException` | ✅ |
 | Process error | `ProcessError` | `ProcessException` | ✅ |
+| Error result | `ResultError` | `ResultException` | ✅ |
 | JSON decode error | `CLIJSONDecodeError` | `CLIJSONDecodeException` | ✅ |
 | Message parse error | `MessageParseError` | `MessageParseException` | ✅ |
+
+Java additionally has `QueryFailedException`, which has no Python counterpart:
+Python's `query()` is a generator that yields every message before raising, so
+nothing is lost when a run ends in an error result. Java's collecting
+`ClaudeSDK.query(...)` must either return a list or throw, so it throws this
+instead — carrying the messages it gathered, with the `ResultException` as its
+cause.
 
 **Total Type Count:** 80+ types with 100% parity
 
 ---
 
 ## 3. MCP (MODEL CONTEXT PROTOCOL) PARITY ✅ 100%
+
+> **One known behavioral divergence** in the in-process SDK MCP server, pre-dating
+> the v0.2.140 sync: a failed `tools/call` (unknown tool, handler exception) is
+> answered with a JSON-RPC error rather than Python's `isError: true` result, and
+> Java does not validate arguments against the tool's input schema before calling
+> the handler. Feature coverage below is unaffected. See §7 and the v0.2.140 notes
+> in the Executive Summary.
 
 ### MCP Features
 
@@ -455,10 +479,10 @@ All 37+ configuration options are implemented with 100% parity:
 | **Agents** (1 option) | ✅ | ✅ | ✅ |
 | **Sandbox** (1 option) | ✅ | ✅ | ✅ |
 | **Plugins** (1 option) | ✅ | ✅ | ✅ |
-| **Advanced features** (5 options) | ✅ | ✅ | ✅ |
+| **Advanced features** (6 options, incl. `forwardSubagentText`) | ✅ | ✅ | ✅ |
 | **Callbacks** (1 option) | ✅ | ✅ | ✅ |
 
-**Total: 37+ configuration options - 100% parity**
+**Total: 38+ configuration options - 100% parity**
 
 ---
 
@@ -491,11 +515,15 @@ All 37+ configuration options are implemented with 100% parity:
 | **Subagent transcripts** | ✅ Public helpers in `__init__.py` | ✅ `SubagentTranscriptExample.java` | ✅ **NEW** |
 | **Truncating resume** | ✅ `e2e-tests/test_truncating_resume.py` | ✅ `TruncatingResumeExample.java` | ✅ **NEW** |
 | **Message origin / conversation reset** | ✅ `e2e-tests/test_message_origin.py`, `test_conversation_reset.py` | ✅ `MessageOriginExample.java` | ✅ **NEW** |
+| **Forward subagent text** | ✅ `e2e-tests/test_forward_subagent_text.py` | ✅ `ForwardSubagentTextExample.java` | ✅ **NEW** |
+| **Typed error results** | ✅ `e2e-tests/test_error_results.py` | ✅ `ErrorHandling.java` (`errorResultMessages()`) | ✅ |
+| **`canUseTool` with a string prompt** | ✅ `e2e-tests/test_tool_permissions.py` | ✅ `PermissionCallbacks.java` (`oneShotStringPrompt()`) | ✅ |
+| **Subagent session reads** | ✅ `e2e-tests/test_subagent_session_reads.py` | ✅ `SubagentTranscriptExample.java` | ✅ |
 | Trio async | ✅ `streaming_mode_trio.py` | N/A (Java uses threads) | N/A |
 | IPython interactive | ✅ `streaming_mode_ipython.py` | N/A (Java nature) | N/A |
 
 **Python Examples: 16 files**
-**Java Examples: 24 files** (covers all functionality plus additional examples)
+**Java Examples: 25 files** (covers all functionality plus additional examples)
 **Coverage: 100%** - All Python SDK features have Java examples, plus additional Java-specific examples
 
 ---
@@ -552,6 +580,12 @@ All 37+ configuration options are implemented with 100% parity:
 | **AI model enum** | Type-safe model constants | ✅ Good addition |
 | **Builder pattern** | Fluent configuration API | ✅ Idiomatic Java |
 | **Method overloading** | Multiple signatures for flexibility | ✅ Idiomatic Java |
+
+### Known Behavioral Divergences
+
+| Area | Python | Java | Assessment |
+|------|--------|------|------------|
+| **SDK-MCP tool failure reporting** | Unknown tool, schema-invalid arguments, and handler exceptions all come back as a successful `tools/call` response with `isError: true`; arguments are validated against the tool's input schema before the handler runs (`Input validation error: ...`) | Answered with a JSON-RPC error instead (`-32601` unknown tool, `-32603` handler exception); no input-schema validation, so a schema-invalid call reaches the handler | ⚠️ Open. Pre-dates the v0.2.140 sync — Python got this from the mcp library's `@call_tool` decorator long before PR #1218 moved it into SDK code. Java's `SdkMcpServer` hand-rolls dispatch with no such library. Changing it alters what the model sees when a tool fails, so it is tracked here rather than folded into a version sync. |
 
 ---
 
@@ -624,9 +658,12 @@ All 37+ configuration options are implemented with 100% parity:
 
 ### ✅ Error Handling: 100% Parity
 
-- [x] All 6 exception types
+- [x] All 7 exception types
 - [x] Exception hierarchy
 - [x] Error metadata (exit codes, stderr, data)
+- [x] Typed error results (`ResultException` payload: subtype, errors, result,
+      API status, terminal reason, session id)
+- [x] Exception type and payload preserved through the message-stream iterator
 - [x] Connection error handling
 - [x] Process error handling
 - [x] JSON parsing errors
@@ -847,7 +884,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-08-14
-**Python SDK Version:** 0.2.138 (commit 961aff8ca220b2a9c91837ba4353d7ef0b7ad27f)
-**Java SDK Version:** 0.1.23
+**Latest Verification:** 2026-08-19
+**Python SDK Version:** 0.2.140 (commit a4eaba4a56f9ad1833fca646030a4b160b2a61f9)
+**Java SDK Version:** 0.1.24
 **Status:** ✅ 100% Feature Parity Maintained

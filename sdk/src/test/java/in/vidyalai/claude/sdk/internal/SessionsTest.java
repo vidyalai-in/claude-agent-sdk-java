@@ -811,6 +811,161 @@ class SessionsTest {
     }
 
     @Test
+    void testGetSubagentMessages_parentIdsRecoveredFromMetaSidecar(@TempDir Path tempDir)
+            throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hello") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        Files.writeString(subagentsDir.resolve("agent-xyz.jsonl"),
+                makeUserLine(sessionId, "a1", null, "Run the task") + "\n"
+                        + makeAssistantLine(sessionId, "a2", "a1", "Done.") + "\n");
+        // The transcript lines carry no parent ids; the sidecar does.
+        Files.writeString(subagentsDir.resolve("agent-xyz.meta.json"),
+                "{\"toolUseId\":\"toolu_01\",\"parentAgentId\":\"a-parent\","
+                        + "\"agentType\":\"general-purpose\"}");
+
+        withClaudeHome(claudeHome, () -> {
+            List<SessionMessage> messages = Sessions.getSubagentMessages(
+                    sessionId, "xyz", null, null, 0);
+            assertThat(messages).hasSize(2);
+            // Every message in a subagent transcript shares the same parents.
+            assertThat(messages).allSatisfy(m -> {
+                assertThat(m.parentToolUseId()).isEqualTo("toolu_01");
+                assertThat(m.parentAgentId()).isEqualTo("a-parent");
+            });
+        });
+    }
+
+    @Test
+    void testGetSubagentMessages_parentIdsFromNestedMetaSidecar(@TempDir Path tempDir)
+            throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hello") + "\n");
+
+        Path nested = projectDir.resolve(sessionId).resolve("subagents")
+                .resolve("workflows").resolve("run1");
+        Files.createDirectories(nested);
+        Files.writeString(nested.resolve("agent-nested.jsonl"),
+                makeUserLine(sessionId, "a1", null, "Run the task") + "\n");
+        Files.writeString(nested.resolve("agent-nested.meta.json"),
+                "{\"toolUseId\":\"toolu_nested\"}");
+
+        withClaudeHome(claudeHome, () -> {
+            List<SessionMessage> messages = Sessions.getSubagentMessages(
+                    sessionId, "nested", null, null, 0);
+            assertThat(messages).hasSize(1);
+            assertThat(messages.get(0).parentToolUseId()).isEqualTo("toolu_nested");
+            // Spawned by the main session, so no parent agent.
+            assertThat(messages.get(0).parentAgentId()).isNull();
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void testGetSubagentMessages_parentIdsNullWhenSidecarMissingOrUnusable(@TempDir Path tempDir)
+            throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hello") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        String line = makeUserLine(sessionId, "a1", null, "Run the task") + "\n";
+
+        // No sidecar at all.
+        Files.writeString(subagentsDir.resolve("agent-nometa.jsonl"), line);
+        // Corrupt JSON.
+        Files.writeString(subagentsDir.resolve("agent-corrupt.jsonl"), line);
+        Files.writeString(subagentsDir.resolve("agent-corrupt.meta.json"), "{not json");
+        // Valid JSON but not an object.
+        Files.writeString(subagentsDir.resolve("agent-array.jsonl"), line);
+        Files.writeString(subagentsDir.resolve("agent-array.meta.json"), "[1,2]");
+        // Object with non-string ids.
+        Files.writeString(subagentsDir.resolve("agent-typed.jsonl"), line);
+        Files.writeString(subagentsDir.resolve("agent-typed.meta.json"),
+                "{\"toolUseId\":42,\"parentAgentId\":null}");
+
+        withClaudeHome(claudeHome, () -> {
+            for (String agentId : List.of("nometa", "corrupt", "array", "typed")) {
+                List<SessionMessage> messages = Sessions.getSubagentMessages(
+                        sessionId, agentId, null, null, 0);
+                assertThat(messages).as(agentId).hasSize(1);
+                assertThat(messages.get(0).parentToolUseId()).as(agentId).isNull();
+                assertThat(messages.get(0).parentAgentId()).as(agentId).isNull();
+            }
+        });
+    }
+
+    @Test
+    void testGetSubagentMessages_unreadableSidecarDegradesToNull(@TempDir Path tempDir)
+            throws IOException {
+        // A sidecar that exists but cannot be read (here: a directory in its
+        // place) must not make the best-effort read helper raise — the
+        // transcript is still returned, just without parent ids.
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hello") + "\n");
+
+        Path subagentsDir = projectDir.resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        Files.writeString(subagentsDir.resolve("agent-x.jsonl"),
+                makeUserLine(sessionId, "a1", null, "Run the task") + "\n"
+                        + makeAssistantLine(sessionId, "a2", "a1", "Done.") + "\n");
+        Files.createDirectories(subagentsDir.resolve("agent-x.meta.json"));
+
+        withClaudeHome(claudeHome, () -> {
+            List<SessionMessage> messages = Sessions.getSubagentMessages(
+                    sessionId, "x", null, null, 0);
+            assertThat(messages).hasSize(2);
+            assertThat(messages).allSatisfy(m -> {
+                assertThat(m.parentToolUseId()).isNull();
+                assertThat(m.parentAgentId()).isNull();
+            });
+        });
+    }
+
+    @Test
+    void testGetSessionMessages_parentIdsAreAlwaysNull(@TempDir Path tempDir) throws IOException {
+        Path claudeHome = tempDir;
+        Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");
+        Files.createDirectories(projectDir);
+
+        String sessionId = "12345678-1234-1234-1234-123456789abc";
+        Files.writeString(projectDir.resolve(sessionId + ".jsonl"),
+                makeUserLine(sessionId, "u1", null, "hello") + "\n"
+                        + makeAssistantLine(sessionId, "u2", "u1", "hi") + "\n");
+
+        withClaudeHome(claudeHome, () -> {
+            List<SessionMessage> messages = Sessions.getSessionMessages(sessionId, null, null, 0);
+            assertThat(messages).hasSize(2);
+            assertThat(messages).allSatisfy(m -> {
+                assertThat(m.parentToolUseId()).isNull();
+                assertThat(m.parentAgentId()).isNull();
+            });
+        });
+    }
+
+    @Test
     void testListSubagents_sessionExistsButNoSubagentsDir(@TempDir Path tempDir) throws IOException {
         Path claudeHome = tempDir;
         Path projectDir = claudeHome.resolve(".claude").resolve("projects").resolve("proj");

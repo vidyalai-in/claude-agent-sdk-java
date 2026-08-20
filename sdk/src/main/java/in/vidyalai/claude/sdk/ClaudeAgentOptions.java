@@ -154,6 +154,9 @@ public final class ClaudeAgentOptions {
     // Include hook lifecycle events in the message stream
     private final boolean includeHookEvents;
 
+    // Forward subagent text/thinking blocks as messages in the stream
+    private final boolean forwardSubagentText;
+
     // When true, only use MCP servers passed via mcpServers, ignoring all
     // other MCP configurations the CLI would otherwise load (e.g. project
     // .mcp.json, user/global settings, plugin-provided servers). Maps to the
@@ -274,6 +277,7 @@ public final class ClaudeAgentOptions {
         this.allowUnsafeWindowsBatchCli = builder.allowUnsafeWindowsBatchCli;
         this.includePartialMessages = builder.includePartialMessages;
         this.includeHookEvents = builder.includeHookEvents;
+        this.forwardSubagentText = builder.forwardSubagentText;
         this.strictMcpConfig = builder.strictMcpConfig;
         this.agents = ((builder.agents != null) ? Map.copyOf(builder.agents) : null);
         this.settingSources = builder.settingSources;
@@ -351,6 +355,7 @@ public final class ClaudeAgentOptions {
         builder.allowUnsafeWindowsBatchCli = this.allowUnsafeWindowsBatchCli;
         builder.includePartialMessages = this.includePartialMessages;
         builder.includeHookEvents = this.includeHookEvents;
+        builder.forwardSubagentText = this.forwardSubagentText;
         builder.strictMcpConfig = this.strictMcpConfig;
         builder.agents = ((this.agents != null) ? new HashMap<>(this.agents) : null);
         builder.settingSources = this.settingSources;
@@ -680,6 +685,27 @@ public final class ClaudeAgentOptions {
     }
 
     /**
+     * Returns whether subagent text and thinking blocks are forwarded as
+     * messages in the stream.
+     *
+     * <p>By default only {@code tool_use} / {@code tool_result} blocks from
+     * subagents (spawned via the Agent tool) are emitted, as
+     * {@link in.vidyalai.claude.sdk.types.message.AssistantMessage} /
+     * {@link in.vidyalai.claude.sdk.types.message.UserMessage} objects whose
+     * {@code parentToolUseId} is the spawning Agent {@code tool_use} id —
+     * enough for a progress heartbeat. When true, the subagent's text and
+     * thinking blocks are forwarded the same way, so consumers can render the
+     * full nested transcript. Mirrors the TypeScript SDK's
+     * {@code forwardSubagentText} and the Python SDK's
+     * {@code forward_subagent_text}.
+     *
+     * @return true if subagent text and thinking blocks should be forwarded
+     */
+    public boolean forwardSubagentText() {
+        return forwardSubagentText;
+    }
+
+    /**
      * Returns whether the CLI should use only MCP servers passed via
      * {@link #mcpServers()}, ignoring all other MCP configurations.
      *
@@ -942,6 +968,7 @@ public final class ClaudeAgentOptions {
         private boolean allowUnsafeWindowsBatchCli;
         private boolean includePartialMessages;
         private boolean includeHookEvents;
+        private boolean forwardSubagentText;
         private boolean strictMcpConfig;
         @Nullable
         private Map<String, AgentDefinition> agents;
@@ -1523,6 +1550,27 @@ public final class ClaudeAgentOptions {
          */
         public Builder includeHookEvents(boolean includeHookEvents) {
             this.includeHookEvents = includeHookEvents;
+            return this;
+        }
+
+        /**
+         * Sets whether subagent text and thinking blocks are forwarded as
+         * messages in the stream.
+         *
+         * <p>By default only {@code tool_use} / {@code tool_result} blocks
+         * from subagents are emitted — enough for a progress heartbeat. When
+         * true, the subagent's text and thinking blocks are forwarded the same
+         * way, so consumers can render the full nested transcript.
+         *
+         * <p>Sent to the CLI in the {@code initialize} control request; older
+         * CLIs ignore unknown initialize fields.
+         *
+         * @param forwardSubagentText true to forward subagent text and
+         *                            thinking blocks
+         * @return this builder
+         */
+        public Builder forwardSubagentText(boolean forwardSubagentText) {
+            this.forwardSubagentText = forwardSubagentText;
             return this;
         }
 

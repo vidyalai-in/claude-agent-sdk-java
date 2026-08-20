@@ -119,7 +119,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Message streaming
   - Initialization handshake (includes hooks, agent definitions, and excludeDynamicSections)
   - MCP server lifecycle management
-  - **Actionable error replacement**: tracks the most recent error result's text while reading the stream; when a `ProcessException` follows a result with `is_error=true`, the synthetic `{"type":"error"}` payload carries `"Claude Code returned an error result: <text>"` (built from the result's `errors` array or `subtype`) instead of the generic `"Command failed with exit code N"`. Resets on any non-result, non-`session_state_changed` traffic.
+  - **Actionable error replacement**: tracks the most recent error result's payload while reading the stream; when a `ProcessException` follows a result with `is_error=true`, it is replaced by a `ResultException` carrying that payload and the message `"Claude Code returned an error result: <text>"` (built from the result's `errors` array, then its `result` text, then a non-`success` `subtype`, then the API error status) instead of the generic `"Command failed with exit code N"`. Resets on any non-result, non-`session_state_changed` traffic. The exception object rides on the synthetic `{"type":"error"}` frame, so the consumer iterator rethrows it with its type and payload intact.
 - **Thread Safety**: Fully thread-safe with atomic operations and synchronization
 - **Key Features**:
   - Async control protocol using CompletableFuture

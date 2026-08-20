@@ -243,6 +243,67 @@ class SessionImportTest {
         assertThat(meta.<String>get("worktreePath")).isEqualTo("/tmp/wt");
     }
 
+    @SuppressWarnings("null")
+    @Test
+    void metaJsonTypeKeyCannotShadowTheAgentMetadataMarker() throws Exception {
+        if (hasEnvOverride()) {
+            return;
+        }
+        String sessionId = UUID.randomUUID().toString();
+        String projectKey = "myproj";
+        writeMainTranscript(projectKey, sessionId, List.of(json("user", "u1", "main")));
+
+        Path subagentsDir = tempDir.resolve(".claude").resolve("projects")
+                .resolve(projectKey).resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        Files.writeString(subagentsDir.resolve("agent-x.jsonl"),
+                json("user", "a1", "sub-msg") + "\n");
+        // The sidecar is CLI-owned: a stray "type" key must not turn the
+        // synthetic marker into something the reader treats as a transcript
+        // line.
+        Files.writeString(subagentsDir.resolve("agent-x.meta.json"),
+                "{\"type\":\"user\",\"agentType\":\"general-purpose\"}");
+
+        InMemorySessionStore store = new InMemorySessionStore();
+        SessionImport.importSessionToStore(sessionId, store, null);
+
+        SessionKey subKey = new SessionKey(projectKey, sessionId, "subagents/agent-x");
+        List<SessionStoreEntry> loaded = store.load(subKey);
+        assertThat(loaded).hasSize(2);
+        assertThat(loaded.get(1).type()).isEqualTo("agent_metadata");
+        assertThat(loaded.get(1).<String>get("agentType")).isEqualTo("general-purpose");
+    }
+
+    @Test
+    void unusableMetaJsonSidecarIsTreatedAsAbsent() throws Exception {
+        if (hasEnvOverride()) {
+            return;
+        }
+        String sessionId = UUID.randomUUID().toString();
+        String projectKey = "myproj";
+        writeMainTranscript(projectKey, sessionId, List.of(json("user", "u1", "main")));
+
+        Path subagentsDir = tempDir.resolve(".claude").resolve("projects")
+                .resolve(projectKey).resolve(sessionId).resolve("subagents");
+        Files.createDirectories(subagentsDir);
+        Files.writeString(subagentsDir.resolve("agent-bad.jsonl"),
+                json("user", "a1", "sub-msg") + "\n");
+        Files.writeString(subagentsDir.resolve("agent-bad.meta.json"), "{not json");
+        Files.writeString(subagentsDir.resolve("agent-arr.jsonl"),
+                json("user", "a2", "sub-msg") + "\n");
+        Files.writeString(subagentsDir.resolve("agent-arr.meta.json"), "[1,2]");
+
+        InMemorySessionStore store = new InMemorySessionStore();
+        // A corrupt or non-object sidecar must not fail the import; the
+        // transcript still lands.
+        SessionImport.importSessionToStore(sessionId, store, null);
+
+        assertThat(store.load(new SessionKey(projectKey, sessionId, "subagents/agent-bad")))
+                .hasSize(1);
+        assertThat(store.load(new SessionKey(projectKey, sessionId, "subagents/agent-arr")))
+                .hasSize(1);
+    }
+
     @Test
     void nonpositiveBatchSizeUsesDefault() throws Exception {
         if (hasEnvOverride()) {

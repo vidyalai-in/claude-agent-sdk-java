@@ -803,6 +803,37 @@ class StreamingClientTest {
      * Mock transport for testing ClaudeSDKClient.
      */
 
+    @Test
+    void receiveResponse_stopsAtAnErrorResultWithoutRaising() {
+        // receiveResponse() terminates at the ResultMessage — exactly as the
+        // Python SDK's receive_response() does — so it never observes the exit
+        // that follows a terminal error result and never raises ResultException.
+        // Consumers check ResultMessage.isError() instead. The documentation in
+        // README.md / docs/api-exceptions.md and ResultException's javadoc all
+        // depend on this, so pin it.
+        MockTransport mockTransport = createMockTransport();
+        mockTransport.addAssistantMessage("partial answer");
+        mockTransport.addErrorResultMessage();
+
+        try (var client = new ClaudeSDKClient(ClaudeAgentOptions.defaults(), mockTransport)) {
+            client.connect();
+
+            List<Message> messages = new ArrayList<>();
+            for (Message msg : client.receiveResponse()) {
+                messages.add(msg);
+            }
+
+            Message last = messages.get(messages.size() - 1);
+            assertThat(last).isInstanceOf(ResultMessage.class);
+            ResultMessage result = (ResultMessage) last;
+            assertThat(result.isError()).isTrue();
+            // The payload a consumer branches on lives on the message here.
+            assertThat(result.subtype()).isEqualTo("success");
+            assertThat(result.terminalReason()).isEqualTo("api_error");
+            assertThat(result.apiErrorStatus()).isEqualTo(529);
+        }
+    }
+
     static class MockTransport implements Transport {
 
         private final List<String> writtenData = Collections.synchronizedList(new ArrayList<>());
@@ -867,6 +898,24 @@ class StreamingClientTest {
             message.put("num_turns", 1);
             message.put("session_id", "test");
             message.put("total_cost_usd", 0.001);
+            messagesToReturn.offer(message);
+        }
+
+        /** A terminal error result, as the CLI emits before exiting non-zero. */
+        void addErrorResultMessage() {
+            Map<String, Object> message = new HashMap<>();
+            message.put("type", "result");
+            message.put("subtype", "success");
+            message.put("duration_ms", 1000);
+            message.put("duration_api_ms", 800);
+            message.put("is_error", true);
+            message.put("num_turns", 1);
+            message.put("session_id", "test");
+            message.put("total_cost_usd", 0.0);
+            message.put("errors", java.util.List.of());
+            message.put("result", "API Error: overloaded");
+            message.put("terminal_reason", "api_error");
+            message.put("api_error_status", 529);
             messagesToReturn.offer(message);
         }
 

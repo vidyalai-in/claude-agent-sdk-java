@@ -62,11 +62,14 @@ record SessionMessage(
     String uuid,                         // unique message UUID
     String sessionId,                    // session ID this message belongs to
     Object message,                      // raw Anthropic API message (Map with role/content)
-    @Nullable String parentToolUseId     // null for top-level messages
+    @Nullable String parentToolUseId,    // spawning Agent tool_use id (subagent reads only)
+    @Nullable String parentAgentId       // spawning subagent id (nested subagents only)
 )
 ```
 
 Only top-level conversation messages are returned — tool-use sidechain messages, meta messages, and subagent messages are filtered out.
+
+`parentToolUseId` and `parentAgentId` are always null for `getSessionMessages()` / `getSessionMessagesFromStore()` results. They are populated for `getSubagentMessages()` / `getSubagentMessagesFromStore()`: `parentToolUseId` is the id of the Agent `tool_use` block in the parent session that spawned the subagent, and `parentAgentId` names the spawning subagent when one subagent spawned another. Both come from the subagent's `agent-<agentId>.meta.json` sidecar (or, for store reads, the `agent_metadata` entry that stands in for it), so both are null when that metadata is missing or unusable. Every message in a given subagent transcript carries the same pair.
 
 ### Accessing Message Content
 

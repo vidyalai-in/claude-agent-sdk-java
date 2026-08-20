@@ -88,6 +88,7 @@ mvn exec:java -Dexec.mainClass="examples.AutoSchemaGeneration" -pl examples
 mvn exec:java -Dexec.mainClass="examples.DynamicControlExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ErrorHandling" -pl examples
 mvn exec:java -Dexec.mainClass="examples.FilesystemAgentsExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.ForwardSubagentTextExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.Hooks" -pl examples
 mvn exec:java -Dexec.mainClass="examples.IncludePartialMessagesExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.LargeAgentsExample" -pl examples
@@ -183,6 +184,9 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
 │   ├── ProcessException.java        # Process failures
 │   ├── CLIJSONDecodeException.java  # JSON parsing errors
 │   ├── MessageParseException.java   # Message parsing errors
+│   ├── ResultException.java         # CLI reported a terminal error result;
+│   │                                # carries the result payload (subclass of
+│   │                                # ProcessException)
 │   └── QueryFailedException.java    # Run ended in an error result; carries
 │                                    # the messages collected before it
 ├── transport/                  # Transport layer
@@ -301,6 +305,7 @@ internal/
 ├── SessionResume.java              # Materializes store→temp CLAUDE_CONFIG_DIR for CLI resume
 ├── SessionImport.java              # Local JSONL → store replay (importSessionToStore)
 ├── SessionStoreValidation.java     # Fail-fast pre-flight option checks
+├── CanUseToolConfig.java           # Shared canUseTool validation + stdio routing
 ├── SessionStores.java              # *_from_store and *_via_store APIs
 ├── Sessions.java                   # Local-disk session listing/reading
 ├── SessionMutations.java           # Local-disk session mutations + buildForkLines (shared)
@@ -335,6 +340,7 @@ examples/src/main/java/examples/
 ├── SessionStoreExample.java        # Mirror transcripts to a custom SessionStore
 ├── TruncatingResumeExample.java    # Rewind a session with resumeSessionAt/resumeDropsTurn
 ├── MessageOriginExample.java       # Message provenance + conversation resets
+├── ForwardSubagentTextExample.java # Forward subagent text/thinking blocks
 ├── WindowsBatchCliExample.java     # Windows .cmd CLI opt-in (Windows-only)
 └── plugins/                        # Example plugin implementations
 ```

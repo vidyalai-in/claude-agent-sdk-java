@@ -12,6 +12,8 @@ import in.vidyalai.claude.sdk.exceptions.CLINotFoundException;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
 import in.vidyalai.claude.sdk.exceptions.MessageParseException;
 import in.vidyalai.claude.sdk.exceptions.ProcessException;
+import in.vidyalai.claude.sdk.exceptions.QueryFailedException;
+import in.vidyalai.claude.sdk.exceptions.ResultException;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.ContentBlock;
 import in.vidyalai.claude.sdk.types.message.Message;
@@ -45,6 +47,10 @@ public class ErrorHandling {
         // Example 5: Budget exceeded
         System.out.println("\n=== Budget Exceeded ===");
         budgetExceeded();
+
+        // Example 6: API failure reported as a terminal error result
+        System.out.println("\n=== API Error Result ===");
+        apiErrorResult();
     }
 
     /**
@@ -131,6 +137,23 @@ public class ErrorHandling {
                         default -> System.out.println("Unknown result: " + result.subtype());
                     }
                 }
+            }
+        } catch (QueryFailedException e) {
+            // The CLI ends a failed run by emitting the error result and then
+            // exiting non-zero. The collecting query wraps that in a
+            // QueryFailedException so the messages it already gathered are not
+            // lost; the typed cause carries the result's payload, so there is
+            // no need to string-match the message.
+            //
+            // A streaming consumer (ClaudeSDKClient.receiveMessages() /
+            // receiveResponse()) sees every message as it arrives and is
+            // thrown the ResultException directly — catch that instead there.
+            System.err.println("Run ended early: " + e.getMessage());
+            if (e.getCause() instanceof ResultException cause) {
+                System.err.println("Subtype: " + cause.subtype());
+                System.err.println("Terminal reason: " + cause.terminalReason());
+                System.err.println("Detail: "
+                        + (cause.result() != null ? cause.result() : cause.errors()));
             }
         } catch (ClaudeSDKException e) {
             System.err.println("SDK error: " + e.getMessage());
@@ -247,6 +270,56 @@ public class ErrorHandling {
                     }
                 } else if (msg instanceof AssistantMessage a) {
                     System.out.println("Partial response: " + truncate(a.getTextContent(), 100));
+                }
+            }
+        } catch (ClaudeSDKException e) {
+            System.err.println("SDK error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * A run that fails on the API side, and the shape that failure arrives in.
+     *
+     * <p>An API-side failure is <em>not</em> reported with an
+     * {@code error_*} subtype. The agent loop itself completed, so the CLI
+     * emits {@code subtype: "success"} with {@code isError: true}, an empty
+     * {@code errors} list, {@code terminalReason: "api_error"}, and the real
+     * prose in {@code result} — then exits non-zero. Branch on
+     * {@link ResultException#terminalReason()} rather than the subtype.
+     *
+     * <p>An invalid model id triggers this deterministically and cheaply:
+     * the request is rejected before any inference is billed.
+     */
+    static void apiErrorResult() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .model("claude-nonexistent-model-for-sdk-example")
+                .maxTurns(1)
+                .build();
+
+        try {
+            ClaudeSDK.query("Reply with: pong", options);
+            System.out.println("No error — the model id was accepted after all.");
+        } catch (QueryFailedException e) {
+            ResultMessage result = e.resultMessage();
+            if (result != null) {
+                System.out.println("Result subtype: " + result.subtype()
+                        + " (isError=" + result.isError() + ")");
+            }
+            if (e.getCause() instanceof ResultException cause) {
+                // The exception payload mirrors the ResultMessage above.
+                System.out.println("Terminal reason: " + cause.terminalReason());
+                System.out.println("API error status: " + cause.apiErrorStatus());
+                System.out.println("Detail: " + cause.result());
+                System.out.println("Exit code: " + cause.getExitCode());
+
+                // terminalReason only says the failure came from the API, not
+                // whether retrying can help: an invalid model id reports
+                // api_error with a permanent 404. Branch on the status.
+                Integer status = cause.apiErrorStatus();
+                if (status != null && (status == 429 || status >= 500)) {
+                    System.out.println("-> transient: worth retrying with backoff");
+                } else {
+                    System.out.println("-> permanent: retrying will not help");
                 }
             }
         } catch (ClaudeSDKException e) {

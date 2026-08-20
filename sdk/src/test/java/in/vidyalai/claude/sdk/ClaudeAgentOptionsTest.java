@@ -47,6 +47,7 @@ class ClaudeAgentOptionsTest {
         assertThat(options.extraArgs()).isEmpty();
         assertThat(options.includePartialMessages()).isFalse();
         assertThat(options.includeHookEvents()).isFalse();
+        assertThat(options.forwardSubagentText()).isFalse();
         assertThat(options.strictMcpConfig()).isFalse();
         assertThat(options.enableFileCheckpointing()).isFalse();
     }
@@ -68,6 +69,21 @@ class ClaudeAgentOptionsTest {
         assertThat(roundTripped.includeHookEvents()).isTrue();
         assertThat(roundTripped.strictMcpConfig()).isTrue();
         assertThat(roundTripped.effort()).isEqualTo("xhigh");
+    }
+
+    @Test
+    void builder_forwardSubagentText() {
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .forwardSubagentText(true)
+                .build();
+
+        assertThat(options.forwardSubagentText()).isTrue();
+
+        // toBuilder round-trips it — the materialized-resume path rebuilds
+        // options through it.
+        assertThat(options.toBuilder().build().forwardSubagentText()).isTrue();
+        assertThat(options.toBuilder().forwardSubagentText(false).build().forwardSubagentText())
+                .isFalse();
     }
 
     @SuppressWarnings("deprecation")

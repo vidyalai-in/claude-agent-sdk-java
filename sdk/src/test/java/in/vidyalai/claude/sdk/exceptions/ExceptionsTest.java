@@ -116,6 +116,111 @@ class ExceptionsTest {
     }
 
     @Test
+    void testResultExceptionCarriesPayload() {
+        java.util.Map<String, Object> data = new java.util.HashMap<>();
+        data.put("type", "result");
+        data.put("subtype", "success");
+        data.put("is_error", true);
+        data.put("errors", java.util.List.of());
+        data.put("result", "API Error: Stream idle timeout - no chunks received");
+        data.put("api_error_status", null);
+        data.put("terminal_reason", "api_error");
+        data.put("session_id", "s-1");
+
+        ResultException exception = new ResultException(
+                "Claude Code returned an error result: x", data, 1);
+
+        assertThat(exception).isInstanceOf(ProcessException.class);
+        assertThat(exception).isInstanceOf(ClaudeSDKException.class);
+        assertThat(exception.getExitCode()).isEqualTo(1);
+        assertThat(exception.data()).containsEntry("session_id", "s-1");
+        assertThat(exception.subtype()).isEqualTo("success");
+        assertThat(exception.errors()).isEmpty();
+        assertThat(exception.result()).isEqualTo("API Error: Stream idle timeout - no chunks received");
+        assertThat(exception.apiErrorStatus()).isNull();
+        assertThat(exception.terminalReason()).isEqualTo("api_error");
+        assertThat(exception.sessionId()).isEqualTo("s-1");
+        assertThat(exception.getMessage()).contains("exit code: 1");
+    }
+
+    @Test
+    void testResultExceptionToleratesMissingOrMalformedFields() {
+        java.util.Map<String, Object> data = new java.util.HashMap<>();
+        data.put("errors", 42);
+        data.put("api_error_status", "500");
+
+        ResultException exception = new ResultException("boom", data, null);
+
+        assertThat(exception.subtype()).isNull();
+        assertThat(exception.errors()).isEmpty();
+        assertThat(exception.result()).isNull();
+        assertThat(exception.apiErrorStatus()).isNull();
+        assertThat(exception.terminalReason()).isNull();
+        assertThat(exception.sessionId()).isNull();
+        assertThat(exception.getExitCode()).isNull();
+        assertThat(new ResultException("boom", null, null).data()).isEmpty();
+    }
+
+    @Test
+    void testResultExceptionNormalizesErrorsLikeTheMessageText() {
+        // A bare-string `errors` is kept and blank entries are dropped, so the
+        // structured field agrees with the text the reader builds from it.
+        assertThat(new ResultException("m", java.util.Map.of("errors", "boom"), null).errors())
+                .containsExactly("boom");
+        assertThat(new ResultException("m",
+                java.util.Map.of("errors", java.util.Arrays.asList(" ", "x ", 3)), null).errors())
+                        .containsExactly("x");
+    }
+
+    @Test
+    void testResultExceptionDataIsUnmodifiable() {
+        ResultException exception = new ResultException(
+                "m", new java.util.HashMap<>(java.util.Map.of("subtype", "error_max_turns")), 1);
+
+        assertThat(exception.data()).containsEntry("subtype", "error_max_turns");
+        org.assertj.core.api.Assertions
+                .assertThatThrownBy(() -> exception.data().put("subtype", "other"))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void testResultExceptionSurvivesSerialization() throws Exception {
+        // Java's counterpart to Python's pickle round-trip: exceptions cross
+        // process and cache boundaries via serialization, so the typed
+        // accessors must survive it. `data` is deliberately transient (an
+        // arbitrary decoded-JSON map is not guaranteed Serializable) and
+        // reports empty afterwards, which is what the javadoc promises.
+        java.util.Map<String, Object> data = new java.util.HashMap<>();
+        data.put("subtype", "error_max_turns");
+        data.put("errors", java.util.List.of("too many"));
+        data.put("session_id", "s");
+        data.put("terminal_reason", "max_turns");
+        data.put("api_error_status", 529);
+        ResultException original = new ResultException(
+                "Claude Code returned an error result: too many", data, 1);
+
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (java.io.ObjectOutputStream out = new java.io.ObjectOutputStream(bytes)) {
+            out.writeObject(original);
+        }
+        ResultException clone;
+        try (java.io.ObjectInputStream in = new java.io.ObjectInputStream(
+                new java.io.ByteArrayInputStream(bytes.toByteArray()))) {
+            clone = (ResultException) in.readObject();
+        }
+
+        assertThat(clone.getMessage()).isEqualTo(original.getMessage());
+        assertThat(clone.getExitCode()).isEqualTo(1);
+        assertThat(clone.subtype()).isEqualTo("error_max_turns");
+        assertThat(clone.errors()).containsExactly("too many");
+        assertThat(clone.sessionId()).isEqualTo("s");
+        assertThat(clone.terminalReason()).isEqualTo("max_turns");
+        assertThat(clone.apiErrorStatus()).isEqualTo(529);
+        // The raw payload does not survive; it degrades to empty, never null.
+        assertThat(clone.data()).isEmpty();
+    }
+
+    @Test
     void testExceptionHierarchy() {
         // Verify the exception hierarchy
         assertThat(new ClaudeSDKException("test")).isInstanceOf(RuntimeException.class);
@@ -124,6 +229,7 @@ class ExceptionsTest {
         assertThat(new ProcessException("test")).isInstanceOf(ClaudeSDKException.class);
         assertThat(new CLIJSONDecodeException("test", new RuntimeException())).isInstanceOf(ClaudeSDKException.class);
         assertThat(new MessageParseException("test")).isInstanceOf(ClaudeSDKException.class);
+        assertThat(new ResultException("test", null, null)).isInstanceOf(ProcessException.class);
     }
 
 }

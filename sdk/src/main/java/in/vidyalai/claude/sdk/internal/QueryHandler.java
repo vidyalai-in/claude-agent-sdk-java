@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -33,6 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDKClient;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
+import in.vidyalai.claude.sdk.exceptions.ResultException;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.config.AgentDefinition;
@@ -289,6 +291,12 @@ public class QueryHandler implements AutoCloseable {
      */
     @Nullable
     private final Object skills;
+    /**
+     * Whether to ask the CLI, via initialize, to forward subagent text and
+     * thinking blocks in addition to {@code tool_use}/{@code tool_result}.
+     * Only sent over the wire when true; older CLIs ignore unknown fields.
+     */
+    private final boolean forwardSubagentText;
     private final Duration initializeTimeout;
 
     // Control protocol state
@@ -375,6 +383,44 @@ public class QueryHandler implements AutoCloseable {
             @Nullable Object skills,
             Duration initializeTimeout,
             @Nullable Integer maxMsgQSize) {
+        this(transport, isStreamingMode, canUseTool, hooks, sdkMcpServers, agents,
+                excludeDynamicSections, skills, false, initializeTimeout, maxMsgQSize);
+    }
+
+    /**
+     * Creates a new QueryHandler with SDK MCP server support and subagent text
+     * forwarding.
+     *
+     * @param transport                the transport for I/O
+     * @param isStreamingMode          whether using streaming (bidirectional) mode
+     * @param canUseTool               optional callback for tool permission requests (may
+     *                                 be null)
+     * @param hooks                    optional hook configurations
+     * @param sdkMcpServers            optional SDK MCP servers for in-process tool
+     *                                 execution
+     * @param agents                   optional agent definitions to send via initialize
+     *                                 request
+     * @param excludeDynamicSections   optional preset-prompt flag for cross-user caching
+     * @param skills                   optional skill allowlist sent via initialize so the CLI can
+     *                                 filter which skills are loaded into the system prompt
+     *                                 ({@code null}, the string {@code "all"}, or a {@code List<String>})
+     * @param forwardSubagentText      ask the CLI (via initialize) to forward subagent
+     *                                 text/thinking blocks, not just tool_use/tool_result
+     * @param initializeTimeout        timeout for the initialize request
+     * @param maxMsgQSize              max message queue size
+     */
+    public QueryHandler(
+            Transport transport,
+            boolean isStreamingMode,
+            ClaudeAgentOptions.CanUseTool canUseTool, // may be null
+            @Nullable Map<HookEvent, List<HookMatcher>> hooks,
+            @Nullable Map<String, SdkMcpServer> sdkMcpServers,
+            @Nullable Map<String, AgentDefinition> agents,
+            @Nullable Boolean excludeDynamicSections,
+            @Nullable Object skills,
+            boolean forwardSubagentText,
+            Duration initializeTimeout,
+            @Nullable Integer maxMsgQSize) {
         this.transport = transport;
         this.isStreamingMode = isStreamingMode;
         this.canUseTool = canUseTool;
@@ -383,6 +429,7 @@ public class QueryHandler implements AutoCloseable {
         this.agents = agents;
         this.excludeDynamicSections = excludeDynamicSections;
         this.skills = skills;
+        this.forwardSubagentText = forwardSubagentText;
         this.initializeTimeout = initializeTimeout;
         this.messageQueue = new LinkedBlockingQueue<>((maxMsgQSize != null) ? maxMsgQSize : DEFAULT_MSG_Q_SIZE);
 
@@ -466,7 +513,8 @@ public class QueryHandler implements AutoCloseable {
                     hooksConfig.isEmpty() ? null : hooksConfig,
                     ((agents == null) || agents.isEmpty()) ? null : agents,
                     excludeDynamicSections,
-                    skillsForWire);
+                    skillsForWire,
+                    forwardSubagentText ? Boolean.TRUE : null);
 
             initializationResult = sendControlRequest(request, initializeTimeout);
             return initializationResult;
@@ -480,6 +528,13 @@ public class QueryHandler implements AutoCloseable {
                 transport.close();
             } catch (Exception closeEx) {
                 logger.log(Level.WARNING, "Failed to close transport after initialization failure", closeEx);
+            }
+            // Keep an already-typed SDK failure intact (e.g. the
+            // ResultException built from an error result the CLI emitted
+            // before answering this initialize) so the caller can branch on
+            // it; only opaque failures get the wrapper.
+            if (e instanceof ClaudeSDKException sdkError) {
+                throw sdkError;
             }
             throw new ClaudeSDKException("Failed to initialize: " + e.getMessage(), e);
         }
@@ -615,12 +670,47 @@ public class QueryHandler implements AutoCloseable {
         }
     }
 
+    /**
+     * Picks the most informative text from a {@code result} frame with
+     * {@code is_error}.
+     *
+     * <p>
+     * Terminal errors the CLI raises itself ({@code error_max_turns},
+     * {@code error_during_execution}, ...) carry their prose in
+     * {@code errors[]}. A run that ends on an API failure instead arrives as
+     * {@code subtype: "success"} with {@code is_error: true}, an empty
+     * {@code errors[]} and the "API Error: ..." prose in {@code result} —
+     * falling back to the subtype there produced the self-contradictory
+     * "Claude Code returned an error result: success". Prefer {@code errors[]},
+     * then {@code result}, then a non-success {@code subtype}, then the HTTP
+     * status.
+     */
+    static String errorResultText(Map<String, Object> message) {
+        List<String> errors = ResultException.normalizeErrors(message.get("errors"));
+        if (!errors.isEmpty()) {
+            return String.join("; ", errors);
+        }
+        if (message.get("result") instanceof String result && !result.isBlank()) {
+            return result.strip();
+        }
+        if (message.get("subtype") instanceof String subtype
+                && !subtype.isEmpty() && !"success".equals(subtype)) {
+            return subtype;
+        }
+        Object status = message.get("api_error_status");
+        if (status != null) {
+            return "API error (HTTP " + status + ")";
+        }
+        return "unknown error";
+    }
+
     private void readMessages() {
-        // Tracks the most recent error result's text so we can replace the
+        // Tracks the most recent error result's payload so we can replace the
         // generic "Command failed with exit code 1" ProcessException that
-        // the CLI raises after emitting an error result. Mirrors the
-        // TypeScript and Python SDKs' lastErrorResultText / _last_error_result_text.
-        String[] lastErrorResultText = new String[1];
+        // the CLI raises after emitting an error result with a typed
+        // ResultException. Mirrors the TypeScript and Python SDKs'
+        // lastErrorResultText / _last_error_result.
+        AtomicReference<Map<String, Object>> lastErrorResult = new AtomicReference<>();
         try {
             Iterator<Map<String, Object>> messages = transport.readMessages();
             while (messages.hasNext() && (!closed.get())) {
@@ -705,19 +795,9 @@ public class QueryHandler implements AutoCloseable {
                     }
                     Object isErr = message.get("is_error");
                     if (isErr instanceof Boolean b && b) {
-                        @SuppressWarnings("unchecked")
-                        List<String> errList = (message.get("errors") instanceof List<?> el)
-                                ? (List<String>) el : null;
-                        String joined = (errList != null && !errList.isEmpty())
-                                ? String.join("; ", errList)
-                                : null;
-                        if (joined == null || joined.isEmpty()) {
-                            Object subtype = message.get("subtype");
-                            joined = (subtype instanceof String s && !s.isEmpty()) ? s : "unknown error";
-                        }
-                        lastErrorResultText[0] = joined;
+                        lastErrorResult.set(message);
                     } else {
-                        lastErrorResultText[0] = null;
+                        lastErrorResult.set(null);
                     }
                 } else if (!("system".equals(msgType)
                         && "session_state_changed".equals(message.get("subtype")))) {
@@ -725,7 +805,7 @@ public class QueryHandler implements AutoCloseable {
                     // marker means the conversation moved on; a ProcessException
                     // now is a fresh crash, not the expected exit from a prior
                     // error result. Mirrors the TS/Python SDK reset logic.
-                    lastErrorResultText[0] = null;
+                    lastErrorResult.set(null);
                 }
 
                 // Regular SDK messages go to the stream
@@ -741,25 +821,29 @@ public class QueryHandler implements AutoCloseable {
         } catch (Exception e) {
             if (!closed.get()) {
                 // When the CLI emits a result with is_error=true (e.g.
-                // error_max_turns, error_during_execution) it then exits
-                // non-zero on purpose. The trailing ProcessException carries
-                // no information beyond "exit code 1" — replace it with the
-                // structured error the CLI already reported so the exception
-                // is actionable. Mirrors the TS/Python SDKs.
+                // error_max_turns, error_during_execution, or an API failure)
+                // it then exits non-zero on purpose. The trailing
+                // ProcessException carries no information beyond "exit code 1"
+                // — replace it with a ResultException carrying what the CLI
+                // already reported so the exception is actionable and typed.
+                // Mirrors the TS/Python SDKs.
                 String errorText;
                 Throwable pendingError = e;
+                Map<String, Object> errorResult = lastErrorResult.get();
                 boolean replaced = (e instanceof in.vidyalai.claude.sdk.exceptions.ProcessException
-                        && lastErrorResultText[0] != null);
+                        && errorResult != null);
                 if (replaced) {
-                    errorText = "Claude Code returned an error result: " + lastErrorResultText[0];
+                    errorText = "Claude Code returned an error result: " + errorResultText(errorResult);
                     // stderr deliberately not carried over: the transport's value
                     // is a generic placeholder, and the result text is the real
                     // cause.
-                    pendingError = new in.vidyalai.claude.sdk.exceptions.ProcessException(
+                    ResultException resultException = new ResultException(
                             errorText,
-                            ((in.vidyalai.claude.sdk.exceptions.ProcessException) e).getExitCode(),
-                            null);
-                    logger.fine("Replacing ProcessException with result error text: " + errorText);
+                            errorResult,
+                            ((in.vidyalai.claude.sdk.exceptions.ProcessException) e).getExitCode());
+                    resultException.initCause(e);
+                    pendingError = resultException;
+                    logger.fine("Replacing ProcessException with ResultException: " + errorText);
                 } else {
                     errorText = e.getMessage();
                     logger.log(Level.SEVERE, "Fatal error in message reader: " + errorText, e);
@@ -774,11 +858,16 @@ public class QueryHandler implements AutoCloseable {
                 }
                 pendingControlResponses.clear();
 
-                // Put error in stream so iterators can handle it
+                // Put the error in the stream so iterators can raise it. The
+                // typed exception rides along so receiveMessages() rethrows it
+                // as-is (ResultException / ProcessException with its exit code,
+                // CLIJSONDecodeException, ...) instead of flattening it to a
+                // bare ClaudeSDKException(String).
                 try {
                     Map<String, Object> errMessage = new HashMap<>();
                     errMessage.put("type", "error");
                     errMessage.put("error", errorText);
+                    errMessage.put("exception", pendingError);
                     messageQueue.offer(errMessage, 1, TimeUnit.SECONDS);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
@@ -1033,6 +1122,15 @@ public class QueryHandler implements AutoCloseable {
         } catch (TimeoutException e) {
             throw new ClaudeSDKException("Control request timeout: " + requestData.subtype());
         } catch (Exception e) {
+            // The reader completes pending requests with the exception it
+            // failed with — a ResultException carrying the CLI's error result,
+            // a ProcessException with its exit code, ... Surface it as-is so
+            // callers can branch on the type instead of on a wrapper's text.
+            // Mirrors the Python SDK's `raise result`.
+            Throwable cause = (e instanceof java.util.concurrent.ExecutionException) ? e.getCause() : e;
+            if (cause instanceof ClaudeSDKException sdkError) {
+                throw sdkError;
+            }
             throw new ClaudeSDKException("Control request failed: " + e.getMessage(), e);
         } finally {
             // Always remove from pending map to prevent memory leak
@@ -1160,22 +1258,61 @@ public class QueryHandler implements AutoCloseable {
     }
 
     /**
+     * Whether the CLI may still send control requests that need a reply.
+     *
+     * <p>SDK MCP servers, hooks, and the {@code canUseTool} permission callback
+     * are all served over the control protocol: the CLI writes a
+     * {@code control_request} to stdout and blocks until the SDK writes the
+     * matching {@code control_response} to stdin. Closing stdin while any of
+     * these are configured makes every later request fail CLI-side with
+     * "Stream closed". Mirrors the TypeScript SDK's
+     * {@code hasBidirectionalNeeds}.
+     */
+    private boolean hasBidirectionalNeeds() {
+        // Read each field once: a second read is what makes the null check
+        // above it non-narrowing, and there is no reason to read twice.
+        Map<HookEvent, List<HookMatcher>> hookConfig = hooks;
+        Map<String, SdkMcpServer> mcpServers = sdkMcpServers;
+        return ((hookConfig != null) && (!hookConfig.isEmpty()))
+                || ((mcpServers != null) && (!mcpServers.isEmpty()))
+                || (canUseTool != null);
+    }
+
+    /**
      * Streams input messages to transport.
+     *
+     * <p>If SDK MCP servers, hooks, or a {@code canUseTool} callback are
+     * present, waits for a run-ending result before closing stdin so
+     * bidirectional control protocol traffic keeps working.
+     *
+     * <p>Known limitation: the wait is released by the first result frame that
+     * arrives with no tasks in flight, so a prompt iterator that yields several
+     * user messages (several turns) releases the hold at the first turn
+     * boundary; control requests from later turns can then find stdin closed.
+     * Single-message and string prompts — the common one-shot shapes — are
+     * fully covered.
      */
     public void streamInput(Iterator<Map<String, Object>> stream) {
+        int written = 0;
         try {
             while (stream.hasNext() && (!closed.get())) {
                 Map<String, Object> message = stream.next();
                 String json = MAPPER.writeValueAsString(message);
                 transport.write(json + "\n");
+                written++;
             }
+        } catch (Exception e) {
+            // A caller-supplied prompt iterator (or the write) failed. Don't
+            // leave stdin open — the CLI would wait for input forever and the
+            // consumer's iteration would never finish — fall through and close
+            // it like a normal end of input.
+            if (!closed.get()) {
+                logger.log(Level.WARNING, "Prompt stream failed; closing stdin", e);
+            }
+        }
 
-            // If we have hooks or SDK MCP servers that need bidirectional communication,
-            // wait for first result
-            @SuppressWarnings("null")
-            boolean needsBidirectional = (((hooks != null) && (!hooks.isEmpty()))
-                    || ((sdkMcpServers != null) && (!sdkMcpServers.isEmpty())));
-            if (needsBidirectional) {
+        try {
+            if (written > 0 && hasBidirectionalNeeds()) {
                 try {
                     firstResultEvent.get(streamCloseTimeout.toMillis(), TimeUnit.MILLISECONDS);
                 } catch (TimeoutException e) {
@@ -1184,14 +1321,15 @@ public class QueryHandler implements AutoCloseable {
                     // Ignore other exceptions
                 }
             }
-
-            // After all messages sent, end input
+            // Nothing sent means no result will arrive to release the hold, so
+            // close immediately (mirrors the TypeScript SDK's messageCount
+            // guard).
             if (!closed.get()) {
                 transport.endInput();
             }
         } catch (Exception e) {
             if (!closed.get()) {
-                logger.log(Level.WARNING, "Error streaming input", e);
+                logger.log(Level.WARNING, "Error closing input stream", e);
             }
         }
     }
@@ -1372,6 +1510,30 @@ public class QueryHandler implements AutoCloseable {
      * This iterator blocks waiting for messages and handles special control
      * messages like "end" and "error".
      */
+    /**
+     * Turns a synthetic {@code error} frame back into the exception the reader
+     * thread failed with.
+     *
+     * <p>
+     * The reader stows the exception on the frame so its type and payload —
+     * {@link ResultException}'s result fields, a {@code ProcessException}'s
+     * exit code, a {@code CLIJSONDecodeException}'s raw line — reach the
+     * consumer instead of being flattened to a message string. Frames without
+     * one (or with a non-runtime throwable) fall back to a
+     * {@link ClaudeSDKException} carrying the text.
+     */
+    private static RuntimeException toThrowable(Map<String, Object> message) {
+        Object exception = message.get("exception");
+        if (exception instanceof RuntimeException runtime) {
+            return runtime;
+        }
+        String text = (message.get("error") instanceof String s) ? s : "Unknown error";
+        if (exception instanceof Throwable cause) {
+            return new ClaudeSDKException(text, cause);
+        }
+        return new ClaudeSDKException(text);
+    }
+
     private class MessageIterator implements Iterator<Message> {
 
         @Nullable
@@ -1411,7 +1573,7 @@ public class QueryHandler implements AutoCloseable {
                         }
                         if ("error".equals(message.get("type"))) {
                             done = true;
-                            throw new ClaudeSDKException((String) message.get("error"));
+                            throw toThrowable(message);
                         }
 
                         Message parsed = MessageParser.parse(message);

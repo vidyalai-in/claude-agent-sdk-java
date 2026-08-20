@@ -151,7 +151,7 @@ List<Message> messages = ClaudeSDK.query("Hello!", options);
 **Returns**: `List<Message>` - All messages from the conversation
 
 **Throws**:
-- `IllegalArgumentException` - If `canUseTool` is set (requires streaming mode)
+- `IllegalArgumentException` - If both `canUseTool` and `permissionPromptToolName` are set
 - `CLIConnectionException` - If connection fails
 - `ProcessException` - If CLI process fails
 

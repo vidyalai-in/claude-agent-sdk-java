@@ -964,14 +964,102 @@ public class Sessions {
     }
 
     static SessionMessage toSessionMessage(Map<String, Object> entry) {
+        return toSessionMessage(entry, null, null);
+    }
+
+    /**
+     * Converts a transcript entry into a {@link SessionMessage}.
+     *
+     * <p>The parent ids are not carried by the transcript entries themselves —
+     * they describe the whole subagent, and callers read them from the
+     * subagent's metadata (see {@link #parentIdsFromAgentMetadata}). Top-level
+     * session reads pass {@code null} for both.
+     */
+    static SessionMessage toSessionMessage(
+            Map<String, Object> entry,
+            @Nullable String parentToolUseId,
+            @Nullable String parentAgentId) {
         String type = (String) entry.get("type");
         String uuid = (String) entry.get("uuid");
         String sessionId = (String) entry.get("sessionId");
         if (sessionId == null)
             sessionId = "";
         Object message = entry.get("message");
-        String parentToolUseId = (String) entry.get("parentToolUseId");
-        return new SessionMessage(type, uuid, sessionId, message, parentToolUseId);
+        return new SessionMessage(type, uuid, sessionId, message, parentToolUseId, parentAgentId);
+    }
+
+    /**
+     * The parent ids describing a subagent, read from its metadata.
+     *
+     * @param toolUseId     id of the Agent {@code tool_use} that spawned the
+     *                      subagent, or null when unknown
+     * @param parentAgentId id of the spawning subagent (nested subagents), or
+     *                      null when the main session spawned it
+     */
+    record ParentIds(@Nullable String toolUseId, @Nullable String parentAgentId) {
+
+        static final ParentIds NONE = new ParentIds(null, null);
+    }
+
+    /**
+     * {@code agent-<id>.jsonl} -> {@code agent-<id>.meta.json} (same directory).
+     *
+     * <p>The single definition of the sidecar naming convention, shared by the
+     * read path here, session import, and resume materialization.
+     */
+    static Path agentMetadataSidecarPath(Path transcriptPath) {
+        String name = transcriptPath.getFileName().toString();
+        if (name.endsWith(".jsonl")) {
+            name = name.substring(0, name.length() - ".jsonl".length());
+        }
+        return transcriptPath.resolveSibling(name + ".meta.json");
+    }
+
+    /**
+     * Reads the {@code .meta.json} sidecar beside a subagent transcript.
+     *
+     * <p>Returns null when the sidecar is missing, not valid JSON, or not a
+     * JSON object — an unusable optional sidecar degrades to an absent one.
+     * Other {@link IOException}s (e.g. permission denied) propagate.
+     */
+    static @Nullable Map<String, Object> readAgentMetadataSidecar(Path transcriptPath) throws IOException {
+        String text;
+        try {
+            text = Files.readString(agentMetadataSidecarPath(transcriptPath), StandardCharsets.UTF_8);
+        } catch (java.nio.file.NoSuchFileException e) {
+            return null;
+        }
+        try {
+            @SuppressWarnings("null")
+            Object parsed = MAPPER.readValue(text, Object.class);
+            if (parsed instanceof Map<?, ?> map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> typed = (Map<String, Object>) map;
+                return typed;
+            }
+        } catch (com.fasterxml.jackson.core.JacksonException e) {
+            return null;
+        }
+        return null;
+    }
+
+    /**
+     * Extracts {@code (toolUseId, parentAgentId)} from an agent metadata map.
+     *
+     * <p>Works for both the on-disk {@code .meta.json} sidecar and the
+     * synthetic {@code agent_metadata} entry a
+     * {@link in.vidyalai.claude.sdk.types.session.SessionStore} receives in its
+     * place. Non-string values are treated as absent.
+     */
+    static ParentIds parentIdsFromAgentMetadata(@Nullable Map<String, Object> meta) {
+        if (meta == null || meta.isEmpty()) {
+            return ParentIds.NONE;
+        }
+        Object toolUseId = meta.get("toolUseId");
+        Object parentAgentId = meta.get("parentAgentId");
+        return new ParentIds(
+                (toolUseId instanceof String s) ? s : null,
+                (parentAgentId instanceof String s) ? s : null);
     }
 
     static @Nullable String readSessionFile(String sessionId, @Nullable String directory) {
@@ -1236,6 +1324,12 @@ public class Sessions {
      * Reads a subagent's conversation messages from its JSONL transcript
      * file.
      *
+     * <p>Each message's {@code parentToolUseId} is the id of the Agent
+     * {@code tool_use} in the parent session that spawned this subagent (and
+     * {@code parentAgentId} the spawning subagent, for nested subagents), read
+     * from the {@code agent-<agentId>.meta.json} sidecar next to the
+     * transcript; both are null if the sidecar is missing or unusable.
+     *
      * @param sessionId UUID of the parent session
      * @param agentId   ID of the subagent (as returned by
      *                  {@link #listSubagents})
@@ -1282,13 +1376,26 @@ public class Sessions {
             return List.of();
         }
 
+        // The .meta.json sidecar next to the transcript records which Agent
+        // tool_use spawned this subagent (and, for nested subagents, the parent
+        // agent id). Like the transcript read above, any failure to read it
+        // (missing, unreadable, corrupt) degrades to "no metadata" rather than
+        // raising from this best-effort read helper.
+        Map<String, Object> meta;
+        try {
+            meta = readAgentMetadataSidecar(match);
+        } catch (IOException e) {
+            meta = null;
+        }
+        ParentIds parentIds = parentIdsFromAgentMetadata(meta);
+
         List<Map<String, Object>> entries = parseTranscriptEntries(content);
         List<Map<String, Object>> chain = buildSubagentChain(entries);
         List<SessionMessage> messages = new ArrayList<>();
         for (Map<String, Object> entry : chain) {
             String type = (String) entry.get("type");
             if ("user".equals(type) || "assistant".equals(type)) {
-                messages.add(toSessionMessage(entry));
+                messages.add(toSessionMessage(entry, parentIds.toolUseId(), parentIds.parentAgentId()));
             }
         }
 

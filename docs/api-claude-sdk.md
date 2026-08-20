@@ -40,7 +40,7 @@ Execute query with custom options.
 **Returns**: `List<Message>`
 
 **Throws**:
-- `IllegalArgumentException` - If canUseTool is set (requires streaming)
+- `IllegalArgumentException` - If both canUseTool and permissionPromptToolName are set
 - `CLIConnectionException` - Connection failed
 - `ProcessException` - CLI process failed
 - `QueryFailedException` - The run ended in an error result (`error_max_turns`, `error_max_budget_usd`, a resume refused by `resumeDropsTurn`). Carries the messages collected before it — see below.
@@ -88,9 +88,15 @@ try {
 ```
 
 Catch it whenever you set `maxTurns` or `maxBudgetUsd` — reaching a cap you
-configured is an expected outcome, not a crash. The streaming APIs on
-[`ClaudeSDKClient`](./api-claude-sdk-client.md) hand each message over as it
-arrives and raise only at the end, so they never needed this. See
+configured is an expected outcome, not a crash. When you want the result's
+payload (`subtype()`, `terminalReason()`, `apiErrorStatus()`, …) rather than
+the collected messages, read it from the cause, which is a
+[`ResultException`](./api-exceptions.md#resultexception).
+
+The streaming APIs on [`ClaudeSDKClient`](./api-claude-sdk-client.md) never
+needed this exception at all: they hand each message over as it arrives, and
+`receiveResponse()` stops at the `ResultMessage` — check its `isError()` and
+`subtype()` directly. See
 [Exceptions](./api-exceptions.md#queryfailedexception).
 
 ## Convenience Methods

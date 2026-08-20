@@ -880,6 +880,12 @@ try {
     System.err.println("  curl -fsSL https://claude.ai/install.sh | bash");
 } catch (CLIConnectionException e) {
     System.err.println("Failed to connect to CLI: " + e.getMessage());
+} catch (ResultException e) {
+    // A control request failed on a terminal error result — in practice an
+    // `initialize` the CLI refused during startup (e.g. a resume rejected by
+    // resumeDropsTurn). An error result *during* the run arrives as a
+    // QueryFailedException instead; see below.
+    System.err.println("Startup failed: " + e.subtype() + " / " + e.terminalReason());
 } catch (ProcessException e) {
     System.err.println("Process failed with exit code: " + e.getExitCode());
     System.err.println("Stderr: " + e.getStderr());
@@ -890,13 +896,18 @@ try {
     System.err.println("Failed to parse message: " + e.getMessage());
     System.err.println("Data: " + e.getData());
 } catch (QueryFailedException e) {
-    // The run ended in an error result (max turns, max budget, a refused
-    // resume). The messages that arrived before it are still available.
+    // The run ended in an error result (max turns, max budget, an API
+    // failure). The messages that arrived before it are still available...
     System.err.println("Run ended early: " + e.getMessage());
     ResultMessage result = e.resultMessage();
     if (result != null) {
         System.err.println("Stopped by: " + result.subtype());
         System.err.println("Spent: $" + result.totalCostUsd());
+    }
+    // ...and the typed payload is on the cause.
+    if (e.getCause() instanceof ResultException cause) {
+        System.err.println("Why: " + cause.terminalReason()
+                + " (HTTP " + cause.apiErrorStatus() + ")");
     }
 } catch (ClaudeSDKException e) {
     System.err.println("SDK error: " + e.getMessage());
@@ -910,10 +921,27 @@ ClaudeSDKException (base)
 ├── CLIConnectionException
 │   └── CLINotFoundException
 ├── ProcessException
+│   └── ResultException
 ├── CLIJSONDecodeException
 ├── MessageParseException
 └── QueryFailedException
 ```
+
+`ResultException` is raised when the CLI ends a failed run by emitting a
+`result` message with `is_error: true` and then exiting non-zero. It replaces
+the bare "exit code 1" `ProcessException` for that case and carries the
+result's payload — `subtype()`, `errors()`, `result()`, `apiErrorStatus()`,
+`terminalReason()`, `sessionId()` and the raw `data()` — so callers can branch
+on *why* the run failed. Note that a run ending on an API failure arrives as
+`subtype() == "success"` with `terminalReason() == "api_error"` and the prose
+in `result()`. Existing `catch (ProcessException e)` handlers keep working.
+
+Usually you meet it as `QueryFailedException.getCause()`, not on its own: the
+collecting `query(...)` wraps it so the messages already received are not lost.
+It is thrown directly only by a failed control request, such as an `initialize`
+the CLI refuses at startup. `ClaudeSDKClient.receiveResponse()` does not throw
+it at all — that iterator stops at the `ResultMessage`, so check
+`ResultMessage.isError()` there instead.
 
 `QueryFailedException` is specific to the collecting `ClaudeSDK.query(...)`
 family. The CLI reports conditions like `error_max_turns` and
@@ -923,7 +951,8 @@ A streaming consumer (`ClaudeSDKClient.receiveMessages()` /
 `receiveResponse()`) sees every one of those messages before the raise; a
 collecting call has to either return a list or throw, so it throws this and
 hands the collected messages back via `partialMessages()` and the
-`resultMessage()` convenience accessor. Catch it whenever you set `maxTurns`
+`resultMessage()` convenience accessor; its `getCause()` is the
+`ResultException` described above. Catch it whenever you set `maxTurns`
 or `maxBudgetUsd`: reaching a cap you configured is an expected outcome, not
 a crash.
 

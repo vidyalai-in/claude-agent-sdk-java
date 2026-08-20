@@ -23,7 +23,10 @@ The permission system controls which tools Claude can use and how permission req
 
 ## Custom Permission Callback
 
-For fine-grained control, use `canUseTool` callback (requires streaming mode):
+For fine-grained control, use a `canUseTool` callback. It works with every
+entry point — a string prompt is streamed over stdin internally, so the control
+protocol that carries permission requests is available there too. It cannot be
+combined with `permissionPromptToolName`:
 
 ```java
 .canUseTool((toolName, input, context) -> {
@@ -44,7 +47,7 @@ For fine-grained control, use `canUseTool` callback (requires streaming mode):
 
 ### Shadowing Warning
 
-Because `canUseTool` never fires for calls already permitted by other options, the SDK emits an **advisory warning** at connection time when it detects a callback that is visibly shadowed. The check runs once per query construction — when `ClaudeSDKClient.connect()` starts, or when a streaming `ClaudeSDK.query(Iterator, ...)` is set up — and logs a `WARNING` via `java.util.logging` on the logger named `in.vidyalai.claude.sdk.internal.CanUseToolShadow`.
+Because `canUseTool` never fires for calls already permitted by other options, the SDK emits an **advisory warning** at connection time when it detects a callback that is visibly shadowed. The check runs once per query construction — when `ClaudeSDKClient.connect()` starts, or when any `ClaudeSDK.query(...)` is set up — and logs a `WARNING` via `java.util.logging` on the logger named `in.vidyalai.claude.sdk.internal.CanUseToolShadow`.
 
 A `canUseTool` callback is reported as shadowed when it is set alongside either of:
 

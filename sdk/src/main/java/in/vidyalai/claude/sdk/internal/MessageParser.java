@@ -433,7 +433,14 @@ public final class MessageParser {
             // Additional metadata fields
             Map<String, ModelUsage> modelUsage = parseModelUsage(data.get("modelUsage"));
             List<Object> permissionDenials = (List<Object>) data.get("permission_denials");
-            List<String> errors = (List<String>) data.get("errors");
+            // The CLI emits a list of strings here. Tolerate a bare string
+            // (older or buggy emitters) and ignore any other shape rather than
+            // rejecting the whole result frame — the Python SDK does no type
+            // check on this field at all.
+            Object rawErrors = data.get("errors");
+            List<String> errors = (rawErrors instanceof List<?> errorList)
+                    ? (List<String>) errorList
+                    : ((rawErrors instanceof String errorText) ? List.of(errorText) : null);
             String uuid = (String) data.get("uuid");
             String terminalReason = (String) data.get("terminal_reason");
 

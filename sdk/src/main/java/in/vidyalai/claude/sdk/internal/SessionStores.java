@@ -301,6 +301,9 @@ public final class SessionStores {
 
     /**
      * Read a subagent's conversation messages from a {@link SessionStore}.
+     *
+     * <p>{@code parentToolUseId} / {@code parentAgentId} are taken from the
+     * subagent's {@code agent_metadata} entry in the store (null if absent).
      */
     public static List<SessionMessage> getSubagentMessagesFromStore(
             SessionStore sessionStore,
@@ -346,18 +349,52 @@ public final class SessionStores {
             return List.of();
         }
 
-        // Drop synthetic agent_metadata entries injected by the mirror hook —
-        // they describe the .meta.json sidecar, not transcript lines.
+        // The synthetic agent_metadata entry (the store's copy of the
+        // .meta.json sidecar) records which Agent tool_use spawned this
+        // subagent. Recover the parent ids from it — last one wins, since the
+        // metadata is rewritten on resume — then drop it: it is not a
+        // transcript line.
+        AgentMetadataSplit split = splitAgentMetadata(entries);
+        if (split.transcript().isEmpty()) {
+            return List.of();
+        }
+        Sessions.ParentIds parentIds = Sessions.parentIdsFromAgentMetadata(split.metadata());
+        return entriesToSubagentMessages(
+                filterTranscriptEntries(split.transcript()), limit, offset, parentIds);
+    }
+
+    /**
+     * A subagent's store entries partitioned into its metadata and its
+     * transcript lines.
+     *
+     * @param metadata   the last {@code agent_metadata} entry (it is rewritten
+     *                   on resume, so last wins), or null when there is none
+     * @param transcript everything else, in order
+     */
+    record AgentMetadataSplit(
+            @Nullable Map<String, Object> metadata,
+            List<SessionStoreEntry> transcript) {
+    }
+
+    /**
+     * Separates the synthetic {@code agent_metadata} entry from transcript
+     * lines.
+     *
+     * <p>A subagent's {@link SessionStore} stream carries its
+     * {@code .meta.json} sidecar as {@code {"type": "agent_metadata", ...}}
+     * entries alongside the transcript.
+     */
+    static AgentMetadataSplit splitAgentMetadata(List<SessionStoreEntry> entries) {
+        Map<String, Object> metadata = null;
         List<SessionStoreEntry> transcript = new ArrayList<>();
         for (SessionStoreEntry e : entries) {
-            if (!"agent_metadata".equals(e.type())) {
+            if ("agent_metadata".equals(e.type())) {
+                metadata = new LinkedHashMap<>(e.asMap());
+            } else {
                 transcript.add(e);
             }
         }
-        if (transcript.isEmpty()) {
-            return List.of();
-        }
-        return entriesToSubagentMessages(filterTranscriptEntries(transcript), limit, offset);
+        return new AgentMetadataSplit(metadata, transcript);
     }
 
     // -------------------------------------------------------------------------
@@ -715,13 +752,17 @@ public final class SessionStores {
     }
 
     private static List<SessionMessage> entriesToSubagentMessages(
-            List<Map<String, Object>> entries, @Nullable Integer limit, int offset) {
+            List<Map<String, Object>> entries, @Nullable Integer limit, int offset,
+            Sessions.ParentIds parentIds) {
         List<Map<String, Object>> chain = Sessions.buildSubagentChain(entries);
         List<SessionMessage> messages = new ArrayList<>();
         for (Map<String, Object> e : chain) {
             String type = (String) e.get("type");
             if ("user".equals(type) || "assistant".equals(type)) {
-                messages.add(Sessions.toSessionMessage(e));
+                // Every message in a subagent transcript shares the same
+                // parent ids.
+                messages.add(Sessions.toSessionMessage(
+                        e, parentIds.toolUseId(), parentIds.parentAgentId()));
             }
         }
         if (limit != null && limit > 0 && messages.size() > limit) {

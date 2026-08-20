@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.jspecify.annotations.Nullable;
 
-import in.vidyalai.claude.sdk.internal.CanUseToolShadow;
+import in.vidyalai.claude.sdk.internal.CanUseToolConfig;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
 import in.vidyalai.claude.sdk.exceptions.QueryFailedException;
 import in.vidyalai.claude.sdk.internal.QueryHandler;
@@ -129,8 +129,8 @@ public final class ClaudeSDK {
      * @param prompt  the prompt to send
      * @param options the agent options
      * @return list of all messages received
-     * @throws IllegalArgumentException if canUseTool is set (requires streaming
-     *                                  mode)
+     * @throws IllegalArgumentException if both canUseTool and
+     *                                  permissionPromptToolName are set
      */
     public static List<Message> query(String prompt, ClaudeAgentOptions options) {
         return query(prompt, options, null);
@@ -143,15 +143,15 @@ public final class ClaudeSDK {
      * @param options   the agent options
      * @param transport custom transport implementation
      * @return list of all messages received
-     * @throws IllegalArgumentException if canUseTool is set (requires streaming
-     *                                  mode)
+     * @throws IllegalArgumentException if both canUseTool and
+     *                                  permissionPromptToolName are set
      */
     public static List<Message> query(String prompt, ClaudeAgentOptions options, Transport transport) {
         var messages = List.of(
                 Map.of("type", "user", "session_id", "",
                         "message", Map.of("role", "user", "content", (prompt == null) ? "" : prompt)));
 
-        return queryInternal(messages.iterator(), options, transport, false);
+        return queryInternal(messages.iterator(), options, transport);
     }
 
     /**
@@ -210,13 +210,13 @@ public final class ClaudeSDK {
      */
     public static List<Message> query(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options,
             Transport transport) {
-        return queryInternal(messageStream, options, transport, true);
+        return queryInternal(messageStream, options, transport);
     }
 
     private static List<Message> queryInternal(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options,
-            Transport transport, boolean promptStream) {
+            Transport transport) {
         // Validate and configure options
-        ClaudeAgentOptions effectiveOptions = validateAndConfigureOptions(options, promptStream);
+        ClaudeAgentOptions effectiveOptions = CanUseToolConfig.configureCanUseTool(options);
 
         // Fail fast on invalid sessionStore option combinations.
         in.vidyalai.claude.sdk.internal.SessionStoreValidation.validate(effectiveOptions);
@@ -267,6 +267,7 @@ public final class ClaudeSDK {
                     effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
                     excludeDynamicSections,
                     effectiveOptions.skills(),
+                    effectiveOptions.forwardSubagentText(),
                     initializeTimeout,
                     effectiveOptions.maxMsgQSize());
 
@@ -355,48 +356,6 @@ public final class ClaudeSDK {
      */
     public static List<Message> query(Iterator<Map<String, Object>> messageStream) {
         return query(messageStream, ClaudeAgentOptions.defaults(), null);
-    }
-
-    /**
-     * Validates and configures options for query execution.
-     *
-     * <p>
-     * This method validates permission settings and automatically configures
-     * the permissionPromptToolName if canUseTool callback is provided.
-     *
-     * @param options         the original options
-     * @param isStreamingMode whether this is a streaming query
-     * @return validated and configured options
-     * @throws IllegalArgumentException if canUseTool is used in non-streaming mode
-     *                                  or if canUseTool and
-     *                                  permissionPromptToolName are both set
-     */
-    private static ClaudeAgentOptions validateAndConfigureOptions(
-            ClaudeAgentOptions options,
-            boolean isStreamingMode) {
-        if (options.canUseTool() != null) {
-            // canUseTool callback requires streaming mode (matches Python SDK validation)
-            if (!isStreamingMode) {
-                throw new IllegalArgumentException(
-                        "canUseTool callback requires streaming mode. " +
-                                "Use query(Iterator) or ClaudeSDKClient instead of query(String).");
-            }
-
-            // canUseTool and permissionPromptToolName are mutually exclusive
-            if (options.permissionPromptToolName() != null) {
-                throw new IllegalArgumentException(
-                        "canUseTool callback cannot be used with permissionPromptToolName. " +
-                                "Please use one or the other.");
-            }
-
-            // Advisory: warn if other options shadow the callback
-            CanUseToolShadow.warnIfShadowed(options);
-
-            // Automatically set permissionPromptToolName to "stdio" for control protocol
-            return options.withPermissionPromptToolName("stdio");
-        }
-
-        return options;
     }
 
     /**

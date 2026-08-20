@@ -90,6 +90,7 @@ options.toBuilder()
 ### Advanced
 - `user(String)` - User identity
 - `includePartialMessages(boolean)` - Enable streaming
+- `forwardSubagentText(boolean)` - When `true`, subagent text and thinking blocks are forwarded into the message stream alongside the `tool_use` / `tool_result` blocks that are always forwarded. Sent on the `initialize` control request (no CLI flag). See [Agents → Observing a subagent's output](./feature-agents.md#observing-a-subagents-output).
 - `agents(Map<String, AgentDefinition>)` - Custom agents
 - `settingSources(List<SettingSource>)` - Settings sources (empty list disables all sources via `--setting-sources=`; omitted keeps CLI defaults)
 - `skills(List<String>)` - Skills allowlist (auto-injects `Skill(name)` into `allowedTools` and defaults `settingSources` to user/project). Names must be exact — wildcards, rule delimiters, and surrounding whitespace throw `IllegalArgumentException` at `connect()`

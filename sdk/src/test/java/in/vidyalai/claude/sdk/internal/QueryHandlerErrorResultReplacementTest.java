@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
 import in.vidyalai.claude.sdk.exceptions.ProcessException;
+import in.vidyalai.claude.sdk.exceptions.ResultException;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.message.Message;
 
@@ -35,8 +36,9 @@ import in.vidyalai.claude.sdk.types.message.Message;
  *
  * <p>
  * The replacement surfaces to the consumer iterator as a
- * {@link ClaudeSDKException} thrown from {@code hasNext()} with the
- * replaced text as the message.
+ * {@link ResultException} — a {@link ProcessException} carrying the result
+ * payload — thrown from {@code hasNext()} with the replaced text as the
+ * message (plus {@code ProcessException}'s {@code " (exit code: N)"} suffix).
  */
 class QueryHandlerErrorResultReplacementTest {
 
@@ -63,7 +65,7 @@ class QueryHandlerErrorResultReplacementTest {
         transportsToClose.clear();
     }
 
-    private Map<String, Object> errorResult(String subtype, List<String> errors) {
+    private Map<String, Object> errorResult(String subtype, Object errors) {
         Map<String, Object> msg = new HashMap<>();
         msg.put("type", "result");
         msg.put("subtype", subtype);
@@ -124,9 +126,20 @@ class QueryHandlerErrorResultReplacementTest {
 
         ClaudeSDKException ex = drainUntilError(handler);
         assertThat(ex).isNotNull();
+        assertThat(ex).isInstanceOf(ResultException.class);
         assertThat(ex.getMessage())
                 .isEqualTo("Claude Code returned an error result: "
-                        + "Reached maximum number of turns (60)");
+                        + "Reached maximum number of turns (60) (exit code: 1)");
+        // The payload the CLI already reported rides along on the exception,
+        // so callers can branch on it without string matching. The original
+        // exit error is chained.
+        ResultException result = (ResultException) ex;
+        assertThat(result.getExitCode()).isEqualTo(1);
+        assertThat(result.subtype()).isEqualTo("error_max_turns");
+        assertThat(result.errors()).containsExactly("Reached maximum number of turns (60)");
+        assertThat(result.sessionId()).isEqualTo("s");
+        assertThat(result.getCause()).isInstanceOf(ProcessException.class);
+        assertThat(result.getCause()).hasMessageContaining("Command failed");
     }
 
     @Test
@@ -145,7 +158,7 @@ class QueryHandlerErrorResultReplacementTest {
         ClaudeSDKException ex = drainUntilError(handler);
         assertThat(ex).isNotNull();
         assertThat(ex.getMessage())
-                .isEqualTo("Claude Code returned an error result: error_during_execution");
+                .isEqualTo("Claude Code returned an error result: error_during_execution (exit code: 1)");
     }
 
     @Test
@@ -166,7 +179,7 @@ class QueryHandlerErrorResultReplacementTest {
         assertThat(ex).isNotNull();
         assertThat(ex.getMessage())
                 .isEqualTo("Claude Code returned an error result: "
-                        + "tool timed out; ENOENT: missing file");
+                        + "tool timed out; ENOENT: missing file (exit code: 1)");
     }
 
     @Test
@@ -274,9 +287,10 @@ class QueryHandlerErrorResultReplacementTest {
 
     @SuppressWarnings("null")
     @Test
-    void hasNextThrowsClaudeSDKException_notProcessException() {
-        // The replaced exception type should still be raisable as a generic
-        // ClaudeSDKException by the consumer iterator.
+    void hasNextThrowsTypedResultException() {
+        // The consumer iterator raises the typed exception the reader built,
+        // not a flattened ClaudeSDKException(String): ResultException is a
+        // ProcessException, so `catch (ProcessException)` handlers still work.
         ScriptedTransport transport = new ScriptedTransport(
                 List.of(errorResult("error_max_turns", List.of("oops"))),
                 new ProcessException("Command failed with exit code 1", 1, ""));
@@ -294,8 +308,153 @@ class QueryHandlerErrorResultReplacementTest {
                 it.next();
             }
         })
+                .isInstanceOf(ResultException.class)
+                .isInstanceOf(ProcessException.class)
                 .isInstanceOf(ClaudeSDKException.class)
-                .hasMessage("Claude Code returned an error result: oops");
+                .hasMessage("Claude Code returned an error result: oops (exit code: 1)");
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void apiErrorResult_usesResultTextNotSuccessSubtype() {
+        // A run that ends on an API failure is reported as subtype=success,
+        // is_error=true, errors=[] with the prose in `result`. The raised error
+        // must carry that prose — never "returned an error result: success".
+        Map<String, Object> msg = errorResult("success", List.of());
+        msg.put("result", "API Error: Stream idle timeout - no chunks received");
+        msg.put("terminal_reason", "api_error");
+
+        ScriptedTransport transport = new ScriptedTransport(
+                List.of(msg),
+                new ProcessException("Command failed with exit code 1", 1, ""));
+        transportsToClose.add(transport);
+
+        QueryHandler handler = new QueryHandler(
+                transport, true, null, null, Duration.ofSeconds(60));
+        handlersToClose.add(handler);
+        transport.connect();
+        handler.start();
+
+        ClaudeSDKException ex = drainUntilError(handler);
+        assertThat(ex).isInstanceOf(ResultException.class);
+        assertThat(ex.getMessage())
+                .contains("Claude Code returned an error result: "
+                        + "API Error: Stream idle timeout - no chunks received")
+                .doesNotContain("error result: success");
+        // The "mid-turn API failure" shape is recoverable from the payload.
+        ResultException result = (ResultException) ex;
+        assertThat(result.subtype()).isEqualTo("success");
+        assertThat(result.terminalReason()).isEqualTo("api_error");
+        assertThat(result.result()).isEqualTo("API Error: Stream idle timeout - no chunks received");
+        assertThat(result.errors()).isEmpty();
+    }
+
+    @Test
+    void apiErrorResultWithoutText_usesHttpStatus() {
+        // Neither errors[] nor result carry text: fall back to the HTTP status
+        // rather than the meaningless "success" subtype.
+        Map<String, Object> msg = errorResult("success", List.of());
+        msg.put("result", "");
+        msg.put("api_error_status", 529);
+
+        ScriptedTransport transport = new ScriptedTransport(
+                List.of(msg),
+                new ProcessException("Command failed with exit code 1", 1, ""));
+        transportsToClose.add(transport);
+
+        QueryHandler handler = new QueryHandler(
+                transport, true, null, null, Duration.ofSeconds(60));
+        handlersToClose.add(handler);
+        transport.connect();
+        handler.start();
+
+        ClaudeSDKException ex = drainUntilError(handler);
+        assertThat(ex).isNotNull();
+        assertThat(ex.getMessage())
+                .startsWith("Claude Code returned an error result: API error (HTTP 529)");
+        assertThat(((ResultException) ex).apiErrorStatus()).isEqualTo(529);
+    }
+
+    @Test
+    void blankErrors_fallBackToSubtype() {
+        // errors=[" "] must not produce an empty-suffixed message.
+        ScriptedTransport transport = new ScriptedTransport(
+                List.of(errorResult("error_during_execution", List.of(" "))),
+                new ProcessException("Command failed with exit code 1", 1, ""));
+        transportsToClose.add(transport);
+
+        QueryHandler handler = new QueryHandler(
+                transport, true, null, null, Duration.ofSeconds(60));
+        handlersToClose.add(handler);
+        transport.connect();
+        handler.start();
+
+        ClaudeSDKException ex = drainUntilError(handler);
+        assertThat(ex).isNotNull();
+        assertThat(ex.getMessage())
+                .startsWith("Claude Code returned an error result: error_during_execution");
+    }
+
+    @Test
+    void bareStringErrorsField_isNotSplitPerCharacter() {
+        // A non-list `errors` must neither be split per character nor break
+        // the read loop.
+        ScriptedTransport transport = new ScriptedTransport(
+                List.of(errorResult("error_during_execution", "boom")),
+                new ProcessException("Command failed with exit code 1", 1, ""));
+        transportsToClose.add(transport);
+
+        QueryHandler handler = new QueryHandler(
+                transport, true, null, null, Duration.ofSeconds(60));
+        handlersToClose.add(handler);
+        transport.connect();
+        handler.start();
+
+        ClaudeSDKException ex = drainUntilError(handler);
+        assertThat(ex).isNotNull();
+        assertThat(ex.getMessage())
+                .startsWith("Claude Code returned an error result: boom");
+        assertThat(((ResultException) ex).errors()).containsExactly("boom");
+    }
+
+    @Test
+    void malformedErrorsField_fallsBackToSubtype() {
+        ScriptedTransport transport = new ScriptedTransport(
+                List.of(errorResult("error_during_execution", 42)),
+                new ProcessException("Command failed with exit code 1", 1, ""));
+        transportsToClose.add(transport);
+
+        QueryHandler handler = new QueryHandler(
+                transport, true, null, null, Duration.ofSeconds(60));
+        handlersToClose.add(handler);
+        transport.connect();
+        handler.start();
+
+        ClaudeSDKException ex = drainUntilError(handler);
+        assertThat(ex).isNotNull();
+        assertThat(ex.getMessage())
+                .startsWith("Claude Code returned an error result: error_during_execution");
+        assertThat(((ResultException) ex).errors()).isEmpty();
+    }
+
+    @Test
+    void nonProcessExceptionType_isPreserved() {
+        // Transport failures other than ProcessException keep their type when
+        // re-raised from the message stream.
+        ScriptedTransport transport = new ScriptedTransport(
+                List.of(),
+                new CLIConnectionException("lost the CLI"));
+        transportsToClose.add(transport);
+
+        QueryHandler handler = new QueryHandler(
+                transport, true, null, null, Duration.ofSeconds(60));
+        handlersToClose.add(handler);
+        transport.connect();
+        handler.start();
+
+        ClaudeSDKException ex = drainUntilError(handler);
+        assertThat(ex).isInstanceOf(CLIConnectionException.class);
+        assertThat(ex).hasMessage("lost the CLI");
     }
 
     @SuppressWarnings("null")
@@ -318,10 +477,12 @@ class QueryHandlerErrorResultReplacementTest {
         handler.start();
 
         assertThatThrownBy(handler::initialize)
-                .isInstanceOf(ClaudeSDKException.class)
+                .isInstanceOf(ResultException.class)
                 .hasMessageContaining("Claude Code returned an error result: "
                         + "Resume rejected by --resume-drops-turn: nope")
-                .hasMessageNotContaining("Command failed with exit code 1");
+                .hasMessageNotContaining("Command failed with exit code 1")
+                .extracting(e -> ((ResultException) e).subtype())
+                .isEqualTo("error_during_execution");
     }
 
     /**

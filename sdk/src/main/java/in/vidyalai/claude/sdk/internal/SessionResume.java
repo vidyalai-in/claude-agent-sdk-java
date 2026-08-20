@@ -585,27 +585,21 @@ public final class SessionResume {
                 continue;
             }
 
-            // Partition: agent_metadata vs transcript lines.
-            List<Map<String, Object>> metadata = new ArrayList<>();
-            List<SessionStoreEntry> transcript = new ArrayList<>();
-            for (SessionStoreEntry e : subEntries) {
-                if ("agent_metadata".equals(e.type())) {
-                    metadata.add(new LinkedHashMap<>(e.asMap()));
-                } else {
-                    transcript.add(e);
-                }
-            }
+            // agent_metadata entries describe the .meta.json sidecar (last one
+            // wins); everything else is a transcript line.
+            SessionStores.AgentMetadataSplit split = SessionStores.splitAgentMetadata(subEntries);
+            List<SessionStoreEntry> transcript = split.transcript();
 
             Path subFile = sessionDir.resolve(subpath + ".jsonl");
             if (!transcript.isEmpty()) {
                 writeJsonl(subFile, transcript);
             }
 
-            if (!metadata.isEmpty()) {
-                Map<String, Object> metaContent = new LinkedHashMap<>(metadata.get(metadata.size() - 1));
+            if (split.metadata() != null) {
+                // Strip the synthetic "type" field.
+                Map<String, Object> metaContent = new LinkedHashMap<>(split.metadata());
                 metaContent.remove("type");
-                Path metaFile = subFile.resolveSibling(
-                        subFile.getFileName().toString().replaceAll("\\.jsonl$", "") + ".meta.json");
+                Path metaFile = Sessions.agentMetadataSidecarPath(subFile);
                 Files.createDirectories(metaFile.getParent());
                 try {
                     Files.writeString(metaFile, MAPPER.writeValueAsString(metaContent),

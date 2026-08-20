@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.exceptions.ProcessException;
 import in.vidyalai.claude.sdk.exceptions.QueryFailedException;
+import in.vidyalai.claude.sdk.exceptions.ResultException;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
@@ -40,8 +41,14 @@ import in.vidyalai.claude.sdk.types.message.ResultMessage;
  */
 class ClaudeSDKQueryFailureTest {
 
+    /**
+     * The replacement text plus {@code ProcessException}'s
+     * {@code " (exit code: N)"} suffix — the collecting API wraps the
+     * {@link in.vidyalai.claude.sdk.exceptions.ResultException} the reader
+     * built, and reuses its message.
+     */
     private static final String ERROR_TEXT =
-            "Claude Code returned an error result: Reached maximum budget ($0.0001)";
+            "Claude Code returned an error result: Reached maximum budget ($0.0001) (exit code: 1)";
 
     @SuppressWarnings("null")
     @Test
@@ -68,6 +75,13 @@ class ClaudeSDKQueryFailureTest {
             assertThat(result.subtype()).isEqualTo("error_max_budget_usd");
             assertThat(result.isError()).isTrue();
             assertThat(result.totalCostUsd()).isEqualTo(0.25);
+
+            // The typed cause carries the same payload for callers that would
+            // rather branch on it than walk the message list.
+            assertThat(failure.getCause()).isInstanceOf(ResultException.class);
+            ResultException cause = (ResultException) failure.getCause();
+            assertThat(cause.subtype()).isEqualTo("error_max_budget_usd");
+            assertThat(cause.getExitCode()).isEqualTo(1);
         }
     }
 

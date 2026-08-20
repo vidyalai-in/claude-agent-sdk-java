@@ -39,6 +39,10 @@ public class PermissionCallbacks {
         // Example 3: Permission updates
         System.out.println("\n=== Permission Updates ===");
         permissionUpdates();
+
+        // Example 4: One-shot query with a string prompt
+        System.out.println("\n=== One-Shot Query With a String Prompt ===");
+        oneShotStringPrompt();
     }
 
     /**
@@ -225,6 +229,53 @@ public class PermissionCallbacks {
                 if (msg instanceof AssistantMessage a) {
                     System.out.println("Claude: " + truncate(a.getTextContent(), 100));
                 }
+            }
+        }
+    }
+
+    /**
+     * A callback works with the one-shot {@code query(String, options)} API too.
+     *
+     * <p>This used to throw {@code IllegalArgumentException} ("requires
+     * streaming mode"). It never needed to: a string prompt is written over
+     * stdin as a single streamed message like any other, so the control
+     * protocol that carries permission requests is available for it as well,
+     * and stdin is held open until the run's closing result so late requests
+     * still get an answer.
+     */
+    @SuppressWarnings("null")
+    static void oneShotStringPrompt() {
+        ClaudeAgentOptions.CanUseTool callback = (toolName, input, context) -> {
+            System.out.println("[PERMISSION] " + toolName + " requested");
+            // Deny writes, allow everything else.
+            if ("Write".equals(toolName) || "Edit".equals(toolName)) {
+                return CompletableFuture.completedFuture(
+                        new PermissionResultDeny("This run is read-only"));
+            }
+            return CompletableFuture.completedFuture(new PermissionResultAllow());
+        };
+
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .canUseTool(callback)
+                // Deliberately NOT in allowedTools: an allowed tool never
+                // reaches a prompt, so the callback would not fire for it.
+                .permissionMode(PermissionMode.DEFAULT)
+                // Load no settings files. An allow rule in the user's or the
+                // project's settings.json shadows the callback exactly like an
+                // allowedTools entry does — a plain `Write(*)` in
+                // ~/.claude/settings.json is enough to make this whole example
+                // silently do nothing, and the shadowing advisory cannot see
+                // settings-file rules to warn you about it. Dropping the
+                // setting sources is what makes the demo deterministic.
+                .settingSources(List.of())
+                .cwd(Path.of("/tmp"))
+                .maxTurns(3)
+                .build();
+
+        for (Message msg : ClaudeSDK.query(
+                "Create a file /tmp/pc-oneshot.txt containing 'hi'", options)) {
+            if (msg instanceof AssistantMessage a) {
+                System.out.println("Claude: " + truncate(a.getTextContent(), 100));
             }
         }
     }

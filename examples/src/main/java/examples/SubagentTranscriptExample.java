@@ -17,6 +17,16 @@ import in.vidyalai.claude.sdk.types.message.SessionMessage;
  * {@link ClaudeSDK#getSubagentMessages(String, String)} to read the
  * conversation chain.
  * </p>
+ *
+ * <p>
+ * Each returned {@link SessionMessage} is attributed to the Agent
+ * {@code tool_use} in the parent session that spawned the subagent, via
+ * {@code parentToolUseId} — recovered from the {@code agent-<id>.meta.json}
+ * sidecar next to the transcript, since the transcript lines themselves do not
+ * record it. {@code parentAgentId} names the spawning subagent when one
+ * subagent spawned another, and is null for subagents the main session
+ * spawned. Both are null when the sidecar is missing or unusable.
+ * </p>
  */
 public class SubagentTranscriptExample {
 
@@ -43,6 +53,20 @@ public class SubagentTranscriptExample {
                         session.sessionId(), agentId);
                 System.out.printf("  - agent %s: %d message(s)%n",
                         agentId, messages.size());
+
+                // Every message in one subagent transcript shares the same
+                // parents, so report them once.
+                if (!messages.isEmpty()) {
+                    SessionMessage first = messages.get(0);
+                    System.out.printf("      spawned by tool_use: %s%n",
+                            (first.parentToolUseId() != null)
+                                    ? first.parentToolUseId()
+                                    : "(unknown — no usable .meta.json sidecar)");
+                    if (first.parentAgentId() != null) {
+                        System.out.printf("      nested under agent: %s%n",
+                                first.parentAgentId());
+                    }
+                }
             }
             System.out.println();
             return;

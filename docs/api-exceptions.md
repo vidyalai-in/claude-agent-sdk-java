@@ -9,6 +9,7 @@ ClaudeSDKException (RuntimeException)
 ├── CLIConnectionException
 ├── CLINotFoundException
 ├── ProcessException
+│   └── ResultException
 ├── CLIJSONDecodeException
 ├── MessageParseException
 └── QueryFailedException
@@ -72,7 +73,62 @@ public class ProcessException extends ClaudeSDKException {
 - Invalid arguments
 - Resource exhaustion
 
-**Actionable error after error-result exits**: when the CLI emits a `ResultMessage` with `isError=true` (for example `error_max_turns`, `error_during_execution`, or a `success` subtype with `apiErrorStatus` set) it then exits non-zero on purpose. The trailing `ProcessException` would carry only `"Command failed with exit code N"`, which is not actionable. Starting in v0.1.15, `QueryHandler.readMessages` replaces that synthetic `{"type":"error"}` payload with `"Claude Code returned an error result: <text>"`, where `<text>` is built from the result's `errors` array (joined by `"; "`) or from the result `subtype` when the array is empty. The reset is per-turn — a fresh crash later in the run keeps its original `ProcessException` message.
+**Actionable error after error-result exits**: when the CLI emits a `ResultMessage` with `isError=true` (for example `error_max_turns`, `error_during_execution`, or a `success` subtype with `apiErrorStatus` set) it then exits non-zero on purpose. The trailing `ProcessException` would carry only `"Command failed with exit code N"`, which is not actionable, so the reader replaces it with a `ResultException` (see below). The reset is per-turn — a fresh crash later in the run keeps its original `ProcessException` message.
+
+## ResultException
+
+The CLI reported a terminal error result and exited. A `ProcessException`
+subclass, so existing `catch (ProcessException e)` handlers keep working.
+
+```java
+public class ResultException extends ProcessException {
+    public ResultException(String message, @Nullable Map<String, Object> data,
+                           @Nullable Integer exitCode);
+
+    @Nullable public String subtype();          // "error_max_turns", "error_during_execution",
+                                                // ... or "success" for a mid-turn API failure
+    public List<String> errors();               // never null; empty for API failures
+    @Nullable public String result();           // result text; the "API Error: ..." prose
+    @Nullable public Integer apiErrorStatus();  // HTTP status of the failing API call
+    @Nullable public String terminalReason();   // e.g. "api_error", "max_turns"
+    @Nullable public String sessionId();
+    public Map<String, Object> data();          // raw result payload, unmodifiable
+}
+```
+
+The message is `"Claude Code returned an error result: <text>"` plus
+`ProcessException`'s `" (exit code: N)"` suffix. `<text>` is the result's
+`errors` array joined by `"; "`, falling back to the result text, then a
+non-`success` `subtype`, then `"API error (HTTP <status>)"`. The original
+`ProcessException` for the non-zero exit is the `getCause()`.
+
+Branch on the payload rather than the text:
+
+```java
+} catch (ResultException e) {
+    if ("api_error".equals(e.terminalReason())) {
+        retry();
+    } else if ("error_max_turns".equals(e.subtype())) {
+        // ...
+    }
+}
+```
+
+**Where it surfaces:**
+
+- The collecting `ClaudeSDK.query(...)` family wraps it in a
+  `QueryFailedException` so the messages received before the failure are not
+  lost; the `ResultException` is that exception's `getCause()`. This is the
+  usual way to see it.
+- Directly, from a failed control request — most importantly an `initialize`
+  the CLI refuses during startup (a resume rejected by `resumeDropsTurn`).
+  That happens before any message is collected, so it is not wrapped.
+- **Not** from `ClaudeSDKClient.receiveResponse()`: that terminates at the
+  `ResultMessage` (exactly as the Python SDK's `receive_response()` does) and
+  so never observes the CLI's exit. Check `ResultMessage.isError()` there
+  instead. `receiveMessages()` runs to end-of-stream and does raise, but on a
+  live client stdin stays open, so an error result mid-session does not end
+  the stream.
 
 ## CLIJSONDecodeException
 

@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -137,10 +136,15 @@ class QueryHandlerInflightTaskTest {
         transport.connect();
         handler.start();
 
-        // Empty input iterator: streamInput falls straight through to the
-        // bidirectional wait, which is what these tests exercise.
-        Thread.startVirtualThread(
-                () -> handler.streamInput(Collections.<Map<String, Object>>emptyList().iterator()));
+        // A single prompt message, as a real run sends: streamInput writes it
+        // and then performs the bidirectional wait, which is what these tests
+        // exercise. (An empty iterator would close stdin at once — nothing was
+        // sent, so no result can arrive to release the hold.)
+        List<Map<String, Object>> prompt = List.of(Map.of(
+                "type", "user",
+                "session_id", "",
+                "message", Map.of("role", "user", "content", "hi")));
+        Thread.startVirtualThread(() -> handler.streamInput(prompt.iterator()));
         return transport;
     }
 

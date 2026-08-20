@@ -450,6 +450,86 @@ class SessionStoresApiTest {
         List<SessionMessage> messages = ClaudeSDK.getSubagentMessagesFromStore(
                 store, sid, "foo", null, null, 0);
         assertThat(messages).hasSize(2);
+        // No agent_metadata entry in the store, so no parents to recover.
+        assertThat(messages).allSatisfy(m -> {
+            assertThat(m.parentToolUseId()).isNull();
+            assertThat(m.parentAgentId()).isNull();
+        });
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void getSubagentMessagesFromStore_recoversParentIdsFromAgentMetadata() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        String projectKey = ClaudeSDK.projectKeyForDirectory(null);
+        String sid = newSessionId();
+        store.append(new SessionKey(projectKey, sid, "subagents/agent-foo"),
+                List.of(
+                        agentMetadataEntry("toolu_old", "a-old"),
+                        userEntry("a1", "agent foo prompt", "2026-04-27T00:00:00Z"),
+                        assistantEntry("a2", "a1", "agent foo reply", "2026-04-27T00:00:01Z"),
+                        // The sidecar is rewritten on resume: last one wins.
+                        agentMetadataEntry("toolu_new", "a-parent")));
+
+        List<SessionMessage> messages = ClaudeSDK.getSubagentMessagesFromStore(
+                store, sid, "foo", null, null, 0);
+
+        // The metadata entries are not transcript lines and must not be
+        // yielded as messages.
+        assertThat(messages).hasSize(2);
+        assertThat(messages).extracting(SessionMessage::uuid).containsExactly("a1", "a2");
+        assertThat(messages).allSatisfy(m -> {
+            assertThat(m.parentToolUseId()).isEqualTo("toolu_new");
+            assertThat(m.parentAgentId()).isEqualTo("a-parent");
+        });
+    }
+
+    @Test
+    void getSubagentMessagesFromStore_ignoresNonStringParentIds() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        String projectKey = ClaudeSDK.projectKeyForDirectory(null);
+        String sid = newSessionId();
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("type", "agent_metadata");
+        meta.put("toolUseId", 42);
+        meta.put("parentAgentId", List.of("nope"));
+        store.append(new SessionKey(projectKey, sid, "subagents/agent-foo"),
+                List.of(
+                        SessionStoreEntry.of(meta),
+                        userEntry("a1", "agent foo prompt", "2026-04-27T00:00:00Z")));
+
+        List<SessionMessage> messages = ClaudeSDK.getSubagentMessagesFromStore(
+                store, sid, "foo", null, null, 0);
+        assertThat(messages).hasSize(1);
+        assertThat(messages.get(0).parentToolUseId()).isNull();
+        assertThat(messages.get(0).parentAgentId()).isNull();
+    }
+
+    @Test
+    void getSessionMessagesFromStore_parentIdsAreAlwaysNull() {
+        InMemorySessionStore store = new InMemorySessionStore();
+        String projectKey = ClaudeSDK.projectKeyForDirectory(null);
+        String sid = newSessionId();
+        store.append(new SessionKey(projectKey, sid, null),
+                List.of(
+                        userEntry("u1", "hello", "2026-04-27T00:00:00Z"),
+                        assistantEntry("u2", "u1", "hi", "2026-04-27T00:00:01Z")));
+
+        List<SessionMessage> messages = ClaudeSDK.getSessionMessagesFromStore(
+                store, sid, null, null, 0);
+        assertThat(messages).hasSize(2);
+        assertThat(messages).allSatisfy(m -> {
+            assertThat(m.parentToolUseId()).isNull();
+            assertThat(m.parentAgentId()).isNull();
+        });
+    }
+
+    private static SessionStoreEntry agentMetadataEntry(String toolUseId, String parentAgentId) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("type", "agent_metadata");
+        entry.put("toolUseId", toolUseId);
+        entry.put("parentAgentId", parentAgentId);
+        return SessionStoreEntry.of(entry);
     }
 
 }

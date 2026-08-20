@@ -8,6 +8,7 @@ Custom agents allow you to define specialized subagents with their own system pr
 - [Inline Agent Definitions](#inline-agent-definitions)
 - [Filesystem-Based Agents](#filesystem-based-agents)
 - [Large Agent Definitions](#large-agent-definitions)
+- [Observing a subagent's output](#observing-a-subagents-output)
 - [Examples](#examples)
 
 ## Overview
@@ -215,6 +216,42 @@ for (Message msg : ClaudeSDK.query("List available agents", options)) {
 }
 ```
 
+## Observing a subagent's output
+
+A subagent runs its own conversation, and only part of it reaches the parent
+message stream. What does arrive comes as ordinary `AssistantMessage` /
+`UserMessage` objects whose `parentToolUseId` is the id of the Agent
+`tool_use` block that spawned the subagent — that field is how you tell a
+subagent's messages from the main conversation's, and which subagent they
+belong to when several are running.
+
+By default only the subagent's `tool_use` and `tool_result` blocks are
+forwarded: enough to show that it is making progress, not enough to render what
+it said. Set `forwardSubagentText(true)` to have its text and thinking blocks
+forwarded the same way:
+
+```java
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .forwardSubagentText(true)
+    .agents(Map.of("greeter", greeter))
+    .build();
+
+for (Message msg : ClaudeSDK.query(prompt, options)) {
+    if (msg instanceof AssistantMessage assistant && assistant.parentToolUseId() != null) {
+        // From a subagent — attribute it to the spawning Agent tool_use id.
+        System.out.println("[" + assistant.parentToolUseId() + "] " + assistant.getTextContent());
+    }
+}
+```
+
+The option is sent on the `initialize` control request rather than as a CLI
+flag, and only when enabled, so older CLIs are unaffected.
+
+Reading a *finished* subagent's full transcript is a different path — see
+[Session History](./feature-session-history.md) for `listSubagents()` and
+`getSubagentMessages()`, whose results carry the same `parentToolUseId` plus a
+`parentAgentId` for nested subagents.
+
 ## Examples
 
 See the example files for complete runnable demonstrations:
@@ -222,6 +259,7 @@ See the example files for complete runnable demonstrations:
 - [`AgentsExample.java`](../examples/src/main/java/examples/AgentsExample.java) — Code reviewer, doc writer, and multiple agents
 - [`FilesystemAgentsExample.java`](../examples/src/main/java/examples/FilesystemAgentsExample.java) — Loading agents from `.claude/agents/` files
 - [`LargeAgentsExample.java`](../examples/src/main/java/examples/LargeAgentsExample.java) — Stress test with 260KB+ agent payloads
+- [`ForwardSubagentTextExample.java`](../examples/src/main/java/examples/ForwardSubagentTextExample.java) — The same run with subagent text forwarding off and on
 
 ## See Also
 

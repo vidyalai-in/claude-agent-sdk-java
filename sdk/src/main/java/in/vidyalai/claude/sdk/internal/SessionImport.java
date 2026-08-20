@@ -101,21 +101,16 @@ public final class SessionImport {
             SessionKey subKey = new SessionKey(projectKey, sessionId, subpath);
             appendJsonlInBatches(filePath, subKey, store, batchSize);
 
-            // Import the .meta.json sidecar so resume can recreate it.
-            Path metaPath = filePath.resolveSibling(
-                    filePath.getFileName().toString().replaceAll("\\.jsonl$", ".meta.json"));
-            try {
-                String metaText = Files.readString(metaPath, StandardCharsets.UTF_8);
-                @SuppressWarnings("unchecked")
-                Map<String, Object> metaMap = (Map<String, Object>) MAPPER.readValue(metaText, Map.class);
-                Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            // Import the .meta.json sidecar so resume can recreate it. A
+            // missing, corrupt, or non-object sidecar is treated as absent (the
+            // transcript is still imported); other read errors propagate.
+            Map<String, Object> metaMap = Sessions.readAgentMetadataSidecar(filePath);
+            if (metaMap != null) {
+                // Synthetic discriminator last so a stray "type" key in the
+                // CLI-owned sidecar can never shadow it.
+                Map<String, Object> entry = new java.util.LinkedHashMap<>(metaMap);
                 entry.put("type", "agent_metadata");
-                entry.putAll(metaMap);
                 store.append(subKey, List.of(SessionStoreEntry.of(entry)));
-            } catch (NoSuchFileException ignored) {
-                // No sidecar — fine.
-            } catch (JsonProcessingException e) {
-                throw new IOException("Failed to parse " + metaPath, e);
             }
         }
     }

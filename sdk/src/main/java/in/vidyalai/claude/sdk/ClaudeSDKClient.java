@@ -17,7 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
-import in.vidyalai.claude.sdk.internal.CanUseToolShadow;
+import in.vidyalai.claude.sdk.internal.CanUseToolConfig;
 import in.vidyalai.claude.sdk.internal.QueryHandler;
 import in.vidyalai.claude.sdk.internal.SessionResume;
 import in.vidyalai.claude.sdk.internal.SessionStoreValidation;
@@ -236,19 +236,8 @@ public class ClaudeSDKClient implements AutoCloseable {
             }
         }
 
-        // Validate permission settings
-        ClaudeAgentOptions effectiveOptions = options;
-        if (options.canUseTool() != null) {
-            if (options.permissionPromptToolName() != null) {
-                throw new IllegalArgumentException(
-                        "canUseTool callback cannot be used with permissionPromptToolName. " +
-                                "Please use one or the other.");
-            }
-            // Advisory: warn if other options shadow the callback
-            CanUseToolShadow.warnIfShadowed(options);
-            // Automatically set permission_prompt_tool_name to "stdio" for control protocol
-            effectiveOptions = options.withPermissionPromptToolName("stdio");
-        }
+        // Validate permission settings and route prompts over the control protocol
+        ClaudeAgentOptions effectiveOptions = CanUseToolConfig.configureCanUseTool(options);
 
         if (materialized != null) {
             effectiveOptions = SessionResume.applyMaterializedOptions(effectiveOptions, materialized);
@@ -296,6 +285,7 @@ public class ClaudeSDKClient implements AutoCloseable {
                 effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
                 excludeDynamicSections,
                 effectiveOptions.skills(),
+                effectiveOptions.forwardSubagentText(),
                 initializeTimeout,
                 effectiveOptions.maxMsgQSize());
 

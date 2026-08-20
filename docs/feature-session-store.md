@@ -298,6 +298,10 @@ List<SessionMessage> messages =
 List<String> agentIds = ClaudeSDK.listSubagentsFromStore(store, sessionId, null);
 List<SessionMessage> subAgent =
     ClaudeSDK.getSubagentMessagesFromStore(store, sessionId, agentIds.get(0), null, null, 0);
+
+// Each message is attributed to the Agent tool_use that spawned the subagent,
+// read from the mirrored `agent_metadata` entry (null if it is absent).
+String spawnedBy = subAgent.get(0).parentToolUseId();
 ```
 
 `listSessionsFromStore` has a fast path when the store implements `listSessionSummaries`: one batch summary call plus a cheap `listSessions` enumeration to gap-fill any sessions missing or stale sidecars. When `listSessionSummaries` isn't implemented, it falls back to one `loadAsync()` per session, **bounded at 16 concurrent calls** (matching the Python SDK), so large project listings don't exhaust adapter connection pools.
