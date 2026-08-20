@@ -134,6 +134,7 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
 - **[Permission System](./feature-permissions.md)** - Custom permission callbacks and modes
   - Permission modes
   - Custom permission callbacks (fire only on `"ask"` decisions)
+  - Shadowing, and keeping a callback deterministic with `settingSources(List.of())`
   - Enriched `ToolPermissionContext` (`title`, `displayName`, `description`, `decisionReason`, `blockedPath`)
   - Path-based, time-based, and user confirmation examples
 
@@ -296,7 +297,8 @@ See the `examples/` directory in the repository.
 
 ### ✅ Completed - All Core Documentation
 - Main README with quick start and overview
-- Architecture overview (comprehensive with diagrams; SessionStore subsystem)
+- Architecture overview (comprehensive with diagrams; SessionStore subsystem;
+  control-request failure handling)
 - All feature guides:
   - Simple Queries
   - Interactive Conversations

@@ -309,6 +309,7 @@ internal/
 ├── SessionImport.java              # Local JSONL → store replay (importSessionToStore)
 ├── SessionStoreValidation.java     # Fail-fast pre-flight option checks
 ├── CanUseToolConfig.java           # Shared canUseTool validation + stdio routing
+├── McpServers.java                 # Finds the in-process MCP handlers on the options
 ├── SessionStores.java              # *_from_store and *_via_store APIs
 ├── Sessions.java                   # Local-disk session listing/reading
 ├── SessionMutations.java           # Local-disk session mutations + buildForkLines (shared)

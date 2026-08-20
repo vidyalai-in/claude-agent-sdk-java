@@ -66,6 +66,33 @@ java.util.logging.Logger
     .setLevel(java.util.logging.Level.SEVERE);
 ```
 
+### Keeping a callback deterministic
+
+Settings-file rules are the shadowing case the advisory cannot see, and they
+are the easiest one to trip over: a bare `Write(*)` under `permissions.allow`
+in `~/.claude/settings.json` is enough to stop a `canUseTool` callback firing
+at all, on a machine where it worked yesterday. Nothing errors — the callback
+is simply never consulted, and code that counts the prompts it handled reports
+zero.
+
+Where a callback needs to fire predictably — a demo, a test, a reproducible
+script — load no settings files:
+
+```java
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+        .canUseTool(callback)
+        // Load no settings files: an allow rule in the user's or the project's
+        // settings.json shadows the callback exactly like an allowedTools
+        // entry does, and the advisory above cannot see those rules.
+        .settingSources(List.of())
+        .permissionMode(PermissionMode.DEFAULT)
+        .build();
+```
+
+Note also that a tool listed in `allowedTools` never reaches a prompt, so a
+callback meant to gate that tool must leave it out of the list.
+`PermissionCallbacks.java` in the examples module does both.
+
 > **Idiom note:** the Python SDK reports this condition as a `CanUseToolShadowedWarning` (a `UserWarning` subclass) and the TypeScript SDK as a `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` process warning. The Java SDK uses `java.util.logging` — its idiomatic warning channel — in place of a dedicated warning type.
 
 ## ToolPermissionContext

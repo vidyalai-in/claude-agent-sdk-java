@@ -486,6 +486,25 @@ QueryHandler
             └─► {"id": "...", "result": {...}}
 ```
 
+### Control Request Failure Handling
+
+Every inbound `control_request` is handled on its own virtual thread, submitted
+with `ExecutorService.submit(...)` — whose `Future` nothing reads. So a
+`Throwable` escaping the handler used to disappear without a trace, and because
+the CLI blocks until it receives the matching `control_response`, the run hung
+with no diagnostic on either side.
+
+`handleControlRequest` therefore catches `Throwable`, not `Exception`. Any
+failure is logged (at `WARNING` for an ordinary exception, `SEVERE` for an
+`Error`) and answered with an error control response so the CLI is never left
+waiting; a genuine `Error` is then rethrown rather than swallowed. A request
+that arrives with no recoverable `request_id` can only be logged, since there
+is nothing to answer.
+
+This is not theoretical. A stale IDE-compiled class carrying an "unresolved
+compilation problem" `Error` made every SDK MCP control request hang silently
+until this catch was widened.
+
 ### Stdin Lifecycle and In-Flight Tasks
 
 > **`controlExecutor` must stay thread-per-task.** An SDK MCP tool call parks
