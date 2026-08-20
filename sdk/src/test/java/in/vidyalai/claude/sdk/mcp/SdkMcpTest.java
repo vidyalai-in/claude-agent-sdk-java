@@ -1,5 +1,7 @@
 package in.vidyalai.claude.sdk.mcp;
 
+import static java.util.Objects.requireNonNull;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Base64;
@@ -10,6 +12,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import in.vidyalai.claude.sdk.ClaudeSDK;
@@ -140,11 +143,11 @@ class SdkMcpTest {
     void testServerHandleInitialize() throws ExecutionException, InterruptedException {
         SdkMcpServer server = SdkMcpServer.create("test", List.of());
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "initialize",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         assertThat(response).containsEntry("jsonrpc", "2.0");
         assertThat(response).containsEntry("id", 1);
@@ -163,11 +166,11 @@ class SdkMcpTest {
 
         SdkMcpServer server = SdkMcpServer.create("test", List.of(greet));
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 2,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -189,14 +192,14 @@ class SdkMcpTest {
 
         SdkMcpServer server = SdkMcpServer.create("test", List.of(greet));
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 3,
                 "method", "tools/call",
                 "params", Map.of(
                         "name", "greet",
                         "arguments", Map.of("name", "World"))))
-                .get();
+                );
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -209,18 +212,37 @@ class SdkMcpTest {
 
     @Test
     void testServerToolNotFound() throws ExecutionException, InterruptedException {
+        // A tool-execution error, not a protocol one: the wording is the
+        // Python SDK's verbatim (create_sdk_mcp_server::run_tool), because a
+        // model can read an isError result and correct itself, where a
+        // JSON-RPC error never reaches it at all.
         SdkMcpServer server = SdkMcpServer.create("test", List.of());
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 4,
                 "method", "tools/call",
-                "params", Map.of("name", "nonexistent", "arguments", Map.of()))).get();
+                "params", Map.of("name", "nonexistent", "arguments", Map.of()))));
 
-        assertThat(response).containsKey("error");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> error = (Map<String, Object>) response.get("error");
-        assertThat(error.get("message").toString()).contains("Tool not found");
+        assertThat(response).doesNotContainKey("error");
+        Map<String, Object> result = resultOf(response);
+        assertThat(result).containsEntry("isError", true);
+        assertThat(textOf(result)).isEqualTo("Tool 'nonexistent' not found");
+    }
+
+    /**
+     * The response to a request, which a server must always produce.
+     *
+     * <p>
+     * {@code handleMessage} answers a notification with null, so the future's
+     * value is nullable; a request's never is.
+     */
+    private static Map<String, Object> answered(
+            CompletableFuture<@Nullable Map<String, Object>> pending)
+            throws ExecutionException, InterruptedException {
+        Map<String, Object> response = pending.get();
+        assertThat(response).as("a request must be answered").isNotNull();
+        return response;
     }
 
     /** The {@code content}/{@code isError} of a successful tools/call response. */
@@ -238,11 +260,11 @@ class SdkMcpTest {
 
     private static Map<String, Object> callTool(SdkMcpServer server, String tool, Map<String, Object> arguments)
             throws ExecutionException, InterruptedException {
-        return server.handleMessage(Map.of(
+        return answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 5,
                 "method", "tools/call",
-                "params", Map.of("name", tool, "arguments", arguments))).get();
+                "params", Map.of("name", tool, "arguments", arguments))));
     }
 
     @Test
@@ -358,9 +380,10 @@ class SdkMcpTest {
     }
 
     @Test
-    void anUncompilableSchemaLeavesTheToolCallable() throws Exception {
-        // Fail open: a schema this server cannot understand must not make an
-        // otherwise working tool uncallable.
+    void aMalformedSchemaMakesTheToolUncallable() throws Exception {
+        // Fail closed, as the Python SDK does. The handler published a
+        // contract this server cannot check, so it never sees arguments that
+        // nobody checked against it.
         AtomicBoolean handlerRan = new AtomicBoolean();
         SdkMcpTool<Map<String, Object>> odd = SdkMcpTool.create(
                 "odd", "Has a nonsense schema",
@@ -372,6 +395,57 @@ class SdkMcpTest {
 
         Map<String, Object> result = resultOf(
                 callTool(SdkMcpServer.create("test", List.of(odd)), "odd", Map.of()));
+
+        assertThat(handlerRan).as("the handler must not run").isFalse();
+        assertThat(result).containsEntry("isError", true);
+        assertThat(textOf(result)).contains("inputSchema this server cannot use");
+        assertThat(textOf(result)).contains("/properties");
+        // Not "Input validation error": the arguments were fine, the schema
+        // was not, and a model told to fix its arguments would retry forever.
+        assertThat(textOf(result)).doesNotContain("Input validation error");
+    }
+
+    @Test
+    void aSchemaWithAnUnknownTypeKeywordMakesTheToolUncallable() throws Exception {
+        // Compiles cleanly, then matches nothing -- every call would fail with
+        // a validation error naming the caller's arguments rather than the
+        // real defect. Caught against the dialect's meta-schema instead.
+        AtomicBoolean handlerRan = new AtomicBoolean();
+        SdkMcpTool<Map<String, Object>> odd = SdkMcpTool.create(
+                "odd", "Declares a type that does not exist",
+                Map.of("type", "object", "properties",
+                        Map.of("x", Map.of("type", "bogus"))),
+                args -> {
+                    handlerRan.set(true);
+                    return CompletableFuture.completedFuture(ToolResult.text("ok"));
+                });
+
+        Map<String, Object> result = resultOf(
+                callTool(SdkMcpServer.create("test", List.of(odd)), "odd", Map.of("x", 1)));
+
+        assertThat(handlerRan).isFalse();
+        assertThat(result).containsEntry("isError", true);
+        // Points at the offending keyword and lists what would have been
+        // legal there.
+        assertThat(textOf(result)).contains("/properties/x/type");
+        assertThat(textOf(result)).contains("does not have a value in the enumeration");
+    }
+
+    @Test
+    void aSchemaWithAVendorKeywordStaysCallable() throws Exception {
+        // Meta-schema validation must not reject what JSON Schema allows:
+        // unknown keywords are legal and common.
+        AtomicBoolean handlerRan = new AtomicBoolean();
+        SdkMcpTool<Map<String, Object>> tool = SdkMcpTool.create(
+                "vendor", "Carries an extension keyword",
+                Map.of("type", "object", "x-internal", true, "properties", Map.of()),
+                args -> {
+                    handlerRan.set(true);
+                    return CompletableFuture.completedFuture(ToolResult.text("ok"));
+                });
+
+        Map<String, Object> result = resultOf(
+                callTool(SdkMcpServer.create("test", List.of(tool)), "vendor", Map.of()));
 
         assertThat(handlerRan).isTrue();
         assertThat(textOf(result)).isEqualTo("ok");
@@ -432,14 +506,14 @@ class SdkMcpTest {
         AnnotatedTools tools = new AnnotatedTools();
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("test", tools);
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/call",
                 "params", Map.of(
                         "name", "greet",
                         "arguments", Map.of("name", "Test User"))))
-                .get();
+                );
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -454,14 +528,14 @@ class SdkMcpTest {
         AnnotatedTools tools = new AnnotatedTools();
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("test", tools);
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 2,
                 "method", "tools/call",
                 "params", Map.of(
                         "name", "add",
                         "arguments", Map.of("a", 10, "b", 20))))
-                .get();
+                );
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -505,11 +579,11 @@ class SdkMcpTest {
         SchemaGenerationTools tools = new SchemaGenerationTools();
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("schema-test", tools);
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -537,11 +611,11 @@ class SdkMcpTest {
         SchemaGenerationTools tools = new SchemaGenerationTools();
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("schema-test", tools);
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -607,11 +681,11 @@ class SdkMcpTest {
         TypedParameterTools tools = new TypedParameterTools();
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("typed-test", tools);
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -662,11 +736,11 @@ class SdkMcpTest {
         TypedParameterTools tools = new TypedParameterTools();
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("typed-test", tools);
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -707,11 +781,11 @@ class SdkMcpTest {
         TypedParameterTools tools = new TypedParameterTools();
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("typed-test", tools);
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -745,11 +819,11 @@ class SdkMcpTest {
         TypedParameterTools tools = new TypedParameterTools();
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("typed-test", tools);
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -783,11 +857,11 @@ class SdkMcpTest {
         TypedParameterTools tools = new TypedParameterTools();
         SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("typed-test", tools);
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -874,11 +948,11 @@ class SdkMcpTest {
         // Create server and verify annotations in tools/list
         SdkMcpServer server = SdkMcpServer.create("test", List.of(readTool, deleteTool, plainTool));
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.get("result");
@@ -914,7 +988,8 @@ class SdkMcpTest {
                 .openWorldHint(false)
                 .build();
 
-        Map<String, Object> map = annotations.toMap("Test Tool");
+        // toMap is @Nullable — it returns null when nothing at all is set.
+        Map<String, Object> map = requireNonNull(annotations.toMap("Test Tool"));
 
         assertThat(map).hasSize(5);
         assertThat(map.get("title")).isEqualTo("Test Tool");
@@ -928,7 +1003,7 @@ class SdkMcpTest {
                 .readOnlyHint(true)
                 .build();
 
-        Map<String, Object> partialMap = partialAnnotations.toMap(null);
+        Map<String, Object> partialMap = requireNonNull(partialAnnotations.toMap(null));
 
         assertThat(partialMap).hasSize(1);
         assertThat(partialMap.get("readOnlyHint")).isEqualTo(true);
@@ -1035,11 +1110,11 @@ class SdkMcpTest {
 
         SdkMcpServer server = SdkMcpServer.create("large-output-test", List.of(largeTool, smallTool));
 
-        Map<String, Object> response = server.handleMessage(Map.of(
+        Map<String, Object> response = answered(server.handleMessage(Map.of(
                 "jsonrpc", "2.0",
                 "id", 1,
                 "method", "tools/list",
-                "params", Map.of())).get();
+                "params", Map.of())));
 
         Map<String, Object> result = (Map<String, Object>) response.get("result");
         List<Map<String, Object>> tools = (List<Map<String, Object>>) result.get("tools");

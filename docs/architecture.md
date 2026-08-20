@@ -186,22 +186,49 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Tool registration and execution
   - Automatic schema generation from @Tool annotations
   - CompletableFuture-based async execution
-  - Server info and capabilities
-  - MCP protocol messages (initialize, list_tools, call_tool)
+  - Server info, and `initialize` version negotiation over
+    `2025-06-18` / `2024-11-05`
+  - MCP protocol messages (`initialize`, `ping`, `tools/list`, `tools/call`)
   - Argument validation against each tool's `inputSchema`, compiled once when
     the server is constructed
-- **Failure classification**: a failed `tools/call` is answered as a *tool
-  execution error* — a result carrying `isError: true` — when the call was
-  processed but produced a failure (handler threw, handler returned
-  `ToolResult.error`, or arguments did not match the schema, in which case the
-  handler is never invoked). Only an unknown tool name is a *protocol* error
-  (`-32601`), which is how the MCP specification classifies it. The split
-  matters because an `isError` result reaches the model as tool output it can
-  read and correct, whereas a JSON-RPC error says the request could not be
-  processed at all.
-- **Fail-open validation**: a tool whose schema cannot be compiled is logged
-  and left callable without validation, so a schema this server cannot parse
-  never makes a working tool unusable.
+  - Cancellation: `notifications/cancelled` settles the pending call and
+    signals the handler
+- **Message classification**: a `method` with an `id` is a request and is
+  answered; a `method` without one is a notification and is *never* answered,
+  as JSON-RPC requires — the enclosing control request is acknowledged
+  instead. A message with no `method` is a response, or junk, and is ignored:
+  this server sends the CLI no requests, so nothing arriving that way is its
+  to match.
+- **Failure classification**: everything a `tools/call` can run into is a
+  *tool execution error* — a result carrying `isError: true` — including an
+  unknown tool, a schema-invalid argument and a handler that threw. A JSON-RPC
+  error is reserved for what a *model* never causes and never sees: an
+  unimplemented method (`-32601`), malformed `params` (`-32602`), and a call
+  the CLI cancelled (`-32800`). An `isError` result reaches the model as tool
+  output it can read and correct; a JSON-RPC error says the request could not
+  be processed at all.
+- **Fail-closed validation**: each `inputSchema` is checked against its own
+  dialect's meta-schema at construction, and a tool whose schema does not pass
+  is logged and made uncallable. The validator would otherwise accept a
+  malformed schema and mis-validate against it — `{"type": "bogus"}` matches
+  nothing, `"properties": "a string"` is ignored — so a handler would run on
+  arguments nobody checked, or every call would fail citing the wrong thing.
+
+#### McpMessageHandler
+- **Purpose**: the seam `McpSdkServerConfig` actually holds, so an application
+  can serve MCP itself — resources, prompts, completions, or an adapter over a
+  third-party MCP library — instead of using `SdkMcpServer`.
+- **Contract**: `handleMessage` returns the JSON-RPC response for a request and
+  `null` for anything that expects no reply. `close()` means "the connection
+  using you is going away", not "shut down": one handler can serve more than
+  one client, so it must be idempotent and stay usable.
+
+#### ToolCallContext
+- **Purpose**: lets a running tool see that its call was cancelled.
+- **Why it must exist**: `CompletableFuture.cancel(true)` does not interrupt a
+  running task — it completes the future and leaves the work going. Without an
+  explicit signal, cancelling would stop the *wait* but not the *work*, and a
+  tool with side effects would keep applying them after the CLI gave up.
 
 #### SdkMcpTool
 - **Purpose**: Tool definition and execution wrapper
@@ -460,6 +487,12 @@ QueryHandler
 ```
 
 ### Stdin Lifecycle and In-Flight Tasks
+
+> **`controlExecutor` must stay thread-per-task.** An SDK MCP tool call parks
+> its control thread until the tool answers, and the `notifications/cancelled`
+> that ends it arrives as a *separate* control request. Under any bounded pool
+> that cancellation would queue behind the very call it exists to cancel, and
+> deadlock. No test would catch it — a fixed pool of two passes everything.
 
 When hooks, SDK MCP servers, or a `canUseTool` permission callback are registered, the control protocol needs stdin open for the entire conversation, so `QueryHandler.streamInput()` waits for a run-ending `result` frame before calling `transport.endInput()`. All three are served the same way — the CLI writes a `control_request` and blocks until the SDK writes the matching `control_response` to stdin — so all three count as bidirectional needs (`hasBidirectionalNeeds()`). Closing too early is not benign: the CLI in stream-json mode exits **only** on stdin EOF, so the close cannot simply be deferred to `close()` either — that would hang a one-shot `query()` forever.
 

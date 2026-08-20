@@ -11,6 +11,8 @@ MCP (Model Context Protocol) allows you to create custom tools that Claude can u
 - [Programmatic Tool Creation](#programmatic-tool-creation)
 - [Tool Schema](#tool-schema)
 - [Tool Execution](#tool-execution)
+- [Protocol Details](#protocol-details)
+- [Custom MCP Handlers](#custom-mcp-handlers)
 - [External MCP Servers](#external-mcp-servers)
 - [MCP Server Status](#mcp-server-status)
 - [Examples](#examples)
@@ -151,6 +153,11 @@ public CompletableFuture<ToolResult> fetchUserData(String userId) {
     // ...
 }
 ```
+
+A title is sent both at the top level of the tool, where MCP 2025-06-18 puts
+it, and inside `annotations`, where earlier revisions look — a client that
+predates the top-level field strips what it does not know. It reaches
+`tools/list` whether or not the tool also declares annotations.
 
 ### Tool Annotations (Semantic Hints)
 
@@ -488,21 +495,45 @@ import in.vidyalai.claude.sdk.mcp.ToolResult;
 // Text result
 ToolResult.text("Hello, world!");
 
-// JSON result
+// JSON result — serialized into a single text block
 ToolResult.json(Map.of("status", "success", "data", data));
 
 // Image result (Base64)
 ToolResult.image(base64Data, "image/png");
 
-// Multiple content blocks
-ToolResult.content(List.of(
+// Several content blocks
+ToolResult.builder()
+    .addText("Result:")
+    .addJson(data)
+    .addResourceLink("Full report", "file:///tmp/report.md", "Every row")
+    .build();
+
+// From raw MCP content blocks, normalized (see below)
+ToolResult.ofContent(List.of(
     Map.of("type", "text", "text", "Result:"),
-    Map.of("type", "text", "text", jsonData)
+    Map.of("type", "resource_link", "name", "Docs", "uri", "https://example.com")
 ));
 
 // Error result
 ToolResult.error("Failed to process request");
 ```
+
+#### Content blocks
+
+MCP defines more content types than the CLI renders, so the ones it cannot
+show are folded into text — the same conversion the Python SDK performs:
+
+| Block | Becomes |
+|---|---|
+| `text` | itself |
+| `image` | itself |
+| `resource_link` | text: name, URI and description on their own lines, blanks skipped (`Resource link` when all are absent) |
+| `resource` carrying `text` | that text |
+| `resource` carrying binary data | dropped, logged at `WARNING` |
+| anything else | dropped, logged at `WARNING` |
+
+`addResourceLink(...)` and `addResource(...)` apply the same rules, so a
+handler can build a result block by block without knowing them.
 
 ### Async Execution
 
@@ -567,11 +598,34 @@ Two consequences worth relying on:
   act on, rather than whatever exception the handler happened to throw when
   it tried to read a missing or mistyped value.
 
-Validation fails **open**: a tool whose `inputSchema` cannot be compiled (or
-whose validation itself errors) is logged at `WARNING` and left callable
-without validation. A schema this server cannot understand must not make an
-otherwise working tool unusable. A tool with no schema, or an empty one, is
-likewise not validated.
+A tool with no schema, or an empty one, is not validated — there is nothing
+to check against.
+
+#### A schema that is not valid JSON Schema
+
+Validation fails **closed**, as the Python SDK does. Each `inputSchema` is
+checked against its own dialect's meta-schema when the server is built; a tool
+whose schema does not pass is logged at `WARNING` and every call to it comes
+back as `isError` without the handler running:
+
+```
+{"type": "object", "properties": "not-an-object"}
+    -> Tool 'x' has an inputSchema this server cannot use, so it cannot be
+       called: /properties string found, object expected
+```
+
+This matters more than it looks. The validator accepts a malformed schema
+happily and then mis-validates against it: `{"type": "bogus"}` compiles and
+then matches nothing, so every call would fail citing the caller's arguments
+rather than the real defect, while `"properties": "a string"` is ignored
+outright and waves every call through unchecked. Neither is a state a handler
+should run in.
+
+The text deliberately does **not** begin `Input validation error:`. That
+prefix tells the model its arguments were wrong; a broken schema is a defect
+in the server the model cannot route around, and mislabelling it invites an
+endless retry. Unknown keywords stay legal — a schema carrying `x-vendor`
+extensions validates fine.
 
 ### Failure semantics
 
@@ -582,18 +636,59 @@ How each kind of failure reaches the caller:
 | Handler returns `ToolResult.error(msg)` | result, `isError: true` | `msg` |
 | Handler throws, or its future fails | result, `isError: true` | the exception message, or its class name when the message is null/blank |
 | Arguments do not match `inputSchema` | result, `isError: true` | `Input validation error: …` (handler not run) |
-| Tool name is not registered | JSON-RPC error `-32601` | `Tool not found: <name>` |
+| `inputSchema` is not valid JSON Schema | result, `isError: true` | `… inputSchema this server cannot use …` (handler not run) |
+| Tool name is not registered | result, `isError: true` | `Tool '<name>' not found` |
+| The call was cancelled | JSON-RPC error `-32800` | nothing; the CLI already gave up |
+| Method is not one this server implements | JSON-RPC error `-32601` | nothing; the model never issues these |
+| `params` is missing or malformed | JSON-RPC error `-32602` | nothing; same |
 
-The first three are *tool execution errors*: the call was processed and
-produced a result that happens to describe a failure, so the text reaches the
-model as tool output it can read and adapt to. The last is a *protocol*
-error — the MCP specification classifies an unknown tool that way, and a model
-can only call tools the server listed, so it indicates a host bug rather than
-something a model should work around.
+Everything a *tool call* can run into is a **tool execution error**: the call
+was processed and produced a result that happens to describe a failure, so the
+text reaches the model as output it can read and adapt to. A JSON-RPC error
+says the request could not be processed at all, and the model never sees one —
+which is why an unknown tool is reported as a result too, matching the Python
+SDK. These semantics are the SDK's own, so a tool behaves identically on both.
 
-> **Note:** this mirrors the Python SDK except for the unknown-tool case, where
-> Python also returns `isError`. Java follows the specification's
-> classification there.
+### Cancelling a running tool
+
+The CLI enforces its own timeout on an MCP tool call (`MCP_TOOL_TIMEOUT`).
+When it fires, the CLI stops waiting and sends MCP's
+`notifications/cancelled`; the SDK answers the pending call with `-32800` and
+discards whatever the handler eventually returns.
+
+The handler itself keeps running unless it looks. A `CompletableFuture` cannot
+be interrupted from outside — `cancel(true)` completes the future and leaves
+the work alone — so a tool that does anything long, or anything with side
+effects, should take a `ToolCallContext` alongside its arguments:
+
+```java
+SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
+        "crawl", "Fetch every page under a URL", schema,
+        (args, context) -> CompletableFuture.supplyAsync(() -> {
+            List<String> pages = new ArrayList<>();
+            for (String url : urlsFrom(args)) {
+                if (context.isCancelled()) {
+                    break;              // nobody is waiting for this any more
+                }
+                pages.add(fetch(url));
+            }
+            return ToolResult.text(String.join("\n", pages));
+        }));
+```
+
+`context.onCancel(runnable)` covers work that cannot poll — a blocking read, a
+call out to another service — by giving you somewhere to close the resource;
+it runs immediately if the call is already cancelled.
+`context.throwIfCancelled()` is the checkpoint form for a handler that would
+rather unwind.
+
+Handlers that take only their arguments keep working exactly as before; they
+simply cannot observe cancellation. Methods annotated with `@Tool` can declare
+a `ToolCallContext` parameter anywhere in their signature — it is injected, and
+never appears in the tool's published schema.
+
+Disconnecting has the same effect: closing the client abandons the calls still
+in flight, so a shutdown is not held up by a tool nothing can interrupt.
 
 A handler failure is also logged locally at `WARNING` with its stack trace, so
 a crashing tool is debuggable without the model's transcript being the only
@@ -616,6 +711,80 @@ public CompletableFuture<ToolResult> processFile(String path) {
     });
 }
 ```
+
+## Protocol Details
+
+### Protocol version
+
+The server advertises `2025-06-18` and `2024-11-05`, newest first. On
+`initialize` it echoes the version the client asked for when it speaks it, and
+otherwise answers with the newest it does — the handshake the specification
+prescribes.
+
+`2025-03-26` is deliberately not claimed. That revision made JSON-RPC batching
+mandatory to *receive*, and a batch is a top-level array, which the control
+request carrying these messages types as a map and cannot represent. Claiming
+a version whose one required change the SDK could not honor would be a promise
+the client acts on.
+
+### Methods
+
+`initialize`, `ping`, `tools/list` and `tools/call` are implemented. Anything
+else is answered `-32601`, which is correct rather than missing: the server
+advertises only the `tools` capability, so a conformant client never asks for
+resources, prompts or completions. (Verified against the CLI: a server
+declaring only `tools` is never sent `resources/list` or `prompts/list`.)
+
+### Notifications
+
+A JSON-RPC notification — a message with a `method` and no `id` — never gets a
+response, as JSON-RPC requires. `notifications/initialized` and
+`notifications/cancelled` are acted on; anything else is logged at `FINE` and
+dropped. The *control request* that carried the notification is still
+acknowledged, with `{"jsonrpc": "2.0", "result": {}}`, or the CLI would wait
+forever.
+
+A message with no `method` at all is a JSON-RPC response, or junk. The SDK
+sends the CLI no requests, so nothing arriving that way is its to match: it is
+ignored rather than answered.
+
+## Custom MCP Handlers
+
+`McpSdkServerConfig` holds an `McpMessageHandler`, not specifically an
+`SdkMcpServer`. Implement the interface directly to serve parts of MCP that
+`SdkMcpServer` does not — resources, prompts, completions — or to adapt a
+third-party MCP library:
+
+```java
+public class MyMcpServer implements McpMessageHandler {
+
+    @Override
+    public CompletableFuture<Map<String, Object>> handleMessage(Map<String, Object> message) {
+        // Return the JSON-RPC response for a request, or null for a
+        // notification, which must never be answered.
+        ...
+    }
+
+    @Override
+    public void close() {
+        // Optional: the connection using this handler is going away.
+    }
+}
+
+var options = ClaudeAgentOptions.builder()
+        .mcpServers(Map.of("mine", new McpSdkServerConfig("mine", new MyMcpServer())))
+        .build();
+```
+
+What the CLI sends is driven by the `capabilities` returned from
+`initialize`, so a handler that advertises resources will be asked for them.
+
+`close()` means "the connection using you is going away", not "shut down": one
+handler can be registered with more than one client, so it must be idempotent
+and stay usable afterwards. For the same reason, register one `SdkMcpServer`
+per connection — two live connections sharing one server can issue the same
+JSON-RPC id, and the second call is then refused with `-32603` rather than
+risking a response reaching the wrong caller.
 
 ## External MCP Servers
 

@@ -18,16 +18,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
 import in.vidyalai.claude.sdk.internal.CanUseToolConfig;
+import in.vidyalai.claude.sdk.internal.McpServers;
 import in.vidyalai.claude.sdk.internal.QueryHandler;
 import in.vidyalai.claude.sdk.internal.SessionResume;
 import in.vidyalai.claude.sdk.internal.SessionStoreValidation;
 import in.vidyalai.claude.sdk.internal.TranscriptMirrorBatcher;
 import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
-import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
+import in.vidyalai.claude.sdk.mcp.McpMessageHandler;
 import in.vidyalai.claude.sdk.transport.Transport;
-import in.vidyalai.claude.sdk.types.mcp.ContextUsageResponse;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
-import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
+import in.vidyalai.claude.sdk.types.mcp.ContextUsageResponse;
 import in.vidyalai.claude.sdk.types.mcp.McpStatusResponse;
 import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
@@ -269,7 +269,7 @@ public class ClaudeSDKClient implements AutoCloseable {
         Duration initializeTimeout = Duration.ofMillis(Math.max(timeoutMs, 60000));
 
         // Extract SDK MCP servers from options
-        Map<String, SdkMcpServer> sdkMcpServers = extractSdkMcpServers(effectiveOptions);
+        Map<String, McpMessageHandler> sdkMcpServers = McpServers.extract(effectiveOptions);
 
         // Extract exclude_dynamic_sections from preset system prompt for the
         // initialize request (older CLIs ignore unknown initialize fields)
@@ -853,36 +853,6 @@ public class ClaudeSDKClient implements AutoCloseable {
         if ((!connected.get()) || (query == null) || (transport == null)) {
             throw new CLIConnectionException("Not connected. Call connect() first.");
         }
-    }
-
-    /**
-     * Extracts SDK MCP servers from the options' mcpServers map.
-     */
-    @Nullable
-    private static Map<String, SdkMcpServer> extractSdkMcpServers(ClaudeAgentOptions options) {
-        Object mcpServers = options.mcpServers();
-        if (mcpServers == null) {
-            return null;
-        }
-
-        // Only handle Map<String, McpServerConfig> - other types (Path, String) are
-        // handled by CLI
-        if (!(mcpServers instanceof Map<?, ?> serverMap)) {
-            return null;
-        }
-
-        if (serverMap.isEmpty()) {
-            return null;
-        }
-
-        Map<String, SdkMcpServer> sdkServers = new HashMap<>();
-        for (Map.Entry<?, ?> entry : serverMap.entrySet()) {
-            if (entry.getValue() instanceof McpSdkServerConfig sdkConfig) {
-                sdkServers.put((String) entry.getKey(), sdkConfig.instance());
-            }
-        }
-
-        return (sdkServers.isEmpty() ? null : sdkServers);
     }
 
     /**

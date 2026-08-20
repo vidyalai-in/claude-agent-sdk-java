@@ -197,9 +197,12 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
 │   └── transport/                  # Internal transport implementations
 │       └── SubprocessCLITransport.java # CLI subprocess implementation
 ├── mcp/                        # MCP (Model Context Protocol) support
+│   ├── McpMessageHandler.java      # SPI: serve MCP yourself
 │   ├── SdkMcpServer.java           # In-process MCP server
 │   ├── SdkMcpTool.java             # Tool definition
 │   ├── Tool.java                   # @Tool annotation
+│   ├── ToolAnnotations.java        # Semantic hints + title
+│   ├── ToolCallContext.java        # Per-call cancellation signal
 │   └── ToolResult.java             # Tool result wrapper
 └── types/                      # Type definitions
     ├── message/                    # Message and content types
@@ -357,8 +360,8 @@ Static methods for common operations:
 - `queryForResult(String prompt, ClaudeAgentOptions options)` - Get result message
 - `createClient()` - Create new ClaudeSDKClient
 - `createClient(ClaudeAgentOptions options)` - Create client with options
-- `createSdkMcpServer(String name, List<SdkMcpTool> tools)` - Create MCP server from tools
-- `createSdkMcpServer(String name, String version, List<SdkMcpTool> tools)` - Create MCP server with version
+- `createSdkMcpServer(String name, List<SdkMcpTool<?>> tools)` - Create MCP server from tools
+- `createSdkMcpServer(String name, String version, List<SdkMcpTool<?>> tools)` - Create MCP server with version
 - `createSdkMcpServer(String name, Object instance)` - Create MCP server from @Tool annotations
 - `listSubagents(String sessionId)` / `listSubagents(String, Path)` - List subagent IDs for a session
 - `getSubagentMessages(String sessionId, String agentId, ...)` - Read a subagent's transcript

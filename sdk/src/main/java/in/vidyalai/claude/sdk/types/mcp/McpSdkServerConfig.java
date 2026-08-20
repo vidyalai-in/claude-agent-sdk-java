@@ -2,6 +2,7 @@ package in.vidyalai.claude.sdk.types.mcp;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
+import in.vidyalai.claude.sdk.mcp.McpMessageHandler;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 
 /**
@@ -9,8 +10,9 @@ import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
  *
  * <p>
  * Unlike external MCP server configs (stdio, SSE, HTTP), this config
- * contains a reference to an actual {@link SdkMcpServer} instance that
- * runs in-process.
+ * contains a reference to a live {@link McpMessageHandler} that runs
+ * in-process — usually an {@link SdkMcpServer}, but any implementation
+ * serves.
  *
  * <p>
  * Create using {@link SdkMcpServer#toConfig()}:
@@ -24,12 +26,16 @@ import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
  *         .build();
  * }</pre>
  *
+ * <p>
+ * Only {@code {"type": "sdk", "name": …}} reaches the CLI; the handler stays
+ * in this process and is driven back over the control protocol by name.
+ *
  * @param name     the server name
- * @param instance the server instance (not serialized to CLI)
+ * @param instance the handler serving this server (not serialized to CLI)
  */
 public record McpSdkServerConfig(
         String name,
-        @JsonIgnore SdkMcpServer instance) implements McpServerConfig {
+        @JsonIgnore McpMessageHandler instance) implements McpServerConfig {
 
     @Override
     public String type() {

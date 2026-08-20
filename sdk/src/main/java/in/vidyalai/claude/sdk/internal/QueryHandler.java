@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -35,7 +36,7 @@ import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDKClient;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
 import in.vidyalai.claude.sdk.exceptions.ResultException;
-import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
+import in.vidyalai.claude.sdk.mcp.McpMessageHandler;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.config.AgentDefinition;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlInitializeRequest;
@@ -277,7 +278,7 @@ public class QueryHandler implements AutoCloseable {
     @Nullable
     private final Map<HookEvent, List<HookMatcher>> hooks;
     @Nullable
-    private final Map<String, SdkMcpServer> sdkMcpServers;
+    private final Map<String, McpMessageHandler> sdkMcpServers;
     @Nullable
     private final Map<String, AgentDefinition> agents;
     @Nullable
@@ -377,7 +378,7 @@ public class QueryHandler implements AutoCloseable {
             boolean isStreamingMode,
             ClaudeAgentOptions.CanUseTool canUseTool, // may be null
             @Nullable Map<HookEvent, List<HookMatcher>> hooks,
-            @Nullable Map<String, SdkMcpServer> sdkMcpServers,
+            @Nullable Map<String, McpMessageHandler> sdkMcpServers,
             @Nullable Map<String, AgentDefinition> agents,
             @Nullable Boolean excludeDynamicSections,
             @Nullable Object skills,
@@ -414,7 +415,7 @@ public class QueryHandler implements AutoCloseable {
             boolean isStreamingMode,
             ClaudeAgentOptions.CanUseTool canUseTool, // may be null
             @Nullable Map<HookEvent, List<HookMatcher>> hooks,
-            @Nullable Map<String, SdkMcpServer> sdkMcpServers,
+            @Nullable Map<String, McpMessageHandler> sdkMcpServers,
             @Nullable Map<String, AgentDefinition> agents,
             @Nullable Boolean excludeDynamicSections,
             @Nullable Object skills,
@@ -440,7 +441,11 @@ public class QueryHandler implements AutoCloseable {
                         .name("QueryHandler-Reader-", 0)
                         .factory());
 
-        // Control: Multi-threaded executor for concurrent control request handling
+        // Control: one virtual thread per request, and it must stay that way.
+        // An SDK MCP tool call parks its thread until the tool answers, and
+        // the notifications/cancelled that ends it arrives as a *separate*
+        // control request. Under any bounded pool that cancellation would
+        // queue behind the call it exists to cancel, and deadlock.
         this.controlExecutor = Executors.newThreadPerTaskExecutor(
                 Thread.ofVirtual()
                         .name("QueryHandler-Control-", 0)
@@ -986,24 +991,9 @@ public class QueryHandler implements AutoCloseable {
                     HookOutput output = outputFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);
                     responseData = output.toMap();
                 }
-                case SDKControlMcpMessageRequest mcpReq -> {
-                    // Route MCP message to SDK MCP server
-                    String serverName = mcpReq.serverName();
-                    Map<String, Object> mcpMessage = mcpReq.message();
-
-                    if ((serverName == null) || (mcpMessage == null)) {
-                        throw new ClaudeSDKException("Missing name or message for SDK MCP server");
-                    }
-
-                    if ((sdkMcpServers == null) || (!sdkMcpServers.containsKey(serverName))) {
-                        throw new ClaudeSDKException("SDK MCP server not found: " + serverName);
-                    }
-
-                    SdkMcpServer server = sdkMcpServers.get(serverName);
-                    CompletableFuture<Map<String, Object>> mcpResponseFuture = server.handleMessage(mcpMessage);
-                    Map<String, Object> mcpResponse = mcpResponseFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);
-                    responseData.put("mcp_response", mcpResponse);
-                }
+                case SDKControlMcpMessageRequest mcpReq ->
+                    responseData.put("mcp_response",
+                            handleSdkMcpRequest(mcpReq.serverName(), mcpReq.message()));
                 case SDKControlMCPStatusRequest ignored -> {
                     // Interrupt is sent from SDK to CLI, not CLI to SDK
                     throw new ClaudeSDKException("Unexpected mcp status request from CLI: " + ignored);
@@ -1048,19 +1038,97 @@ public class QueryHandler implements AutoCloseable {
 
             // Send success response
             sendControlResponse(new ControlResponse(requestId, responseData));
-        } catch (Exception e) {
-            // Send error response
+        } catch (Throwable e) {
+            // Throwable, not Exception: this runs on a submit()ed task whose
+            // Future nobody reads, so an Error here used to vanish without a
+            // trace and leave the CLI waiting forever on a response that could
+            // never arrive. Answer first, then let a genuine Error keep going.
             if (requestId == null) {
                 // Try to extract from raw message if deserialization failed
                 requestId = (String) message.get("request_id");
             }
+            Level level = ((e instanceof Exception) ? Level.WARNING : Level.SEVERE);
             if (requestId != null) {
-                logger.log(Level.WARNING, "Error in handling control request", e);
-                sendControlResponse(new ControlErrorResponse(requestId, e.getMessage()));
+                logger.log(level, "Error in handling control request", e);
+                sendControlResponse(new ControlErrorResponse(requestId, describeThrowable(e)));
             } else {
-                logger.log(Level.WARNING, "Failed to handle control request without request_id", e);
+                logger.log(level, "Failed to handle control request without request_id", e);
+            }
+            if (e instanceof Error error) {
+                throw error;
             }
         }
+    }
+
+    /**
+     * Routes one JSON-RPC message to the named SDK MCP server.
+     *
+     * <p>
+     * Always returns a payload for the enclosing control response. A message
+     * that cannot be delivered at all — unknown server, a handler that threw —
+     * is answered with a JSON-RPC error <i>inside</i> {@code mcp_response}, so
+     * only that one MCP call fails instead of the whole control request. That
+     * is what the Python SDK does, and it keeps the control channel healthy
+     * through a broken server.
+     *
+     * @param serverName the SDK MCP server the CLI addressed
+     * @param message    the JSON-RPC message to deliver
+     * @return the payload for the {@code mcp_response} field
+     */
+    private Map<String, Object> handleSdkMcpRequest(
+            @Nullable String serverName, @Nullable Map<String, Object> message) {
+
+        Object id = ((message != null) ? message.get("id") : null);
+        if ((serverName == null) || (message == null)) {
+            return jsonRpcError(id, -32600, "Missing server_name or message for MCP request");
+        }
+
+        Map<String, McpMessageHandler> servers = sdkMcpServers;
+        McpMessageHandler server = ((servers != null) ? servers.get(serverName) : null);
+        if (server == null) {
+            return jsonRpcError(id, -32601, "Server '" + serverName + "' not found");
+        }
+
+        try {
+            // No SDK-side deadline, matching the Python SDK. The CLI enforces
+            // its own tool timeout and follows it with notifications/cancelled,
+            // which settles the call; close() drains whatever is left. A cap
+            // here would only turn "slow" into "the control request failed"
+            // while leaving the tool running anyway.
+            //
+            // get(), not join(): join() cannot be interrupted, which would
+            // make controlExecutor.shutdownNow() a no-op on this thread.
+            Map<String, Object> mcpResponse = server.handleMessage(message).get();
+            // A notification gets no reply, but the control request that
+            // carried one still expects an acknowledgement.
+            return ((mcpResponse != null)
+                    ? mcpResponse
+                    : Map.of("jsonrpc", "2.0", "result", Map.of()));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return jsonRpcError(id, -32603,
+                    "Interrupted while waiting for SDK MCP server '" + serverName + "'");
+        } catch (ExecutionException | RuntimeException e) {
+            // RuntimeException covers CancellationException, which is what a
+            // handler settled by close() completes with.
+            Throwable cause = ((e.getCause() != null) ? e.getCause() : e);
+            logger.log(Level.WARNING, "SDK MCP server '" + serverName + "' failed", cause);
+            return jsonRpcError(id, -32603, describeThrowable(cause));
+        }
+    }
+
+    private static Map<String, Object> jsonRpcError(@Nullable Object id, int code, String message) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("jsonrpc", "2.0");
+        response.put("id", id);
+        response.put("error", Map.of("code", code, "message", message));
+        return response;
+    }
+
+    /** Mirrors {@code SdkMcpServer.describeFailure}: never null, never empty. */
+    private static String describeThrowable(Throwable cause) {
+        String message = cause.getMessage();
+        return (((message != null) && !message.isBlank()) ? message : cause.getClass().getSimpleName());
     }
 
     private void sendControlResponse(ControlResponseData crData) {
@@ -1272,7 +1340,7 @@ public class QueryHandler implements AutoCloseable {
         // Read each field once: a second read is what makes the null check
         // above it non-narrowing, and there is no reason to read twice.
         Map<HookEvent, List<HookMatcher>> hookConfig = hooks;
-        Map<String, SdkMcpServer> mcpServers = sdkMcpServers;
+        Map<String, McpMessageHandler> mcpServers = sdkMcpServers;
         return ((hookConfig != null) && (!hookConfig.isEmpty()))
                 || ((mcpServers != null) && (!mcpServers.isEmpty()))
                 || (canUseTool != null);
@@ -1422,6 +1490,24 @@ public class QueryHandler implements AutoCloseable {
                 future.completeExceptionally(closedException);
             }
             pendingControlResponses.clear();
+
+            // 1b. Tell the SDK MCP servers the connection is going away. A
+            //     tool still running holds a control thread on a wait with no
+            //     deadline, and only its server can end it -- nothing here can
+            //     interrupt a handler. Without this, awaitTermination below
+            //     would sit out its full timeout on any run with a tool in
+            //     flight.
+            Map<String, McpMessageHandler> servers = sdkMcpServers;
+            if (servers != null) {
+                for (Map.Entry<String, McpMessageHandler> entry : servers.entrySet()) {
+                    try {
+                        entry.getValue().close();
+                    } catch (RuntimeException e) {
+                        logger.log(Level.WARNING,
+                                "SDK MCP server '" + entry.getKey() + "' failed to close", e);
+                    }
+                }
+            }
 
             // Complete firstResultEvent if still pending
             firstResultEvent.complete(null);

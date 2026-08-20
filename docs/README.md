@@ -66,7 +66,10 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - @Tool annotation usage
   - Programmatic tool creation
   - Tool schemas, and argument validation against a tool's `inputSchema`
-  - Failure semantics (`isError` results vs the `-32601` unknown-tool error)
+  - Failure semantics (`isError` results for everything a tool call meets)
+  - Cancelling a running tool with `ToolCallContext`
+  - Protocol details (version negotiation, notifications, methods)
+  - Custom MCP handlers via `McpMessageHandler`
   - Async execution patterns
   - Complete examples (calculator, database, API integration)
 
@@ -300,7 +303,7 @@ See the `examples/` directory in the repository.
   - Configuration Options (including `sessionStore` and `loadTimeoutMs`)
   - Message Types (task messages, server tool blocks, MirrorErrorMessage)
   - MCP Servers (with ToolAnnotations, tool titles, status types, input
-    validation and failure semantics)
+    validation, failure semantics, cancellation and custom handlers)
   - Agent Definitions
   - Extended Thinking Configuration (with `ThinkingDisplay`)
   - Hooks System (with agentId/agentType fields)

@@ -12,6 +12,7 @@ import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.mcp.SdkMcpTool;
 import in.vidyalai.claude.sdk.mcp.Tool;
 import in.vidyalai.claude.sdk.mcp.ToolAnnotations;
+import in.vidyalai.claude.sdk.mcp.ToolCallContext;
 import in.vidyalai.claude.sdk.mcp.ToolResult;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 import in.vidyalai.claude.sdk.types.mcp.McpStdioServerConfig;
@@ -42,6 +43,10 @@ public class McpServer {
         // Example 4: Mixed servers (SDK + external)
         System.out.println("\n=== Mixed Servers ===");
         mixedServers();
+
+        // Example 5: Cancellation and richer result content
+        System.out.println("\n=== Cancellable Tools and Result Content ===");
+        cancellableTools();
     }
 
     /**
@@ -297,6 +302,100 @@ public class McpServer {
         System.out.println("Configuration created with SDK server");
         System.out.println("SDK server tools: greet, get_time, reverse_string");
         System.out.println("(External server would be added similarly)");
+    }
+
+    /**
+     * A tool that can be cancelled, and results richer than plain text.
+     *
+     * <p>
+     * When a tool outruns the CLI's MCP timeout the CLI gives up on it and
+     * sends {@code notifications/cancelled}. The call is answered without
+     * waiting — but the handler keeps running unless it looks, because a
+     * {@code CompletableFuture} cannot be interrupted from outside. A handler
+     * that takes a {@link ToolCallContext} alongside its arguments can see
+     * that and stop.
+     *
+     * <p>
+     * To watch it happen, run with a short timeout:
+     * {@code MCP_TOOL_TIMEOUT=5000 mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples}
+     */
+    static void cancellableTools() {
+        // Two-argument handler: the second parameter is the cancellation
+        // signal for this one call.
+        SdkMcpTool<Map<String, Object>> countdown = SdkMcpTool.create(
+                "slow_count",
+                "Count slowly to a number, one second per step",
+                Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "to", Map.of("type", "integer", "description", "How high to count")),
+                        "required", List.of("to")),
+                (args, context) -> CompletableFuture.supplyAsync(() -> {
+                    int to = ((Number) args.get("to")).intValue();
+                    int reached = 0;
+                    for (int i = 1; i <= to; i++) {
+                        if (context.isCancelled()) {
+                            // Nobody is waiting for this result any more, so
+                            // stop rather than finish the work for nothing.
+                            System.out.println("  [slow_count] cancelled at " + reached);
+                            break;
+                        }
+                        reached = i;
+                        sleep();
+                    }
+                    return ToolResult.text("Reached " + reached);
+                }));
+
+        // onCancel is for work that cannot poll — a blocking read, a call out
+        // to another service — where something has to be closed to unblock it.
+        SdkMcpTool<Map<String, Object>> report = SdkMcpTool.create(
+                "build_report",
+                "Produce a report with a link to the full document",
+                Map.of("type", "object", "properties", Map.of()),
+                (args, context) -> {
+                    context.onCancel(() -> System.out.println("  [build_report] releasing resources"));
+                    return CompletableFuture.completedFuture(ToolResult.builder()
+                            // Structured data, without bringing your own mapper.
+                            .addJson(Map.of("rows", 42, "status", "ok"))
+                            // A resource link is flattened to the text the CLI
+                            // renders: name, URI, description on their own lines.
+                            .addResourceLink("Full report", "file:///tmp/report.md", "Every row")
+                            .build());
+                });
+
+        SdkMcpServer server = SdkMcpServer.create("reporting", "1.0.0", List.of(countdown, report));
+
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .mcpServers(Map.of("reporting", server.toConfig()))
+                .allowedTools(List.of("mcp__reporting__slow_count", "mcp__reporting__build_report"))
+                .maxTurns(5)
+                .build();
+
+        try (var client = ClaudeSDK.createClient(options)) {
+            client.connect();
+            client.sendMessage("Call slow_count with to=8, then call build_report. "
+                    + "Summarize both results in one sentence.");
+
+            for (Message msg : client.receiveResponse()) {
+                if (msg instanceof AssistantMessage assistant) {
+                    for (ContentBlock block : assistant.content()) {
+                        if (block instanceof TextBlock text) {
+                            System.out.println("Claude: " + text.text());
+                        } else if (block instanceof ToolUseBlock toolUse) {
+                            System.out.println("Calling: " + toolUse.name() + " " + toolUse.input());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static void sleep() {
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
 }

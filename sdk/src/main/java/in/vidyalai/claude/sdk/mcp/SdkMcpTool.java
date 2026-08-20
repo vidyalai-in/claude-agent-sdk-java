@@ -2,6 +2,7 @@ package in.vidyalai.claude.sdk.mcp;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import org.jspecify.annotations.Nullable;
@@ -45,7 +46,7 @@ public final class SdkMcpTool<T> {
     @Nullable
     private final String title;
     private final Map<String, Object> inputSchema;
-    private final Function<T, CompletableFuture<ToolResult>> handler;
+    private final BiFunction<T, ToolCallContext, CompletableFuture<ToolResult>> handler;
     @Nullable
     private final ToolAnnotations annotations;
 
@@ -87,6 +88,25 @@ public final class SdkMcpTool<T> {
     }
 
     /**
+     * Creates a simple tool whose handler can observe cancellation.
+     *
+     * @param name        the tool name
+     * @param description the tool description
+     * @param inputSchema JSON schema for input validation
+     * @param handler     the function to execute, receiving the arguments and
+     *                    the call's {@link ToolCallContext}
+     * @return a new tool instance
+     * @see ToolCallContext
+     */
+    public static SdkMcpTool<Map<String, Object>> create(
+            String name,
+            String description,
+            Map<String, Object> inputSchema,
+            BiFunction<Map<String, Object>, ToolCallContext, CompletableFuture<ToolResult>> handler) {
+        return create(name, description, null, inputSchema, handler, null);
+    }
+
+    /**
      * Creates a simple tool.
      *
      * @param name        the tool name
@@ -103,6 +123,34 @@ public final class SdkMcpTool<T> {
             @Nullable String title,
             Map<String, Object> inputSchema,
             Function<Map<String, Object>, CompletableFuture<ToolResult>> handler,
+            @Nullable ToolAnnotations annotations) {
+        return new Builder<Map<String, Object>>(name, description)
+                .title(title)
+                .inputSchema(inputSchema)
+                .handler(handler)
+                .annotations(annotations)
+                .build();
+    }
+
+    /**
+     * Creates a tool whose handler can observe cancellation.
+     *
+     * @param name        the tool name
+     * @param description the tool description
+     * @param title       the tool title
+     * @param inputSchema JSON schema for input validation
+     * @param handler     the function to execute, receiving the arguments and
+     *                    the call's {@link ToolCallContext}
+     * @param annotations the tool hints
+     * @return a new tool instance
+     * @see ToolCallContext
+     */
+    public static SdkMcpTool<Map<String, Object>> create(
+            String name,
+            String description,
+            @Nullable String title,
+            Map<String, Object> inputSchema,
+            BiFunction<Map<String, Object>, ToolCallContext, CompletableFuture<ToolResult>> handler,
             @Nullable ToolAnnotations annotations) {
         return new Builder<Map<String, Object>>(name, description)
                 .title(title)
@@ -131,8 +179,19 @@ public final class SdkMcpTool<T> {
         return inputSchema;
     }
 
+    /**
+     * The handler, as a function of the arguments alone.
+     *
+     * <p>
+     * A handler registered with a {@link ToolCallContext} is adapted here by
+     * supplying {@link ToolCallContext#notCancelled()}, so what this returns
+     * can never observe cancellation. Use
+     * {@link #invoke(Object, ToolCallContext)} to run a tool for real.
+     *
+     * @return the handler
+     */
     public Function<T, CompletableFuture<ToolResult>> handler() {
-        return handler;
+        return args -> handler.apply(args, ToolCallContext.notCancelled());
     }
 
     @Nullable
@@ -147,7 +206,20 @@ public final class SdkMcpTool<T> {
      * @return a future with the tool result
      */
     public CompletableFuture<ToolResult> invoke(T args) {
-        return handler.apply(args);
+        return invoke(args, ToolCallContext.notCancelled());
+    }
+
+    /**
+     * Invokes the tool handler with the given arguments and cancellation
+     * context.
+     *
+     * @param args    the input arguments
+     * @param context the cancellation signal for this call
+     * @return a future with the tool result
+     * @see ToolCallContext
+     */
+    public CompletableFuture<ToolResult> invoke(T args, ToolCallContext context) {
+        return handler.apply(args, context);
     }
 
     /**
@@ -164,7 +236,7 @@ public final class SdkMcpTool<T> {
         private String title;
         private Map<String, Object> inputSchema = Map.of(TYPE, OBJECT, PROPERTIES, Map.of());
         @Nullable
-        private Function<T, CompletableFuture<ToolResult>> handler;
+        private BiFunction<T, ToolCallContext, CompletableFuture<ToolResult>> handler;
         @Nullable
         private ToolAnnotations annotations;
 
@@ -200,6 +272,23 @@ public final class SdkMcpTool<T> {
          * @param handler the function to execute
          */
         public Builder<T> handler(Function<T, CompletableFuture<ToolResult>> handler) {
+            this.handler = (args, _) -> handler.apply(args);
+            return this;
+        }
+
+        /**
+         * Sets a handler that can observe cancellation.
+         *
+         * <p>
+         * The context is the only way a tool can learn that the CLI gave up on
+         * it — a {@code CompletableFuture} cannot be interrupted from outside.
+         *
+         * @param handler the function to execute, receiving the arguments and
+         *                the call's {@link ToolCallContext}
+         * @return this builder
+         * @see ToolCallContext
+         */
+        public Builder<T> handler(BiFunction<T, ToolCallContext, CompletableFuture<ToolResult>> handler) {
             this.handler = handler;
             return this;
         }

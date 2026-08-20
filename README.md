@@ -446,7 +446,49 @@ ToolResult.error("File not found: /path/to/file")
 
 // Image result (base64 encoded)
 ToolResult.image(base64Data, "image/png")
+
+// Structured data, serialized into a text block
+ToolResult.json(Map.of("status", "ok", "rows", 42))
+
+// Several blocks, including a link the CLI renders as text
+ToolResult.builder()
+    .addText("Summary:")
+    .addResourceLink("Full report", "file:///tmp/report.md", "Every row")
+    .build()
 ```
+
+### Cancelling a Long-Running Tool
+
+The CLI gives up on a tool that outruns its MCP timeout and sends
+`notifications/cancelled`. The call is answered without waiting, but the
+handler keeps running unless it looks — a `CompletableFuture` cannot be
+interrupted from outside. Take a `ToolCallContext` alongside the arguments to
+see it:
+
+```java
+SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
+    "crawl", "Fetch every page under a URL", schema,
+    (args, context) -> CompletableFuture.supplyAsync(() -> {
+        List<String> pages = new ArrayList<>();
+        for (String url : urlsFrom(args)) {
+            if (context.isCancelled()) {
+                break;                       // nobody is waiting any more
+            }
+            pages.add(fetch(url));
+        }
+        return ToolResult.text(String.join("\n", pages));
+    }));
+```
+
+Handlers that take only their arguments are unaffected. `context.onCancel(...)`
+covers work that cannot poll, such as a blocking read.
+
+### Bringing Your Own MCP Server
+
+`McpSdkServerConfig` holds an `McpMessageHandler`, so an application that needs
+parts of MCP the built-in server does not serve — resources, prompts,
+completions — can implement the interface itself and register it the same way.
+See [docs/feature-mcp-servers.md](docs/feature-mcp-servers.md#custom-mcp-handlers).
 
 ### Benefits Over External MCP Servers
 

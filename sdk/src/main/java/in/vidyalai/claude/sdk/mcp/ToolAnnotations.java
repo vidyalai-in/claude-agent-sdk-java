@@ -114,7 +114,7 @@ public interface ToolAnnotations {
      * @return true if at least one annotation is non-null
      */
     @JsonIgnore
-    default boolean hasAnyAnnotation(String title) {
+    default boolean hasAnyAnnotation(@Nullable String title) {
         return (((title != null) && (!title.isBlank())) || (readOnlyHint() != null)
                 || (destructiveHint() != null) || (idempotentHint() != null)
                 || (openWorldHint() != null));
@@ -125,8 +125,9 @@ public interface ToolAnnotations {
      *
      * @return a map containing non-null annotation properties
      */
+    @Nullable
     @JsonIgnore
-    default Map<String, Object> toMap(String title) {
+    default Map<String, Object> toMap(@Nullable String title) {
         if (!hasAnyAnnotation(title)) {
             return null;
         }
@@ -158,6 +159,16 @@ public interface ToolAnnotations {
     static Builder builder() {
         return new Builder();
     }
+
+    /**
+     * The shared {@link None} instance.
+     *
+     * <p>
+     * Lets a caller ask a tool that declared no annotations for its
+     * annotation map — which is how a {@code title} set on its own still
+     * reaches {@code tools/list}.
+     */
+    ToolAnnotations NONE = new None();
 
     /**
      * Sentinel implementation used as the default for {@link Tool#annotations()}.
@@ -230,13 +241,14 @@ public interface ToolAnnotations {
 
         @JsonIgnore
         @Override
-        public boolean hasAnyAnnotation(String title) {
+        public boolean hasAnyAnnotation(@Nullable String title) {
             return ToolAnnotations.super.hasAnyAnnotation(title);
         }
 
+        @Nullable
         @JsonIgnore
         @Override
-        public Map<String, Object> toMap(String title) {
+        public Map<String, Object> toMap(@Nullable String title) {
             return ToolAnnotations.super.toMap(title);
         }
 
