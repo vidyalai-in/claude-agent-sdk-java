@@ -364,7 +364,7 @@ public static List<SessionMessage> getSubagentMessages(
 )
 ```
 
-Read a subagent's user/assistant messages from its JSONL transcript. Walks `parentUuid` links to reconstruct the chain.
+Read a subagent's user/assistant messages from its JSONL transcript. Walks `parentUuid` links to reconstruct the chain. Each message's `parentToolUseId` is the Agent `tool_use` in the parent session that spawned this subagent, and `parentAgentId` names the spawning subagent for nested ones; both come from the `agent-<agentId>.meta.json` sidecar beside the transcript, since the transcript lines themselves do not record them, and both are null when that sidecar is missing or unusable.
 
 **Parameters**:
 - `sessionId` - UUID of the parent session
@@ -638,7 +638,7 @@ public static List<SessionMessage> getSubagentMessagesFromStore(
     @Nullable Path directory, @Nullable Integer limit, int offset)
 ```
 
-Read a subagent's transcript from a store. Filters out synthetic `agent_metadata` entries.
+Read a subagent's transcript from a store. The synthetic `agent_metadata` entry is not returned as a message; it is read to populate each message's `parentToolUseId` (the Agent `tool_use` that spawned the subagent) and `parentAgentId` (the spawning subagent, for nested subagents). Both are null when that entry is absent or carries non-string ids.
 
 ### renameSessionViaStore(SessionStore, String, String, Path)
 

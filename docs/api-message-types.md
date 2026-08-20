@@ -137,6 +137,10 @@ record ResultMessage(
 }
 ```
 
+When a run ends in a terminal error result the CLI also exits non-zero, and the SDK reports that as a [`ResultException`](./api-exceptions.md#resultexception) carrying the same payload as this message — see that page for which API surfaces it and which do not.
+
+**Parsing note on `errors`:** the CLI sends a list of strings here. A bare string is tolerated and kept as a single-element list, and any other shape is ignored rather than rejecting the whole result frame; the Python SDK performs no type check on this field at all, so a malformed value must not cost the caller the entire result.
+
 Backwards-compatible constructors are also available for code that does not need the newer fields. The original 11-parameter constructor (without `modelUsage`, `permissionDenials`, `deferredToolUse`, `errors`, `apiErrorStatus`, `uuid`, `terminalReason`, and `origin`) continues to work; 15-parameter (without `deferredToolUse`, `apiErrorStatus`, `terminalReason`, `origin`), 17-parameter (without `terminalReason`, `origin`) and 18-parameter (without `origin`) overloads are also available for callers written against the earlier shapes.
 
 ### terminalReason

@@ -410,7 +410,11 @@ McpSdkServerConfig config = server.toConfig();
 
 ### JSON Schema Format
 
-Tools use JSON Schema Draft 7 for input validation:
+A tool's `inputSchema` is JSON Schema. Arguments are validated against it
+before the handler runs (see [Argument validation](#argument-validation)).
+The dialect is taken from the schema's `$schema` keyword when present;
+without one, Draft 2020-12 is assumed — the dialect the MCP specification is
+written against. Draft 4, 6, 7, 2019-09 and 2020-12 are all understood.
 
 ```java
 Map<String, Object> schema = Map.of(
@@ -516,6 +520,9 @@ public CompletableFuture<ToolResult> fetchData(String url) {
 
 ### Error Handling
 
+Report a failure the model should see by returning `ToolResult.error(...)`,
+which produces a result carrying `isError: true`:
+
 ```java
 @Tool(name = "divide", description = "Divide two numbers")
 public CompletableFuture<ToolResult> divide(double a, double b) {
@@ -530,6 +537,67 @@ public CompletableFuture<ToolResult> divide(double a, double b) {
     );
 }
 ```
+
+You do not have to catch everything yourself: a handler that throws, or whose
+`CompletableFuture` completes exceptionally, is reported the same way (see
+[Failure semantics](#failure-semantics) below).
+
+### Argument validation
+
+Before a handler runs, the arguments in a `tools/call` are validated against
+the tool's declared `inputSchema`. This is required of MCP servers — *"Servers
+**MUST** validate all tool inputs"* — and it means a handler only ever sees
+arguments that match the contract it published.
+
+A call that does not match comes back as a tool result with `isError: true`
+and text beginning `Input validation error:`, and **the handler is not
+invoked**:
+
+```
+{"count": 21}            -> handler runs, returns its result
+{}                       -> Input validation error: required property 'count' not found
+{"count": "twenty-one"}  -> Input validation error: /count string found, integer expected
+```
+
+Two consequences worth relying on:
+
+- A tool with side effects cannot half-apply one before failing on arguments
+  it never agreed to accept.
+- The model receives a sentence naming the offending property, which it can
+  act on, rather than whatever exception the handler happened to throw when
+  it tried to read a missing or mistyped value.
+
+Validation fails **open**: a tool whose `inputSchema` cannot be compiled (or
+whose validation itself errors) is logged at `WARNING` and left callable
+without validation. A schema this server cannot understand must not make an
+otherwise working tool unusable. A tool with no schema, or an empty one, is
+likewise not validated.
+
+### Failure semantics
+
+How each kind of failure reaches the caller:
+
+| Situation | Response | What the model sees |
+|---|---|---|
+| Handler returns `ToolResult.error(msg)` | result, `isError: true` | `msg` |
+| Handler throws, or its future fails | result, `isError: true` | the exception message, or its class name when the message is null/blank |
+| Arguments do not match `inputSchema` | result, `isError: true` | `Input validation error: …` (handler not run) |
+| Tool name is not registered | JSON-RPC error `-32601` | `Tool not found: <name>` |
+
+The first three are *tool execution errors*: the call was processed and
+produced a result that happens to describe a failure, so the text reaches the
+model as tool output it can read and adapt to. The last is a *protocol*
+error — the MCP specification classifies an unknown tool that way, and a model
+can only call tools the server listed, so it indicates a host bug rather than
+something a model should work around.
+
+> **Note:** this mirrors the Python SDK except for the unknown-tool case, where
+> Python also returns `isError`. Java follows the specification's
+> classification there.
+
+A handler failure is also logged locally at `WARNING` with its stack trace, so
+a crashing tool is debuggable without the model's transcript being the only
+record.
 
 ### Long-Running Operations
 
@@ -815,6 +883,11 @@ public CompletableFuture<ToolResult> readFile(String path) {
 ```
 
 ### 4. Use Explicit Schemas for Complex Inputs
+
+A declared schema is what the SDK validates arguments against, so the more
+precisely it describes the input, the more the handler can take for granted —
+and the more useful the message the model gets back when it calls the tool
+wrongly. A tool with no schema is not validated at all.
 
 ```java
 // ✅ Good: Explicit schema with validation

@@ -188,6 +188,20 @@ The SDK follows a layered architecture with clear separation of concerns:
   - CompletableFuture-based async execution
   - Server info and capabilities
   - MCP protocol messages (initialize, list_tools, call_tool)
+  - Argument validation against each tool's `inputSchema`, compiled once when
+    the server is constructed
+- **Failure classification**: a failed `tools/call` is answered as a *tool
+  execution error* — a result carrying `isError: true` — when the call was
+  processed but produced a failure (handler threw, handler returned
+  `ToolResult.error`, or arguments did not match the schema, in which case the
+  handler is never invoked). Only an unknown tool name is a *protocol* error
+  (`-32601`), which is how the MCP specification classifies it. The split
+  matters because an `isError` result reaches the model as tool output it can
+  read and correct, whereas a JSON-RPC error says the request could not be
+  processed at all.
+- **Fail-open validation**: a tool whose schema cannot be compiled is logged
+  and left callable without validation, so a schema this server cannot parse
+  never makes a working tool unusable.
 
 #### SdkMcpTool
 - **Purpose**: Tool definition and execution wrapper
@@ -447,7 +461,7 @@ QueryHandler
 
 ### Stdin Lifecycle and In-Flight Tasks
 
-When hooks or SDK MCP servers are registered, the control protocol needs stdin open for the entire conversation, so `QueryHandler.streamInput()` waits for a run-ending `result` frame before calling `transport.endInput()`. Closing too early is not benign: the CLI in stream-json mode exits **only** on stdin EOF, so the close cannot simply be deferred to `close()` either — that would hang a one-shot `query()` forever.
+When hooks, SDK MCP servers, or a `canUseTool` permission callback are registered, the control protocol needs stdin open for the entire conversation, so `QueryHandler.streamInput()` waits for a run-ending `result` frame before calling `transport.endInput()`. All three are served the same way — the CLI writes a `control_request` and blocks until the SDK writes the matching `control_response` to stdin — so all three count as bidirectional needs (`hasBidirectionalNeeds()`). Closing too early is not benign: the CLI in stream-json mode exits **only** on stdin EOF, so the close cannot simply be deferred to `close()` either — that would hang a one-shot `query()` forever.
 
 The subtlety is that **a `result` frame ends one turn, not the run**. A background task keeps running past it and still needs stdin for hook and SDK-MCP control responses. Closing on the first result meant a still-running subagent's SDK-MCP tool calls failed with `"Stream closed"`, and — more quietly — its `PreToolUse` hooks were never delivered, so built-in tools kept executing and deny-gate hooks stopped gating.
 
@@ -588,6 +602,21 @@ HookInput (sealed interface)
 2. **JSpecify** (1.0.0)
    - Nullability annotations (`@Nullable`, `@NonNull`)
    - Purpose: Better null safety and IDE support
+
+3. **networknt json-schema-validator** (2.0.4)
+   - Purpose: Validate SDK MCP tool arguments against a tool's declared
+     `inputSchema` before the handler runs, as the MCP specification requires
+     of servers
+   - Pinned to the 2.x line deliberately: 3.x is built against Jackson 3
+     (`tools.jackson`) and would place a second complete JSON stack beside the
+     Jackson 2 above. 2.0.4 is the newest release that reuses our databind.
+   - Its YAML schema reader is excluded (tool schemas arrive as parsed maps),
+     as is a Surefire report formatter it declares compile-scope by mistake
+   - Brings `slf4j-api` (2.0.17) transitively. The SDK logs through
+     `java.util.logging` and ships **no** SLF4J binding — choosing one is the
+     application's call. An application with no provider sees a one-time
+     `No SLF4J providers were found` notice on stderr the first time it
+     constructs an SDK MCP server; adding any binding removes it.
 
 ### Test Dependencies
 

@@ -65,7 +65,8 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - External MCP servers (stdio/SSE/HTTP)
   - @Tool annotation usage
   - Programmatic tool creation
-  - Tool schemas and validation
+  - Tool schemas, and argument validation against a tool's `inputSchema`
+  - Failure semantics (`isError` results vs the `-32601` unknown-tool error)
   - Async execution patterns
   - Complete examples (calculator, database, API integration)
 
@@ -74,12 +75,14 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Filesystem-based agents
   - Large agent support (260KB+ via stdin)
   - AgentDefinition API (with skills, memory scope, and MCP server fields)
+  - Observing a subagent's output, and `forwardSubagentText`
 
 - **[Session History](./feature-session-history.md)** - Read and manage historical Claude Code conversation sessions from disk
   - Listing sessions across all projects or filtered by directory
   - Looking up a single session by ID (`getSessionInfo`)
   - Reading full conversation transcripts
-  - Reading subagent transcripts (`listSubagents`, `getSubagentMessages`)
+  - Reading subagent transcripts (`listSubagents`, `getSubagentMessages`),
+    attributed to the Agent `tool_use` that spawned them
   - Renaming sessions (`renameSession`)
   - Tagging sessions for organization (`tagSession`)
   - Deleting sessions (`deleteSession`) — cascades subagent transcript dir
@@ -169,6 +172,8 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
 
 - **[Exception Types](./api-exceptions.md)** - Error handling and exceptions
   - Exception hierarchy
+  - `ResultException` and the payload of a terminal error result
+  - Where each exception actually surfaces
   - Error handling examples
 
 ### Project Resources
@@ -294,7 +299,8 @@ See the `examples/` directory in the repository.
   - Interactive Conversations
   - Configuration Options (including `sessionStore` and `loadTimeoutMs`)
   - Message Types (task messages, server tool blocks, MirrorErrorMessage)
-  - MCP Servers (with ToolAnnotations, tool titles, and status types)
+  - MCP Servers (with ToolAnnotations, tool titles, status types, input
+    validation and failure semantics)
   - Agent Definitions
   - Extended Thinking Configuration (with `ThinkingDisplay`)
   - Hooks System (with agentId/agentType fields)
