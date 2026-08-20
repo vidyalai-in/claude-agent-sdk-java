@@ -538,14 +538,26 @@ active only in the `central` profile) and a Central Portal user token in
    ```
    This automatically updates the version for all modules (parent, SDK, examples).
 
-2. **Commit changes:**
+2. **Write the release notes** at `.github/release-notes/v<version>.md`
+   (e.g. `.github/release-notes/v0.1.1.md`). Describe what changed, leading
+   with anything breaking. The workflow reads this file for the GitHub
+   Release body and appends the standard installation and examples sections
+   itself, so do not repeat those.
+
+   The file is **required**: the workflow's "Assemble release notes" step
+   fails the run when it is missing. That check is deliberately placed before
+   the build and long before the Maven Central deploy, because a Central
+   release is permanent — failing at the release step instead would leave a
+   published artifact with no GitHub Release.
+
+3. **Commit changes:**
    ```bash
-   git add pom.xml .github/ CHANGELOG.md README.md CLAUDE.md
+   git add pom.xml .github/ docs/CHANGELOG.md README.md CLAUDE.md
    git commit -m "Prepare release 0.1.1"
    git push origin main
    ```
 
-3. **Trigger GitHub Actions workflow:**
+4. **Trigger GitHub Actions workflow:**
    - Navigate to: GitHub repository > Actions tab
    - Select "Publish Release" workflow
    - Click "Run workflow"
@@ -554,22 +566,22 @@ active only in the `central` profile) and a Central Portal user token in
      GitHub Packages mirror is retired)
    - Click "Run workflow" button
 
-4. **Monitor workflow execution** in the Actions tab
+5. **Monitor workflow execution** in the Actions tab
 
-5. **Central releases itself:** `<autoPublish>true</autoPublish>` is set in the
+6. **Central releases itself:** `<autoPublish>true</autoPublish>` is set in the
    `central` profile, so no click is needed in the Portal UI. The deploy blocks
    until the bundle reaches `VALIDATED`; if validation fails the build fails and
    nothing is released (retry the same version). Track progress at
    https://central.sonatype.com/publishing/deployments — artifacts reach
    `repo1.maven.org` in ~10-30 minutes, search indexing lags a few hours
 
-6. **Verify publication:**
+7. **Verify publication:**
    - Maven Central: https://central.sonatype.com/artifact/in.vidyalai/claude-agent-sdk-java
    - GitHub Packages: https://github.com/vidyalai-in/claude-agent-sdk-java/packages
    - Verify all JARs are present (main, sources, javadoc) plus `.asc` signatures
      on Central
 
-7. **Post-release - update to next SNAPSHOT version:**
+8. **Post-release - update to next SNAPSHOT version:**
    ```bash
    # Update <revision> in root pom.xml to next SNAPSHOT (e.g., 0.1.2-SNAPSHOT)
    # Edit: <revision>0.1.2-SNAPSHOT</revision>

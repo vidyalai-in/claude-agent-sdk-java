@@ -72,6 +72,47 @@ jobs:
             exit 1
           fi
 
+      # Assembled here, before the build and long before Maven Central, so a
+      # missing notes file fails the run while nothing has shipped. Doing this
+      # at the release step instead would fail *after* the permanent Central
+      # publish.
+      - name: Assemble release notes
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          NOTES=".github/release-notes/v${VERSION}.md"
+          if [ ! -f "$NOTES" ]; then
+            echo "Error: no release notes at $NOTES"
+            echo "Write that file describing what changed in ${VERSION}, then re-run."
+            exit 1
+          fi
+          cat "$NOTES" > release-body.md
+          # Quoted heredoc: the block below contains backticks, which an
+          # unquoted one would try to run. __VERSION__ is filled in after.
+          cat >> release-body.md <<'TEMPLATE'
+
+          ## Installation
+
+          ### Maven
+          ```xml
+          <dependency>
+              <groupId>in.vidyalai</groupId>
+              <artifactId>claude-agent-sdk-java</artifactId>
+              <version>__VERSION__</version>
+          </dependency>
+          ```
+
+          Available from Maven Central - no repository or authentication setup
+          required. The artifact is also mirrored to GitHub Packages, which
+          does require a personal access token; see the README if you need that.
+
+          ## Examples
+
+          Example code is available in the `examples/` module. See the README for instructions on running examples.
+          TEMPLATE
+          sed -i "s/__VERSION__/${VERSION}/g" release-body.md
+          echo "--- release body ---"
+          cat release-body.md
+
       - name: Build and test all modules
         run: mvn -B clean verify
 
@@ -98,26 +139,6 @@ jobs:
         with:
           tag_name: v${{ github.event.inputs.version }}
           name: Release v${{ github.event.inputs.version }}
-          body: |
-            Release ${{ github.event.inputs.version }} of claude-agent-sdk-java
-
-            ## Installation
-
-            ### Maven
-            ```xml
-            <dependency>
-                <groupId>in.vidyalai</groupId>
-                <artifactId>claude-agent-sdk-java</artifactId>
-                <version>${{ github.event.inputs.version }}</version>
-            </dependency>
-            ```
-
-            Available from Maven Central - no repository or authentication setup
-            required. The artifact is also mirrored to GitHub Packages, which
-            does require a personal access token; see the README if you need that.
-
-            ## Examples
-
-            Example code is available in the `examples/` module. See the README for instructions on running examples.
+          body_path: release-body.md
           draft: false
           prerelease: false

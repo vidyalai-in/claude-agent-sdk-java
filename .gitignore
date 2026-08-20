@@ -56,3 +56,6 @@ build/
 
 # macOS backup files
 *.~lock.*
+
+# Assembled by the publish workflow from .github/release-notes/
+release-body.md
