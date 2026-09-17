@@ -70,6 +70,25 @@ public final class TranscriptMirrorBatcher {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /**
+     * Where drains run. Deliberately <em>not</em> {@link #executor}.
+     *
+     * <p>A drain blocks waiting for the {@code appendAsync} it submits, and the
+     * default {@code appendAsync} submits to {@code executor}. Running the drain
+     * there too means it waits for a slot it is itself occupying: harmless on the
+     * unbounded thread-per-task default, but on a bounded executor - the
+     * configuration {@code SessionStoreExecutor}'s javadoc offers as an example -
+     * the append can never be scheduled, every flush waits out
+     * {@code sendTimeoutMs} and the batch is dropped through {@code onError}.
+     *
+     * <p>Shared and thread-per-task, so it costs nothing while idle, and daemon,
+     * so it never holds the JVM open. The adapter itself still runs on
+     * {@code executor}: that is the caller's lever for bounding their own store
+     * work, and this only keeps the SDK's blocking coordinator out of it.
+     */
+    private static final Executor DRAIN_EXECUTOR =
+            Threads.newThreadPerTaskExecutor("session-store-mirror-drain-");
+
     private final SessionStore store;
     private final String projectsDir;
     private final BiConsumer<@Nullable SessionKey, String> onError;
@@ -164,7 +183,7 @@ public final class TranscriptMirrorBatcher {
         // like asyncio does, so no done-callback to swallow CancellationException
         // is needed here. drainAndReport catches everything internally; close()
         // wraps with .exceptionally().
-        return CompletableFuture.runAsync(this::drainAndReport, executor);
+        return CompletableFuture.runAsync(this::drainAndReport, DRAIN_EXECUTOR);
     }
 
     /**
