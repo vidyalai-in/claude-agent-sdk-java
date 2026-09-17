@@ -7,8 +7,8 @@ Welcome to the technical documentation for the Claude Agent SDK for Java. This d
 The Claude Agent SDK for Java is a comprehensive library for integrating Claude AI capabilities into Java applications. It provides a type-safe, modern Java API for interacting with Claude Code CLI, supporting both simple one-shot queries and complex multi-turn conversations.
 
 **Key Highlights:**
-- 🎯 **Type-Safe API**: Leverages Java 25 features (sealed interfaces, records, pattern matching)
-- ⚡ **Virtual Threads**: Async operations powered by Project Loom virtual threads
+- 🎯 **Type-Safe API**: Sealed interfaces and records, so exhaustive pattern matching works in consumer code on Java 21+
+- ⚡ **Virtual Threads**: Background work runs on Project Loom virtual threads on Java 21+, and on daemon platform threads on 17-20
 - 🔧 **Flexible Architecture**: Support for both stateless queries and stateful conversations
 - 🛠️ **Custom Tools**: Create custom tools using MCP (Model Context Protocol)
 - 🔌 **Plugin System**: Extensible architecture for custom functionality
@@ -212,7 +212,7 @@ claude-agent-sdk-java/
 ## Getting Started
 
 ### Prerequisites
-- Java 25 (uses virtual threads and sealed interfaces)
+- Java 17 or newer (virtual threads are used automatically on 21+)
 - Maven 3.6+
 - Claude Code CLI installed separately
 

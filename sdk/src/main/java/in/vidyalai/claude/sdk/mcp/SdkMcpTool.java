@@ -272,7 +272,7 @@ public final class SdkMcpTool<T> {
          * @param handler the function to execute
          */
         public Builder<T> handler(Function<T, CompletableFuture<ToolResult>> handler) {
-            this.handler = (args, _) -> handler.apply(args);
+            this.handler = (args, ignoredContext) -> handler.apply(args);
             return this;
         }
 

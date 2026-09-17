@@ -1,3 +1,25 @@
+# Java Baseline
+
+The SDK targets **Java 17** (`<maven.compiler.release>17</maven.compiler.release>`
+in the root `pom.xml` — one property, used by the compiler plugin's `<release>`).
+`release` rather than `source`/`target` is deliberate: it is what rejects post-17
+JDK APIs at compile time.
+
+Two consequences for anyone editing this codebase:
+
+- **No pattern-matching `switch`, no `_` unnamed variables, no Java 18+ APIs.**
+  Dispatch over the sealed hierarchies uses `instanceof` chains. Sealed
+  interfaces, records, `var`, text blocks and `instanceof` patterns are all
+  Java 17 and fine. Consumers on JDK 21+ can still pattern-switch over the
+  SDK's sealed types — only the SDK's own code is constrained.
+- **Never call `Thread.ofVirtual()` or `Executors.newThreadPerTaskExecutor`
+  directly.** Go through `internal.Threads`, which uses them on Java 21+ and
+  falls back to named daemon platform threads otherwise.
+
+`SealedExhaustivenessTest` is the tripwire that replaces the compiler's
+exhaustiveness check: adding a permitted subtype to a sealed interface fails it,
+and the message names every dispatch site to update.
+
 # Multi-Module Project Structure
 
 This is a multi-module Maven project with two modules:
@@ -298,6 +320,13 @@ testing/
 └── SessionStoreConformance.java    # 14-contract behavioral suite for SessionStore adapters
 ```
 
+### Baseline guard tests (`sdk/src/test/java/in/vidyalai/claude/sdk/`)
+
+```
+types/SealedExhaustivenessTest.java  # Fails when a sealed hierarchy gains a subtype
+internal/ThreadsTest.java            # Covers both the virtual and platform thread paths
+```
+
 ### Internal runtime helpers (`sdk/src/main/java/in/vidyalai/claude/sdk/internal/`)
 
 The internal package contains the runtime SessionStore integration:
@@ -308,6 +337,7 @@ internal/
 ├── SessionResume.java              # Materializes store→temp CLAUDE_CONFIG_DIR for CLI resume
 ├── SessionImport.java              # Local JSONL → store replay (importSessionToStore)
 ├── SessionStoreValidation.java     # Fail-fast pre-flight option checks
+├── Threads.java                    # Virtual threads on 21+, daemon platform threads on 17
 ├── CanUseToolConfig.java           # Shared canUseTool validation + stdio routing
 ├── McpServers.java                 # Finds the in-process MCP handlers on the options
 ├── SessionStores.java              # *_from_store and *_via_store APIs
@@ -466,9 +496,12 @@ options.toBuilder()
     .build();
 ```
 
-## Virtual Threads (Concurrency)
+## Threads (Concurrency)
+The SDK targets Java 17, so it never calls `Thread.ofVirtual()` directly. All
+threads and executors come from `internal.Threads`, which uses virtual threads on
+Java 21+ and named daemon platform threads on 17-20:
 ```java
-Thread.startVirtualThread(() -> {
+Threads.start("MyComponent-Reader-", () -> {
     // Background work
 });
 ```

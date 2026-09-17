@@ -257,21 +257,7 @@ class TypesTest {
                 null,
                 null);
 
-        String result = switch (message) {
-            case UserMessage u -> "user: " + u.content();
-            case AssistantMessage a -> "assistant: " + a.getTextContent();
-            case SystemMessage s -> "system: " + s.subtype();
-            case TaskStartedMessage t -> "task_started: " + t.taskId();
-            case TaskProgressMessage t -> "task_progress: " + t.taskId();
-            case TaskNotificationMessage t -> "task_notification: " + t.status();
-            case TaskUpdatedMessage t -> "task_updated: " + t.status();
-            case MirrorErrorMessage m -> "mirror_error: " + m.error();
-            case HookEventMessage h -> "hook_event: " + h.hookEventName();
-            case ResultMessage r -> "result: " + r.result();
-            case StreamEvent e -> "event: " + e.eventType();
-            case RateLimitEvent rle -> "rate_limit: " + rle.rateLimitInfo().status();
-            case ConversationResetMessage c -> "conversation_reset: " + c.newConversationId();
-        };
+        String result = describe(message);
 
         assertThat(result).isEqualTo("assistant: Hello");
     }
@@ -280,19 +266,72 @@ class TypesTest {
     void patternMatchingOnContentBlock() {
         ContentBlock block = new ToolUseBlock("id", "Bash", Map.of("cmd", "ls"));
 
-        String result = switch (block) {
-            case TextBlock t -> "text: " + t.text();
-            case ThinkingBlock t -> "thinking: " + t.thinking();
-            case ToolUseBlock t -> "tool: " + t.name();
-            case ToolResultBlock t -> "result: " + t.toolUseId();
-            case ServerToolUseBlock s -> "server_tool: " + s.name();
-            case ServerToolResultBlock s -> "server_tool_result: " + s.toolUseId();
-            case ImageBlock i -> "image: " + i.mediaType();
-            case DocumentBlock d -> "document: " + d.mediaType();
-            case UnknownBlock u -> "unknown: " + u.type();
-        };
+        String result = describe(block);
 
         assertThat(result).isEqualTo("tool: Bash");
+    }
+
+    /**
+     * Type dispatch over the sealed {@code Message} hierarchy. An instanceof
+     * chain rather than a pattern switch because the SDK targets Java 17;
+     * {@code SealedExhaustivenessTest} is the tripwire that the compiler's
+     * exhaustiveness check used to provide.
+     */
+    private static String describe(Message message) {
+        if (message instanceof UserMessage u) {
+            return "user: " + u.content();
+        } else if (message instanceof AssistantMessage a) {
+            return "assistant: " + a.getTextContent();
+        } else if (message instanceof SystemMessage s) {
+            return "system: " + s.subtype();
+        } else if (message instanceof TaskStartedMessage t) {
+            return "task_started: " + t.taskId();
+        } else if (message instanceof TaskProgressMessage t) {
+            return "task_progress: " + t.taskId();
+        } else if (message instanceof TaskNotificationMessage t) {
+            return "task_notification: " + t.status();
+        } else if (message instanceof TaskUpdatedMessage t) {
+            return "task_updated: " + t.status();
+        } else if (message instanceof MirrorErrorMessage m) {
+            return "mirror_error: " + m.error();
+        } else if (message instanceof HookEventMessage h) {
+            return "hook_event: " + h.hookEventName();
+        } else if (message instanceof ResultMessage r) {
+            return "result: " + r.result();
+        } else if (message instanceof StreamEvent e) {
+            return "event: " + e.eventType();
+        } else if (message instanceof RateLimitEvent rle) {
+            return "rate_limit: " + rle.rateLimitInfo().status();
+        } else if (message instanceof ConversationResetMessage c) {
+            return "conversation_reset: " + c.newConversationId();
+        }
+        throw new IllegalStateException(
+                "Unhandled Message type: " + message.getClass().getName());
+    }
+
+    /** Type dispatch over the sealed {@code ContentBlock} hierarchy. */
+    private static String describe(ContentBlock block) {
+        if (block instanceof TextBlock t) {
+            return "text: " + t.text();
+        } else if (block instanceof ThinkingBlock t) {
+            return "thinking: " + t.thinking();
+        } else if (block instanceof ToolUseBlock t) {
+            return "tool: " + t.name();
+        } else if (block instanceof ToolResultBlock t) {
+            return "result: " + t.toolUseId();
+        } else if (block instanceof ServerToolUseBlock s) {
+            return "server_tool: " + s.name();
+        } else if (block instanceof ServerToolResultBlock s) {
+            return "server_tool_result: " + s.toolUseId();
+        } else if (block instanceof ImageBlock i) {
+            return "image: " + i.mediaType();
+        } else if (block instanceof DocumentBlock d) {
+            return "document: " + d.mediaType();
+        } else if (block instanceof UnknownBlock u) {
+            return "unknown: " + u.type();
+        }
+        throw new IllegalStateException(
+                "Unhandled ContentBlock type: " + block.getClass().getName());
     }
 
     // ==================== UserMessage Tests ====================

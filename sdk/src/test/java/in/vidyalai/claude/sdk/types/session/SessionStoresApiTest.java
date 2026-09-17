@@ -457,7 +457,6 @@ class SessionStoresApiTest {
         });
     }
 
-    @SuppressWarnings("null")
     @Test
     void getSubagentMessagesFromStore_recoversParentIdsFromAgentMetadata() {
         InMemorySessionStore store = new InMemorySessionStore();
@@ -477,7 +476,7 @@ class SessionStoresApiTest {
         // The metadata entries are not transcript lines and must not be
         // yielded as messages.
         assertThat(messages).hasSize(2);
-        assertThat(messages).extracting(SessionMessage::uuid).containsExactly("a1", "a2");
+        assertThat(messages).extracting(m -> m.uuid()).containsExactly("a1", "a2");
         assertThat(messages).allSatisfy(m -> {
             assertThat(m.parentToolUseId()).isEqualTo("toolu_new");
             assertThat(m.parentAgentId()).isEqualTo("a-parent");

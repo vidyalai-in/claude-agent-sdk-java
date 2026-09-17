@@ -114,7 +114,7 @@ class StdinCloseBehaviorTest {
         transportsToClose.add(transport);
         QueryHandler handler = start(transport, true);
 
-        Thread.startVirtualThread(() -> handler.streamInput(onePrompt().iterator()));
+        Threads.start("StdinCloseBehaviorTest-streamInput-", () -> handler.streamInput(onePrompt().iterator()));
 
         // The prompt has been written but no result has arrived: a permission
         // request could still come back over the control protocol.
@@ -130,7 +130,7 @@ class StdinCloseBehaviorTest {
         transportsToClose.add(transport);
         QueryHandler handler = start(transport, false);
 
-        Thread.startVirtualThread(() -> handler.streamInput(onePrompt().iterator()));
+        Threads.start("StdinCloseBehaviorTest-streamInput-", () -> handler.streamInput(onePrompt().iterator()));
 
         // No callback, no hooks, no SDK MCP servers: nothing needs stdin after
         // the prompt, so it closes at end of input.
@@ -144,7 +144,7 @@ class StdinCloseBehaviorTest {
         QueryHandler handler = start(transport, true);
 
         // Nothing was sent, so no result will arrive to release the hold.
-        Thread.startVirtualThread(
+        Threads.start("StdinCloseBehaviorTest-streamInput-", 
                 () -> handler.streamInput(List.<Map<String, Object>>of().iterator()));
 
         assertThat(transport.awaitEndInput(EXPECT_MS)).isTrue();
@@ -156,7 +156,7 @@ class StdinCloseBehaviorTest {
         transportsToClose.add(transport);
         QueryHandler handler = start(transport, true);
 
-        Thread.startVirtualThread(() -> handler.streamInput(new ThrowingIterator(0)));
+        Threads.start("StdinCloseBehaviorTest-streamInput-", () -> handler.streamInput(new ThrowingIterator(0)));
 
         // The caller's iterator failed before sending anything. Leaving stdin
         // open would make the CLI wait for input forever and the consumer's
@@ -170,7 +170,7 @@ class StdinCloseBehaviorTest {
         transportsToClose.add(transport);
         QueryHandler handler = start(transport, true);
 
-        Thread.startVirtualThread(() -> handler.streamInput(new ThrowingIterator(1)));
+        Threads.start("StdinCloseBehaviorTest-streamInput-", () -> handler.streamInput(new ThrowingIterator(1)));
 
         // One message was written, so the bidirectional hold still applies:
         // the CLI may answer that turn with a permission request.

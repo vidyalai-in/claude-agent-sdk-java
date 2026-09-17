@@ -19,6 +19,11 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  * <p>
  * Use pattern matching to handle different config types:
  *
+ * <p><b>On Java 21+</b> an exhaustive switch needs no {@code default} - this
+ * interface is sealed, so the compiler checks the arms for you. The SDK itself
+ * is built for Java 17 and uses {@code instanceof} chains internally, but
+ * consumers are free to use either.
+ *
  * <pre>{@code
  * switch (config) {
  *     case ThinkingConfigAdaptive adaptive -> System.out.println("Adaptive thinking enabled");

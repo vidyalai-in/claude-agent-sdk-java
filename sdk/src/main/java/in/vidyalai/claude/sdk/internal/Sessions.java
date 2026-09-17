@@ -575,7 +575,7 @@ public class Sessions {
             Process process = pb.start();
             List<String> paths = Collections.synchronizedList(new ArrayList<>());
 
-            Thread reader = Thread.ofVirtual().start(() -> {
+            Thread reader = Threads.start("Sessions-WorktreeReader-", () -> {
                 try (var scanner = new java.util.Scanner(process.getInputStream())) {
                     while (scanner.hasNextLine()) {
                         String ln = scanner.nextLine();

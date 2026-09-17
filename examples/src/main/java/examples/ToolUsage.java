@@ -57,32 +57,30 @@ public class ToolUsage {
                 options);
 
         for (Message msg : messages) {
-            switch (msg) {
-                case AssistantMessage assistant -> {
-                    // Check for tool use
-                    for (ContentBlock block : assistant.content()) {
-                        if (block instanceof ToolUseBlock toolUse) {
-                            System.out.println("Using tool: " + toolUse.name());
-                            System.out.println("  Input: " + toolUse.input());
-                        } else if (block instanceof TextBlock text) {
-                            System.out.println("Claude: " + text.text());
-                        }
+            // The SDK targets Java 17, so these examples use instanceof chains.
+            // Message is a sealed interface, so on JDK 21+ you can write this
+            // as an exhaustive pattern switch instead:
+            //     switch (msg) { case AssistantMessage a -> ...; }
+            if (msg instanceof AssistantMessage assistant) {
+                // Check for tool use
+                for (ContentBlock block : assistant.content()) {
+                    if (block instanceof ToolUseBlock toolUse) {
+                        System.out.println("Using tool: " + toolUse.name());
+                        System.out.println("  Input: " + toolUse.input());
+                    } else if (block instanceof TextBlock text) {
+                        System.out.println("Claude: " + text.text());
                     }
                 }
-                case UserMessage user -> {
-                    // Tool results come as user messages
-                    for (ContentBlock block : user.contentAsBlocks()) {
-                        if (block instanceof ToolResultBlock result) {
-                            System.out.println("Tool result (truncated): " +
-                                    truncate(String.valueOf(result.content()), 100));
-                        }
+            } else if (msg instanceof UserMessage user) {
+                // Tool results come as user messages
+                for (ContentBlock block : user.contentAsBlocks()) {
+                    if (block instanceof ToolResultBlock result) {
+                        System.out.println("Tool result (truncated): " +
+                                truncate(String.valueOf(result.content()), 100));
                     }
                 }
-                case ResultMessage result -> {
-                    System.out.println("Completed in " + result.numTurns() + " turns");
-                }
-                default -> {
-                }
+            } else if (msg instanceof ResultMessage result) {
+                System.out.println("Completed in " + result.numTurns() + " turns");
             }
         }
     }

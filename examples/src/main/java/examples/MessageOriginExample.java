@@ -103,22 +103,19 @@ public class MessageOriginExample {
     private static ResultMessage drain(ClaudeSDKClient client, String label) {
         ResultMessage result = null;
         for (Message message : client.receiveResponse()) {
-            switch (message) {
-                case ConversationResetMessage reset -> {
-                    // The conversation was replaced. Snapshot any totals you
-                    // accumulate across the session: the CLI's counters restart
-                    // from zero, and subsequent messages carry a new session id.
-                    System.out.printf("[%s] conversation reset: session %s -> new conversation %s%n",
-                            label, reset.sessionId(), reset.newConversationId());
-                }
-                case ResultMessage r -> {
-                    result = r;
-                    System.out.printf("[%s] result: %s%n", label, format(r.origin()));
-                }
-                default -> {
-                    // Other message types aren't relevant to this example.
-                }
+            // The SDK targets Java 17, so this uses an instanceof chain. Message
+            // is sealed, so on JDK 21+ an exhaustive pattern switch works too.
+            if (message instanceof ConversationResetMessage reset) {
+                // The conversation was replaced. Snapshot any totals you
+                // accumulate across the session: the CLI's counters restart
+                // from zero, and subsequent messages carry a new session id.
+                System.out.printf("[%s] conversation reset: session %s -> new conversation %s%n",
+                        label, reset.sessionId(), reset.newConversationId());
+            } else if (message instanceof ResultMessage r) {
+                result = r;
+                System.out.printf("[%s] result: %s%n", label, format(r.origin()));
             }
+            // Other message types aren't relevant to this example.
         }
         return result;
     }

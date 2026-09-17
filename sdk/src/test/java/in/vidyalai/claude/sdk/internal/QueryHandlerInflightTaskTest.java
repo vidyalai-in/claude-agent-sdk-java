@@ -144,7 +144,7 @@ class QueryHandlerInflightTaskTest {
                 "type", "user",
                 "session_id", "",
                 "message", Map.of("role", "user", "content", "hi")));
-        Thread.startVirtualThread(() -> handler.streamInput(prompt.iterator()));
+        Threads.start("QueryHandlerInflightTaskTest-streamInput-", () -> handler.streamInput(prompt.iterator()));
         return transport;
     }
 

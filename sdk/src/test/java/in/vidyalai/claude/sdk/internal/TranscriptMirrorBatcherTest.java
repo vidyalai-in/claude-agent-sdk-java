@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -333,12 +334,24 @@ class TranscriptMirrorBatcherTest {
         // both frames before drainA scheduled by frame1 has acquired any
         // synchronization, and a single drain could pick up both frames.
         CountDownLatch firstAppendComplete = new CountDownLatch(1);
+        // Both appends are counted down here and awaited before the assertions
+        // below. flush() does not join an eager drain that is already in
+        // flight, so without this the second append can still be running when
+        // the receive loop exits. On Java 21+ the drains are virtual threads
+        // and usually win that race; on 17 they are platform threads and
+        // usually lose it.
+        CountDownLatch bothAppendsComplete = new CountDownLatch(2);
         SessionStore recording = new SessionStore() {
             @Override
             public void append(SessionKey key, List<SessionStoreEntry> entries) {
                 appendCalls.incrementAndGet();
-                received.computeIfAbsent(key, k -> new ArrayList<>()).addAll(entries);
+                // synchronizedList: the eager drains run on separate executor
+                // threads, so an ArrayList here is a genuine data race - it
+                // corrupts size() rather than merely reordering entries.
+                received.computeIfAbsent(key, k -> Collections.synchronizedList(new ArrayList<>()))
+                        .addAll(entries);
                 firstAppendComplete.countDown();
+                bothAppendsComplete.countDown();
             }
 
             @Override
@@ -397,12 +410,19 @@ class TranscriptMirrorBatcherTest {
                     break;
                 }
             }
-            // QueryHandler's receive loop calls batcher.flush() before
-            // yielding the result message, so by the time we exit the loop
-            // both eager drains scheduled by enqueue() have completed.
         }
 
+        // EAGER must append once per frame rather than coalescing both into a
+        // single append when result arrives. Waiting for the second append is
+        // what makes that check deterministic: a regression that coalesces
+        // still fails here, because the second append never arrives.
+        // (Object) picks ObjectAssert; assertThat(boolean) returns a
+        // wildcard-captured self type that JDT's null analysis flags when chained.
+        assertThat((Object) bothAppendsComplete.await(30, TimeUnit.SECONDS))
+                .as("EAGER mode must append once per transcript_mirror frame")
+                .isEqualTo(true);
         assertThat(appendCalls.get()).isEqualTo(2);
+        assertThat(received).hasSize(1);
         assertThat(received.values().iterator().next()).hasSize(2);
     }
 

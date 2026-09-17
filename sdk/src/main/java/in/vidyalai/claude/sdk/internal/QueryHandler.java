@@ -14,7 +14,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -434,22 +433,18 @@ public class QueryHandler implements AutoCloseable {
         this.initializeTimeout = initializeTimeout;
         this.messageQueue = new LinkedBlockingQueue<>((maxMsgQSize != null) ? maxMsgQSize : DEFAULT_MSG_Q_SIZE);
 
-        // Create separate executors for reader and control tasks
-        // Reader: Single-threaded executor with named virtual thread
-        this.readerExecutor = Executors.newSingleThreadExecutor(
-                Thread.ofVirtual()
-                        .name("QueryHandler-Reader-", 0)
-                        .factory());
+        // Create separate executors for reader and control tasks.
+        // Threads gives virtual threads on Java 21+ and named daemon platform
+        // threads on 17-20; the names are the same either way.
+        this.readerExecutor = Threads.newSingleThreadExecutor("QueryHandler-Reader-");
 
-        // Control: one virtual thread per request, and it must stay that way.
+        // Control: one thread per request, and it must stay that way.
         // An SDK MCP tool call parks its thread until the tool answers, and
         // the notifications/cancelled that ends it arrives as a *separate*
         // control request. Under any bounded pool that cancellation would
-        // queue behind the call it exists to cancel, and deadlock.
-        this.controlExecutor = Executors.newThreadPerTaskExecutor(
-                Thread.ofVirtual()
-                        .name("QueryHandler-Control-", 0)
-                        .factory());
+        // queue behind the call it exists to cancel, and deadlock. That is why
+        // the Java 17 fallback is an unbounded cached pool, not a fixed one.
+        this.controlExecutor = Threads.newThreadPerTaskExecutor("QueryHandler-Control-");
 
         // Get stream close timeout from env, default 60 seconds
         long timeoutMs = Long.parseLong(System.getenv().getOrDefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "60000"));
@@ -917,9 +912,14 @@ public class QueryHandler implements AutoCloseable {
             return;
         }
 
-        switch (response) {
-            case ControlResponse success -> future.complete(success);
-            case ControlErrorResponse err -> future.completeExceptionally(new ClaudeSDKException(err.error()));
+        // instanceof chain rather than a pattern switch: the SDK targets Java 17.
+        if (response instanceof ControlResponse success) {
+            future.complete(success);
+        } else if (response instanceof ControlErrorResponse err) {
+            future.completeExceptionally(new ClaudeSDKException(err.error()));
+        } else {
+            future.completeExceptionally(new ClaudeSDKException(
+                    "Unhandled control response type: " + response.getClass().getName()));
         }
     }
 
@@ -938,102 +938,95 @@ public class QueryHandler implements AutoCloseable {
 
             Map<String, Object> responseData = new HashMap<>();
 
-            // Pattern match on request type (discriminated union)
-            switch (requestData) {
-                case SDKControlPermissionRequest permissionReq -> {
-                    if (canUseTool == null) {
-                        throw new ClaudeSDKException("canUseTool callback is not provided");
-                    }
+            // Dispatch on request type (discriminated union).
+            // An instanceof chain rather than a pattern switch: the SDK targets Java 17.
+            // SealedExhaustivenessTest guards these arms against new
+            // SDKControlRequestData subtypes, which the compiler no longer can.
+            if (requestData instanceof SDKControlPermissionRequest permissionReq) {
+                if (canUseTool == null) {
+                    throw new ClaudeSDKException("canUseTool callback is not provided");
+                }
 
-                    String toolName = permissionReq.toolName();
-                    Map<String, Object> input = permissionReq.input();
+                String toolName = permissionReq.toolName();
+                Map<String, Object> input = permissionReq.input();
 
-                    // Build context with permission suggestions from CLI
-                    List<PermissionUpdate> suggestions = ((permissionReq.permissionSuggestions() != null)
-                            ? permissionReq.permissionSuggestions()
-                            : List.of());
-                    ToolPermissionContext context = new ToolPermissionContext(
-                            null,
-                            suggestions,
-                            permissionReq.toolUseId(),
-                            permissionReq.agentId(),
-                            permissionReq.blockedPath(),
-                            permissionReq.decisionReason(),
-                            permissionReq.title(),
-                            permissionReq.displayName(),
-                            permissionReq.description());
+                // Build context with permission suggestions from CLI
+                List<PermissionUpdate> suggestions = ((permissionReq.permissionSuggestions() != null)
+                        ? permissionReq.permissionSuggestions()
+                        : List.of());
+                ToolPermissionContext context = new ToolPermissionContext(
+                        null,
+                        suggestions,
+                        permissionReq.toolUseId(),
+                        permissionReq.agentId(),
+                        permissionReq.blockedPath(),
+                        permissionReq.decisionReason(),
+                        permissionReq.title(),
+                        permissionReq.displayName(),
+                        permissionReq.description());
 
-                    CompletableFuture<PermissionResult> resultFuture = canUseTool.apply(toolName, input, context);
-                    PermissionResult result = resultFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);
+                CompletableFuture<PermissionResult> resultFuture = canUseTool.apply(toolName, input, context);
+                PermissionResult result = resultFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);
 
-                    // Serialize permission result to response format
-                    switch (result) {
-                        case PermissionResultAllow allow -> {
-                            responseData = allow.toMap(input);
-                        }
-                        case PermissionResultDeny deny -> {
-                            responseData = deny.toMap(input);
-                        }
-                    }
+                // Serialize permission result to response format
+                if (result instanceof PermissionResultAllow allow) {
+                    responseData = allow.toMap(input);
+                } else if (result instanceof PermissionResultDeny deny) {
+                    responseData = deny.toMap(input);
+                } else {
+                    throw new ClaudeSDKException(
+                            "Unhandled permission result type: " + result.getClass().getName());
                 }
-                case SDKHookCallbackRequest hookReq -> {
-                    String callbackId = hookReq.callbackId();
-                    var callback = hookCallbacks.get(callbackId);
-                    if (callback == null) {
-                        throw new ClaudeSDKException("No hook callback found for ID: " + callbackId);
-                    }
+            } else if (requestData instanceof SDKHookCallbackRequest hookReq) {
+                String callbackId = hookReq.callbackId();
+                var callback = hookCallbacks.get(callbackId);
+                if (callback == null) {
+                    throw new ClaudeSDKException("No hook callback found for ID: " + callbackId);
+                }
 
-                    HookInput hookInput = hookReq.input();
-                    String toolUseId = hookReq.toolUseId();
-                    HookContext context = new HookContext(toolUseId);
+                HookInput hookInput = hookReq.input();
+                String toolUseId = hookReq.toolUseId();
+                HookContext context = new HookContext(toolUseId);
 
-                    CompletableFuture<HookOutput> outputFuture = callback.apply(hookInput, context);
-                    HookOutput output = outputFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);
-                    responseData = output.toMap();
-                }
-                case SDKControlMcpMessageRequest mcpReq ->
-                    responseData.put("mcp_response",
-                            handleSdkMcpRequest(mcpReq.serverName(), mcpReq.message()));
-                case SDKControlMCPStatusRequest ignored -> {
-                    // Interrupt is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected mcp status request from CLI: " + ignored);
-                }
-                case SDKControlInterruptRequest ignored -> {
-                    // Interrupt is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected interrupt request from CLI: " + ignored);
-                }
-                case SDKControlInitializeRequest ignored -> {
-                    // Initialize is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected initialize request from CLI: " + ignored);
-                }
-                case SDKControlSetPermissionModeRequest ignored -> {
-                    // Set permission mode is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected set_permission_mode request from CLI: " + ignored);
-                }
-                case SDKControlSetModelRequest ignored -> {
-                    // Set model is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected set_model request from CLI: " + ignored);
-                }
-                case SDKControlRewindFilesRequest ignored -> {
-                    // Rewind files is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected rewind_files request from CLI: " + ignored);
-                }
-                case SDKControlMcpReconnectRequest ignored -> {
-                    // MCP reconnect is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected mcp_reconnect request from CLI: " + ignored);
-                }
-                case SDKControlMcpToggleRequest ignored -> {
-                    // MCP toggle is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected mcp_toggle request from CLI: " + ignored);
-                }
-                case SDKControlStopTaskRequest ignored -> {
-                    // Stop task is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected stop_task request from CLI: " + ignored);
-                }
-                case SDKControlGetContextUsageRequest ignored -> {
-                    // Get context usage is sent from SDK to CLI, not CLI to SDK
-                    throw new ClaudeSDKException("Unexpected get_context_usage request from CLI: " + ignored);
-                }
+                CompletableFuture<HookOutput> outputFuture = callback.apply(hookInput, context);
+                HookOutput output = outputFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);
+                responseData = output.toMap();
+            } else if (requestData instanceof SDKControlMcpMessageRequest mcpReq) {
+                responseData.put("mcp_response",
+                        handleSdkMcpRequest(mcpReq.serverName(), mcpReq.message()));
+            } else if (requestData instanceof SDKControlMCPStatusRequest) {
+                // MCP status is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected mcp status request from CLI: " + requestData);
+            } else if (requestData instanceof SDKControlInterruptRequest) {
+                // Interrupt is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected interrupt request from CLI: " + requestData);
+            } else if (requestData instanceof SDKControlInitializeRequest) {
+                // Initialize is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected initialize request from CLI: " + requestData);
+            } else if (requestData instanceof SDKControlSetPermissionModeRequest) {
+                // Set permission mode is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected set_permission_mode request from CLI: " + requestData);
+            } else if (requestData instanceof SDKControlSetModelRequest) {
+                // Set model is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected set_model request from CLI: " + requestData);
+            } else if (requestData instanceof SDKControlRewindFilesRequest) {
+                // Rewind files is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected rewind_files request from CLI: " + requestData);
+            } else if (requestData instanceof SDKControlMcpReconnectRequest) {
+                // MCP reconnect is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected mcp_reconnect request from CLI: " + requestData);
+            } else if (requestData instanceof SDKControlMcpToggleRequest) {
+                // MCP toggle is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected mcp_toggle request from CLI: " + requestData);
+            } else if (requestData instanceof SDKControlStopTaskRequest) {
+                // Stop task is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected stop_task request from CLI: " + requestData);
+            } else if (requestData instanceof SDKControlGetContextUsageRequest) {
+                // Get context usage is sent from SDK to CLI, not CLI to SDK
+                throw new ClaudeSDKException("Unexpected get_context_usage request from CLI: " + requestData);
+            } else {
+                throw new ClaudeSDKException(
+                        "Unhandled control request type: " + requestData.getClass().getName());
             }
 
             // Send success response

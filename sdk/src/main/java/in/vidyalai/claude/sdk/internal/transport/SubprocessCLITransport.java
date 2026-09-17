@@ -20,7 +20,6 @@ import java.util.TreeSet;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -40,6 +39,7 @@ import in.vidyalai.claude.sdk.exceptions.CLIJSONDecodeException;
 import in.vidyalai.claude.sdk.exceptions.CLINotFoundException;
 import in.vidyalai.claude.sdk.exceptions.ProcessException;
 import in.vidyalai.claude.sdk.internal.SdkVersion;
+import in.vidyalai.claude.sdk.internal.Threads;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
@@ -273,16 +273,10 @@ public class SubprocessCLITransport implements Transport {
 
         // Create named executor services for background tasks
         // Stderr reader: Single-threaded executor for reading stderr
-        this.stderrExecutor = Executors.newSingleThreadExecutor(
-                Thread.ofVirtual()
-                        .name("SPCTransport-Stderr-", 0)
-                        .factory());
+        this.stderrExecutor = Threads.newSingleThreadExecutor("SPCTransport-Stderr-");
 
         // Message reader: Single-threaded executor for reading stdout messages
-        this.messageReaderExecutor = Executors.newSingleThreadExecutor(
-                Thread.ofVirtual()
-                        .name("SPCTransport-MsgReader-", 0)
-                        .factory());
+        this.messageReaderExecutor = Threads.newSingleThreadExecutor("SPCTransport-MsgReader-");
     }
 
     private String findCli() {
@@ -1330,21 +1324,20 @@ public class SubprocessCLITransport implements Transport {
         ThinkingConfig thinking = options.thinking();
         if (thinking != null) {
             in.vidyalai.claude.sdk.types.config.ThinkingDisplay display = null;
-            switch (thinking) {
-                case ThinkingConfigAdaptive adaptive -> {
-                    cmd.add("--thinking");
-                    cmd.add("adaptive");
-                    display = adaptive.display();
-                }
-                case ThinkingConfigEnabled enabled -> {
-                    cmd.add("--max-thinking-tokens");
-                    cmd.add(String.valueOf(enabled.budgetTokens()));
-                    display = enabled.display();
-                }
-                case ThinkingConfigDisabled _ -> {
-                    cmd.add("--thinking");
-                    cmd.add("disabled");
-                }
+            if (thinking instanceof ThinkingConfigAdaptive adaptive) {
+                cmd.add("--thinking");
+                cmd.add("adaptive");
+                display = adaptive.display();
+            } else if (thinking instanceof ThinkingConfigEnabled enabled) {
+                cmd.add("--max-thinking-tokens");
+                cmd.add(String.valueOf(enabled.budgetTokens()));
+                display = enabled.display();
+            } else if (thinking instanceof ThinkingConfigDisabled) {
+                cmd.add("--thinking");
+                cmd.add("disabled");
+            } else {
+                throw new IllegalStateException(
+                        "Unhandled thinking config type: " + thinking.getClass().getName());
             }
             // Forward --thinking-display only for adaptive/enabled (the
             // disabled case has no display option). Mirrors the Python SDK

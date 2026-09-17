@@ -163,12 +163,16 @@ public final class MessageParser {
             String uuid = (String) data.get("uuid");
             MessageOrigin origin = parseOrigin(data);
             Object tuResult = data.get("tool_use_result");
-            Map<String, Object> toolUseResult = switch (tuResult) {
-                case null -> null;
-                case Map<?, ?> m -> (Map<String, Object>) m;
-                case String s -> Map.of("unknown", s);
-                default -> Map.of("unknown", tuResult.toString());
-            };
+            Map<String, Object> toolUseResult;
+            if (tuResult == null) {
+                toolUseResult = null;
+            } else if (tuResult instanceof Map<?, ?> m) {
+                toolUseResult = (Map<String, Object>) m;
+            } else if (tuResult instanceof String s) {
+                toolUseResult = Map.of("unknown", s);
+            } else {
+                toolUseResult = Map.of("unknown", tuResult.toString());
+            }
 
             Map<String, Object> message = (Map<String, Object>) data.get("message");
             if (message == null) {

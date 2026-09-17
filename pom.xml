@@ -36,10 +36,14 @@
 
     <properties>
         <!-- CI Friendly Versions - Define version once here -->
-        <revision>0.1.26-SNAPSHOT</revision>
+        <revision>0.2.0</revision>
 
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
+        <!-- Baseline: Java 17 (LTS). `release` - not source/target - is what
+             actually rejects post-17 JDK APIs at compile time; source/target
+             would happily link against a newer rt image and then fail at
+             runtime on a 17 JRE. Virtual threads are still used when the
+             runtime provides them; see internal/Threads.java. -->
+        <maven.compiler.release>17</maven.compiler.release>
         <maven.compiler.plugin.version>3.14.1</maven.compiler.plugin.version>
         <maven.surefire.plugin.version>3.5.4</maven.surefire.plugin.version>
         <maven.jar.plugin.version>3.5.0</maven.jar.plugin.version>
@@ -169,14 +173,27 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>${maven.compiler.plugin.version}</version>
                     <configuration>
-                        <source>25</source>
-                        <target>25</target>
+                        <release>${maven.compiler.release}</release>
                         <compilerArgs>
                             <arg>-parameters</arg>
                         </compilerArgs>
-                        <!-- Disable incremental compilation to fix nested class ordering issues -->
-                        <useIncrementalCompilation>false</useIncrementalCompilation>
-                        <!-- Fork compilation to ensure proper class file generation -->
+                        <!-- useIncrementalCompilation is left at its default (true),
+                             which recompiles the whole module whenever anything
+                             changed. Setting it to false does NOT disable
+                             incremental compilation - the flag is inverted. It
+                             switches the plugin to timestamp-based stale-source
+                             selection, which hands javac a partial source set and
+                             leans on implicit compilation for the rest. That is
+                             unsound for Java: a file whose own timestamp did not
+                             move is never recompiled even when a type it depends
+                             on changed, and any class outside the reference
+                             closure of the "stale" files is simply never written.
+                             It produced intermittent "cannot find symbol" failures
+                             here, and `SdkVersion.java` made it constant, because
+                             templating-maven-plugin regenerates it every run so it
+                             was always the one stale file. -->
+                        <!-- Run javac in its own process, so a large compile cannot
+                             exhaust the Maven JVM's heap. -->
                         <fork>true</fork>
                     </configuration>
                 </plugin>

@@ -4,7 +4,7 @@ This module contains usage examples demonstrating various features of the Claude
 
 ## Prerequisites
 
-- Java 25+
+- Java 17 or newer
 - Maven 3.6+
 - Claude Code CLI installed (see main README)
 

@@ -461,13 +461,19 @@ public final class SessionResume {
 
     /** Whether {@code value} holds a NaN or infinite number at any depth. */
     private static boolean containsNonFiniteNumber(@Nullable Object value) {
-        return switch (value) {
-            case Double d -> d.isNaN() || d.isInfinite();
-            case Float f -> f.isNaN() || f.isInfinite();
-            case Map<?, ?> m -> m.values().stream().anyMatch(SessionResume::containsNonFiniteNumber);
-            case List<?> l -> l.stream().anyMatch(SessionResume::containsNonFiniteNumber);
-            case null, default -> false;
-        };
+        if (value instanceof Double d) {
+            return d.isNaN() || d.isInfinite();
+        }
+        if (value instanceof Float f) {
+            return f.isNaN() || f.isInfinite();
+        }
+        if (value instanceof Map<?, ?> m) {
+            return m.values().stream().anyMatch(SessionResume::containsNonFiniteNumber);
+        }
+        if (value instanceof List<?> l) {
+            return l.stream().anyMatch(SessionResume::containsNonFiniteNumber);
+        }
+        return false;
     }
 
     private static void writeRedactedCredentials(@Nullable String credsJson, Path dst) {

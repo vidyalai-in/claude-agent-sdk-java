@@ -125,7 +125,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Async control protocol using CompletableFuture
   - Request ID generation and tracking
   - Message queue with configurable size
-  - Background reader thread using virtual threads
+  - Background reader thread (virtual on Java 21+)
   - Control executor for async callbacks
 
 **Design Pattern**: Async Request/Response + Observer (for hooks)
@@ -167,7 +167,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - **JVM shutdown hook**: a static `ConcurrentHashMap.newKeySet()` tracks every spawned `Process`; a `Runtime.addShutdownHook` registered at class init calls `destroy()` on each live child so stray `claude` subprocesses do not leak when the parent JVM exits before `close()`. Mirrors the Python SDK's `atexit` handler.
 - **Implementation Details**:
   - Uses ProcessBuilder for subprocess management
-  - Virtual thread for stdout reading
+  - Dedicated thread for stdout reading (virtual on Java 21+)
   - BufferedReader with line-based parsing
   - Jackson for JSON serialization/deserialization
 
@@ -249,7 +249,7 @@ The SDK follows a layered architecture with clear separation of concerns:
 - **Purpose**: Mirror session transcripts to external storage (S3, Postgres, Redis, custom backends) so sessions are durable beyond local disk and resumable across hosts.
 - **Required methods**: `append(SessionKey, List<SessionStoreEntry>)`, `load(SessionKey)`.
 - **Optional methods** (with `implements*()` capability probes): `listSessions`, `listSessionSummaries`, `delete`, `listSubkeys`.
-- **Sync + Async API**: every method has a `*Async` (`CompletableFuture`) variant. Adapters with native non-blocking clients (AWS SDK v2 async, R2DBC, Lettuce reactive) override the `*Async` methods directly to avoid a thread hop. The default executor is configured via `SessionStoreExecutor` (per-task virtual threads by default).
+- **Sync + Async API**: every method has a `*Async` (`CompletableFuture`) variant. Adapters with native non-blocking clients (AWS SDK v2 async, R2DBC, Lettuce reactive) override the `*Async` methods directly to avoid a thread hop. The default executor is configured via `SessionStoreExecutor` (one thread per task; virtual on Java 21+, daemon platform threads otherwise).
 
 **Design Pattern**: Adapter + Capability Negotiation + Dual-API (Sync/Async)
 
@@ -362,24 +362,37 @@ List<Message> messages = ClaudeSDK.query("Hello");
 - Single entry point
 
 ### 4. Virtual Threads (Concurrency)
-Leverages Project Loom for lightweight concurrency:
+Leverages Project Loom for lightweight concurrency where the runtime offers it.
+
+The SDK compiles against Java 17, where `Thread.ofVirtual()` does not exist, so
+every thread and executor is created through `internal.Threads`. It resolves the
+Java 21 entry points reflectively once, into `static final` method handles, and
+falls back to named daemon platform threads when they are absent:
 
 ```java
 // Background reader thread
-Thread.ofVirtual()
-    .name("ClaudeSDK-Reader")
-    .start(() -> readLoop());
+Thread reader = Threads.start("ClaudeSDK-Reader-", () -> readLoop());
 
 // Executor for control protocol
-ExecutorService executor = Executors.newSingleThreadExecutor(
-    Thread.ofVirtual().factory());
+ExecutorService executor = Threads.newSingleThreadExecutor("ClaudeSDK-Reader-");
 ```
 
-**Benefits**:
+Thread names are identical on both paths, so thread dumps read the same way
+regardless of runtime. Set `-Dclaude.sdk.virtualThreads=false` to force the
+platform path on any JDK.
+
+**Benefits on Java 21+**:
 - Lightweight threads (thousands possible)
 - Blocking I/O without thread pool exhaustion
 - Simpler async code
 - Better resource utilization
+
+**On Java 17-20**: the same code runs on daemon platform threads. The executors
+stay *unbounded* rather than becoming fixed pools — `QueryHandler`'s control
+executor parks a thread for the duration of an SDK MCP tool call, and the
+cancellation that ends it arrives as a separate task, so a bounded pool would
+deadlock. The cost is an OS thread per in-flight control request instead of a
+virtual one.
 
 ### 5. CompletableFuture (Async Operations)
 Used for async callbacks and control protocol:
@@ -488,7 +501,7 @@ QueryHandler
 
 ### Control Request Failure Handling
 
-Every inbound `control_request` is handled on its own virtual thread, submitted
+Every inbound `control_request` is handled on its own thread, submitted
 with `ExecutorService.submit(...)` — whose `Future` nothing reads. So a
 `Throwable` escaping the handler used to disappear without a trace, and because
 the CLI blocks until it receives the matching `control_response`, the run hung
@@ -541,13 +554,13 @@ This is a mitigation rather than a complete answer: an empty ledger means "nothi
 
 ### Thread Architecture
 
-The SDK uses a multi-threaded architecture with virtual threads:
+The SDK uses a multi-threaded architecture (virtual threads on Java 21+, daemon platform threads on 17-20):
 
 1. **Main Thread**: User's application thread
-2. **Reader Thread**: Virtual thread reading from CLI stdout
+2. **Reader Thread**: Reads from CLI stdout
 3. **Control Executor**: Thread pool for async control protocol operations
 4. **Streaming Executor**: Optional thread for streaming input messages
-5. **Hook Executors**: Virtual threads for parallel hook execution
+5. **Hook Executors**: One thread per in-flight hook or tool call
 
 ### Thread Safety
 
@@ -687,7 +700,7 @@ HookInput (sealed interface)
 ### Build Dependencies
 
 1. **Maven Compiler Plugin** (3.14.1)
-   - Java 25 compilation with `-parameters` flag
+   - Java 17 compilation (`<release>17</release>`) with the `-parameters` flag
    - Purpose: Preserve parameter names for @Tool annotation
 
 2. **Flatten Maven Plugin** (1.7.3)
@@ -707,13 +720,13 @@ HookInput (sealed interface)
 5. **Builder Pattern**: Fluent, readable configuration
 6. **Fail Fast**: Validate early and throw meaningful exceptions
 7. **Pattern Matching**: Use modern Java features for cleaner code
-8. **Virtual Threads**: Lightweight concurrency without complexity
+8. **Virtual Threads**: Lightweight concurrency on Java 21+, transparently
 9. **Separation of Concerns**: Clear layer boundaries
 10. **Extensibility**: Plugin system and custom transports
 
 ## Performance Considerations
 
-1. **Virtual Threads**: Thousands of concurrent operations possible
+1. **Virtual Threads**: Thousands of concurrent operations possible on Java 21+
 2. **Buffered I/O**: Reduces system calls for subprocess communication
 3. **Message Queue**: Configurable size to balance memory and throughput
 4. **Lazy Initialization**: QueryHandler created only when needed

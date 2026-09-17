@@ -66,7 +66,6 @@ class OtelTraceContextTest {
                 TraceFlags.getSampled(), TraceState.getDefault());
     }
 
-    @SuppressWarnings("unused")
     @Test
     void testActiveSpanInjectsTraceparent() {
         registerW3cPropagator();
@@ -81,7 +80,6 @@ class OtelTraceContextTest {
         assertThat(env.get("TRACEPARENT")).isEqualTo(EXPECTED_TRACEPARENT);
     }
 
-    @SuppressWarnings("unused")
     @Test
     void testActiveSpanDoesNotOverrideUserSuppliedEnv() {
         registerW3cPropagator();
@@ -98,7 +96,6 @@ class OtelTraceContextTest {
         assertThat(env.get("TRACEPARENT")).isEqualTo("custom");
     }
 
-    @SuppressWarnings("unused")
     @Test
     void testActiveSpanScrubsStaleInheritedEnv() {
         registerW3cPropagator();
@@ -120,7 +117,6 @@ class OtelTraceContextTest {
         assertThat(env).doesNotContainKey("TRACESTATE");
     }
 
-    @SuppressWarnings("unused")
     @Test
     void testActiveSpanWritesTraceState() {
         registerW3cPropagator();
@@ -156,7 +152,6 @@ class OtelTraceContextTest {
         assertThat(env.get("TRACESTATE")).isEqualTo("vendor=abc");
     }
 
-    @SuppressWarnings("unused")
     @Test
     void testBaggageOnlyCarrierPreservesInheritedEnv() {
         // Composite(tracecontext, baggage) propagator with baggage in Context

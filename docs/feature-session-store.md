@@ -172,7 +172,7 @@ The internal mirror batcher and resume materializer call the `*Async` variants �
 
 ### Default delegation
 
-- If you override only the **sync** methods (the typical case for JDBC, Jedis, blocking S3 SDK v1), the `*Async` defaults wrap your sync calls in `CompletableFuture.supplyAsync(...)` on the configured executor (per-task virtual thread by default).
+- If you override only the **sync** methods (the typical case for JDBC, Jedis, blocking S3 SDK v1), the `*Async` defaults wrap your sync calls in `CompletableFuture.supplyAsync(...)` on the configured executor (one thread per task; virtual on Java 21+).
 - If you override only the **async** methods (recommended for AWS SDK v2 async / Lettuce reactive / R2DBC), implement the sync method as `appendAsync(key, entries).join()` so both call sites work.
 
 ```java
@@ -197,24 +197,23 @@ public class S3AsyncStore implements SessionStore {
 
 ## Configuring the Async Executor
 
-By default, async wrappers run on a **per-task virtual thread** via:
-
-```java
-Executors.newThreadPerTaskExecutor(
-    Thread.ofVirtual().name("session-store-", 0).factory());
-```
+By default, async wrappers run **one task per thread**, on threads named
+`session-store-<n>`. On Java 21+ those are virtual threads; on Java 17-20 the SDK
+falls back to daemon platform threads from an unbounded cached pool. The SDK
+targets Java 17 and picks the better option at runtime, so you get virtual
+threads without requiring them.
 
 You can override this once at startup via `SessionStoreExecutor`:
 
 ```java
 import in.vidyalai.claude.sdk.types.session.SessionStoreExecutor;
 
-// Bounded virtual-thread pool with a custom name
-ExecutorService bounded = Executors.newThreadPerTaskExecutor(
+// Your own virtual-thread executor (needs Java 21+ in *your* project)
+ExecutorService mine = Executors.newThreadPerTaskExecutor(
     Thread.ofVirtual().name("my-store-", 0).factory());
-SessionStoreExecutor.setDefault(bounded);
+SessionStoreExecutor.setDefault(mine);
 
-// Or a platform-thread pool when virtual threads aren't desired
+// Or a bounded platform-thread pool
 SessionStoreExecutor.setDefault(Executors.newFixedThreadPool(8));
 
 // Reset to the built-in default
@@ -452,7 +451,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 | `BATCHED` (default) | Once per `result` message OR when pending exceeds 500 entries / 1 MiB | Almost all production workloads — keeps adapter latency off the streaming hot path |
 | `EAGER` | Background drain scheduled after every enqueued frame | Live transcript streaming to clients, real-time audit pipelines, very large turns where you can't wait until `result` |
 
-`EAGER` zeroes the batcher's pending thresholds — every enqueued frame schedules a background flush via the configured `SessionStoreExecutor` (named virtual thread per task by default). Appends remain serialized in enqueue order; a slow adapter will not stall the read loop but will see frames coalesced while it's busy. The option is ignored when `sessionStore` is unset.
+`EAGER` zeroes the batcher's pending thresholds — every enqueued frame schedules a background flush via the configured `SessionStoreExecutor` (one named thread per task; virtual on Java 21+). Appends remain serialized in enqueue order; a slow adapter will not stall the read loop but will see frames coalesced while it's busy. The option is ignored when `sessionStore` is unset.
 
 ## Importing Local Sessions Into a Store
 
@@ -576,7 +575,7 @@ SessionSummaryEntry folded = SessionSummary.foldSessionSummary(
 ### When to override `*Async` methods
 
 - Your client is natively async (AWS SDK v2 async, R2DBC, Lettuce reactive) — override `*Async` to avoid a thread hop.
-- Your client is sync (JDBC, Jedis, AWS SDK v1) — implement only the sync methods; the default `*Async` wrappers are fine on virtual threads.
+- Your client is sync (JDBC, Jedis, AWS SDK v1) — implement only the sync methods; the default `*Async` wrappers are fine.
 
 ### When to use `importSessionToStore`
 

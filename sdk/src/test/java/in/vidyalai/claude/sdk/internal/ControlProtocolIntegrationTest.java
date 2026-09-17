@@ -277,31 +277,50 @@ public class ControlProtocolIntegrationTest {
         }
     }
 
-    @SuppressWarnings("unused")
     @Test
     public void testPatternMatchingOnRequestTypes() throws Exception {
         SDKControlRequest request = new SDKControlRequest(
                 "req-1",
                 new SDKControlSetModelRequest("claude-sonnet-4-5"));
 
-        // Pattern matching with switch expression
-        String result = switch (request.request()) {
-            case SDKControlMCPStatusRequest r -> "mcp_status";
-            case SDKControlInterruptRequest r -> "interrupt";
-            case SDKControlPermissionRequest r -> "permission";
-            case SDKControlSetModelRequest r -> "set_model:" + r.model();
-            case SDKControlSetPermissionModeRequest r -> "set_mode";
-            case SDKControlInitializeRequest r -> "initialize";
-            case SDKHookCallbackRequest r -> "hook";
-            case SDKControlMcpMessageRequest r -> "mcp";
-            case SDKControlRewindFilesRequest r -> "rewind";
-            case SDKControlMcpReconnectRequest r -> "mcp_reconnect";
-            case SDKControlMcpToggleRequest r -> "mcp_toggle";
-            case SDKControlStopTaskRequest r -> "stop_task";
-            case SDKControlGetContextUsageRequest r -> "get_context_usage";
-        };
+        String result = describe(request.request());
 
         assertThat(result).isEqualTo("set_model:claude-sonnet-4-5");
     }
 
+    /**
+     * Type dispatch over the sealed {@code SDKControlRequestData} hierarchy.
+     * Mirrors the production chain in {@code QueryHandler.handleControlRequest}.
+     */
+    private static String describe(SDKControlRequestData requestData) {
+        if (requestData instanceof SDKControlMCPStatusRequest) {
+            return "mcp_status";
+        } else if (requestData instanceof SDKControlInterruptRequest) {
+            return "interrupt";
+        } else if (requestData instanceof SDKControlPermissionRequest) {
+            return "permission";
+        } else if (requestData instanceof SDKControlSetModelRequest r) {
+            return "set_model:" + r.model();
+        } else if (requestData instanceof SDKControlSetPermissionModeRequest) {
+            return "set_mode";
+        } else if (requestData instanceof SDKControlInitializeRequest) {
+            return "initialize";
+        } else if (requestData instanceof SDKHookCallbackRequest) {
+            return "hook";
+        } else if (requestData instanceof SDKControlMcpMessageRequest) {
+            return "mcp";
+        } else if (requestData instanceof SDKControlRewindFilesRequest) {
+            return "rewind";
+        } else if (requestData instanceof SDKControlMcpReconnectRequest) {
+            return "mcp_reconnect";
+        } else if (requestData instanceof SDKControlMcpToggleRequest) {
+            return "mcp_toggle";
+        } else if (requestData instanceof SDKControlStopTaskRequest) {
+            return "stop_task";
+        } else if (requestData instanceof SDKControlGetContextUsageRequest) {
+            return "get_context_usage";
+        }
+        throw new IllegalStateException(
+                "Unhandled SDKControlRequestData type: " + requestData.getClass().getName());
+    }
 }

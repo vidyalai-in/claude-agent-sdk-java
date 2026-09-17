@@ -4,7 +4,9 @@ Java SDK for Claude Agent. This SDK provides a comprehensive Java API for intera
 
 ## Requirements
 
-- Java 25 (uses virtual threads and sealed interfaces)
+- Java 17 or newer (uses sealed interfaces and records)
+  - On Java 21+ the SDK runs its background work on virtual threads; on 17-20
+    it uses named daemon platform threads instead. No configuration needed.
 - Maven 3.6+
 
 **Note:** The Claude Code CLI must be installed separately:
@@ -1227,7 +1229,7 @@ client.query(messages.iterator());
 - **Synchronous iterators** (`Iterator<Message>`) instead of async iterables
 - **Try-with-resources** (`try (...)`) instead of async context managers
 - **CompletableFuture** for async callbacks (hooks, permissions)
-- **Virtual threads** (Java 21+) for efficient blocking I/O
+- **Virtual threads** for efficient blocking I/O when running on Java 21+, with a platform-thread fallback on 17-20
 - **ExecutorService** for background task management
 
 ### Why Python Async Examples Don't Directly Translate

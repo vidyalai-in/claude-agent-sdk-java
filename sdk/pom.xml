@@ -101,6 +101,16 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <!-- Names the automatic module so JPMS consumers get a
+                                 stable module name instead of one derived from the
+                                 jar filename. -->
+                            <Automatic-Module-Name>in.vidyalai.claude.sdk</Automatic-Module-Name>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
             </plugin>
             <!-- Copy dependencies to target/dependency for java -cp usage -->
             <plugin>

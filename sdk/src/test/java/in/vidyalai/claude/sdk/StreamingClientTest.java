@@ -25,6 +25,7 @@ import in.vidyalai.claude.sdk.types.message.Message;
 import in.vidyalai.claude.sdk.types.message.ResultMessage;
 import in.vidyalai.claude.sdk.types.permission.PermissionMode;
 import in.vidyalai.claude.sdk.types.permission.PermissionResultAllow;
+import in.vidyalai.claude.sdk.internal.Threads;
 
 /**
  * Tests for ClaudeSDKClient streaming functionality.
@@ -643,7 +644,7 @@ class StreamingClientTest {
         AtomicBoolean sentSecondMessage = new AtomicBoolean(false);
 
         // Receive messages in a separate thread
-        Thread receiveThread = Thread.startVirtualThread(() -> {
+        Thread receiveThread = Threads.start("StreamingClientTest-receive-", () -> {
             try {
                 Iterator<Message> messages = client.receiveMessages();
                 while (messages.hasNext()) {

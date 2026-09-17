@@ -197,7 +197,7 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 
 ✅ **All new features from Python SDK v0.1.68 are now implemented in Java SDK v0.1.13**. This includes:
 - ✅ **`SessionStore` adapter protocol** (v0.1.64): `SessionStore` interface with required `append`/`load` and optional `listSessions`/`listSessionSummaries`/`delete`/`listSubkeys` methods, plus probe flags (`implementsListSessions()`, etc.) so callers can detect optional capabilities without `instanceof`. Java exposes both synchronous and asynchronous (`CompletableFuture`) variants — adapters can override either; the unimplemented variant defaults to wrapping the implemented one (sync→async via configurable executor, async→sync via `.join()`).
-- ✅ **Async SessionStore variants** with **configurable executor**: `appendAsync`/`loadAsync`/`listSessionsAsync`/`listSessionSummariesAsync`/`deleteAsync`/`listSubkeysAsync` default methods. Each has overloads that take an explicit `Executor` for per-call control. The default executor is configured globally via `SessionStoreExecutor.setDefault(Executor)`; the built-in default is a per-task virtual thread (`Thread.ofVirtual()`). Adapters with native async clients (AWS SDK v2 async, R2DBC, Lettuce reactive) should override the `*Async` methods directly to avoid a thread hop. The mirror batcher and resume materializer call the `*Async` variants so async adapters preserve parallelism end-to-end.
+- ✅ **Async SessionStore variants** with **configurable executor**: `appendAsync`/`loadAsync`/`listSessionsAsync`/`listSessionSummariesAsync`/`deleteAsync`/`listSubkeysAsync` default methods. Each has overloads that take an explicit `Executor` for per-call control. The default executor is configured globally via `SessionStoreExecutor.setDefault(Executor)`; the built-in default is one thread per task (`Thread.ofVirtual()` on Java 21+, a named daemon platform thread on 17-20). Adapters with native async clients (AWS SDK v2 async, R2DBC, Lettuce reactive) should override the `*Async` methods directly to avoid a thread hop. The mirror batcher and resume materializer call the `*Async` variants so async adapters preserve parallelism end-to-end.
 - ✅ **SessionStore types** (v0.1.64): `SessionKey`, `SessionListSubkeysKey`, `SessionStoreEntry` (map-backed structural supertype), `SessionStoreListEntry`, `SessionSummaryEntry`, all in `in.vidyalai.claude.sdk.types.session`.
 - ✅ **`InMemorySessionStore`** reference implementation for tests/dev with full conformance coverage (v0.1.64). Includes `InMemorySessionStore.filePathToSessionKey(filePath, projectsDir)` static helper for resolving paths back to keys.
 - ✅ **`SessionSummary`** helpers — `foldSessionSummary()` and `summaryEntryToSdkInfo()` for incremental sidecar maintenance (v0.1.64).
@@ -558,7 +558,7 @@ All 37+ configuration options are implemented with 100% parity:
 
 | Aspect | Python | Java | Assessment |
 |--------|--------|------|------------|
-| **Async model** | `async/await` (asyncio/trio) | Virtual threads + blocking I/O | ✅ Idiomatic |
+| **Async model** | `async/await` (asyncio/trio) | Blocking I/O on virtual threads (Java 21+) or daemon platform threads (17-20) | ✅ Idiomatic |
 | **Type system** | Union types, Literal | Sealed interfaces, enums | ✅ Idiomatic |
 | **Data structures** | `@dataclass` | `record` | ✅ Idiomatic |
 | **Pattern matching** | `isinstance()` checks | `switch` expressions | ✅ Idiomatic |
@@ -695,7 +695,7 @@ All 37+ configuration options are implemented with 100% parity:
 | **Test dependencies** | pytest, pytest-asyncio | JUnit 5, AssertJ, Mockito |
 | **Type checking** | mypy | Java compiler + JSpecify |
 | **JSON processing** | Built-in json + dataclasses | Jackson (more powerful) |
-| **Async runtime** | asyncio/trio (explicit) | Virtual threads (implicit) |
+| **Async runtime** | asyncio/trio (explicit) | Virtual threads on Java 21+, platform threads on 17-20 (implicit) |
 | **CLI bundling** | ✅ CLI bundled in wheel | ❌ CLI must be installed separately |
 
 **Key Difference:** Python SDK bundles Claude Code CLI, Java requires separate installation.
@@ -726,7 +726,7 @@ All 37+ configuration options are implemented with 100% parity:
 | Pattern matching | `isinstance()` | `switch` expressions | ✅ Equivalent |
 | Data classes | `@dataclass` | `record` | ✅ Equivalent |
 | Builders | Dataclass kwargs | Builder pattern | ✅ Idiomatic adaptation |
-| Async operations | `async/await` | `CompletableFuture` + virtual threads | ✅ Idiomatic adaptation |
+| Async operations | `async/await` | `CompletableFuture` + virtual threads (Java 21+) | ✅ Idiomatic adaptation |
 | Context managers | `async with` | `try-with-resources` | ✅ Equivalent |
 | Decorators | `@tool` | `@Tool` annotation | ✅ Equivalent |
 | Callbacks | Async functions | Functional interfaces | ✅ Idiomatic adaptation |
@@ -745,7 +745,7 @@ All 37+ configuration options are implemented with 100% parity:
 ### Java SDK Advantages
 - ✅ Compile-time type safety
 - ✅ Better IDE support (autocomplete, refactoring)
-- ✅ Virtual threads (efficient concurrency)
+- ✅ Virtual threads on Java 21+ (efficient concurrency), with a Java 17 fallback
 - ✅ Richer builder patterns
 - ✅ Convenience helper methods
 - ✅ No runtime dependencies (except CLI)

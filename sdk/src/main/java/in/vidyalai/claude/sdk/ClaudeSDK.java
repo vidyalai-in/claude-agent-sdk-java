@@ -7,7 +7,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import org.jspecify.annotations.Nullable;
@@ -22,6 +21,7 @@ import in.vidyalai.claude.sdk.internal.SessionImport;
 import in.vidyalai.claude.sdk.internal.SessionMutations;
 import in.vidyalai.claude.sdk.internal.SessionStores;
 import in.vidyalai.claude.sdk.internal.Sessions;
+import in.vidyalai.claude.sdk.internal.Threads;
 import in.vidyalai.claude.sdk.internal.TranscriptMirrorBatcher;
 import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.McpMessageHandler;
@@ -293,10 +293,7 @@ public final class ClaudeSDK {
             queryHandler.initialize();
 
             // Create executor service for streaming input with named virtual threads
-            streamingExecutor = Executors.newSingleThreadExecutor(
-                    Thread.ofVirtual()
-                            .name("ClaudeSDK-Streaming-", 0)
-                            .factory());
+            streamingExecutor = Threads.newSingleThreadExecutor("ClaudeSDK-Streaming-");
 
             // Stream input messages in background
             streamingExecutor.submit(() -> qh.streamInput(messageStream));

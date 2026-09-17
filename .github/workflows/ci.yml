@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Java ${{ matrix.java }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Report every JDK's result: knowing that only the 17 leg broke is the
+      # whole point of the matrix.
+      fail-fast: false
+      matrix:
+        # 17 is the baseline, so it is the leg that has to stay green. 21 and 25
+        # cover the runtimes where Threads takes the virtual-thread path, which
+        # `--release 17` alone cannot check: it verifies compilation against the
+        # 17 API, not what the code does on a newer JVM.
+        java: ['17', '21', '25']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and test
+        run: mvn -B clean verify
+
+      - name: Verify bytecode targets Java 17
+        # Guards the baseline itself. Without this, someone bumping
+        # maven.compiler.release would still get a green matrix.
+        run: |
+          major=$(javap -v -cp sdk/target/classes in.vidyalai.claude.sdk.ClaudeSDK \
+                  | awk '/major version/ {print $3; exit}')
+          echo "class file major version: $major"
+          if [ "$major" != "61" ]; then
+            echo "::error::Expected major version 61 (Java 17), got $major"
+            exit 1
+          fi
