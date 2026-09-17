@@ -150,6 +150,7 @@
                 <configuration>
                     <!-- Disable strict doclint checking -->
                     <doclint>none</doclint>
+                    <legacyMode>true</legacyMode>
                     <!-- Don't fail build on javadoc errors -->
                     <failOnError>false</failOnError>
                     <failOnWarnings>false</failOnWarnings>
