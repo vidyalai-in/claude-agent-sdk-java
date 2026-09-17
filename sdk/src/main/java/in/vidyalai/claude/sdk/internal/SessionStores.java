@@ -638,60 +638,69 @@ public final class SessionStores {
         java.util.concurrent.Semaphore sem =
                 new java.util.concurrent.Semaphore(STORE_LIST_LOAD_CONCURRENCY);
         String projectKey = projectKeyForDirectory(directory);
-        java.util.List<java.util.concurrent.CompletableFuture<Map.Entry<String, SDKSessionInfo>>> futures =
-                new java.util.ArrayList<>(slots.size());
+
+        // Issue the loads from *this* thread rather than from a task submitted to
+        // the store executor. loadAsync()'s default implementation submits to that
+        // same executor, so a task blocking there waits on a slot it is itself
+        // occupying: with a bounded executor - the very thing SessionStoreExecutor's
+        // javadoc suggests - every worker parks and the listing never completes.
+        // Acquiring the permit here bounds concurrency exactly as before, but parks
+        // the caller instead of an executor thread.
+        List<Slot> issued = new ArrayList<>(slots.size());
+        List<java.util.concurrent.CompletableFuture<@Nullable SDKSessionInfo>> futures =
+                new ArrayList<>(slots.size());
 
         for (Slot slot : slots) {
-            futures.add(java.util.concurrent.CompletableFuture.supplyAsync(() -> {
-                try {
-                    sem.acquire();
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    return java.util.Map.<String, SDKSessionInfo>entry(slot.sessionId(),
-                            sentinelOnError(slot, projectPath));
+            try {
+                sem.acquire();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            SessionKey key = new SessionKey(projectKey, slot.sessionId(), null);
+            java.util.concurrent.CompletableFuture<@Nullable List<SessionStoreEntry>> load;
+            try {
+                load = sessionStore.loadAsync(key);
+            } catch (RuntimeException e) {
+                // An adapter that throws outright rather than returning a failed future.
+                sem.release();
+                issued.add(slot);
+                futures.add(java.util.concurrent.CompletableFuture.completedFuture(
+                        sentinelOnError(slot, projectPath)));
+                continue;
+            }
+            issued.add(slot);
+            futures.add(load.handle((entries, err) -> {
+                sem.release();
+                if (err != null) {
+                    return sentinelOnError(slot, projectPath);
                 }
-                try {
-                    SessionKey key = new SessionKey(projectKey, slot.sessionId(), null);
-                    List<SessionStoreEntry> entries;
-                    try {
-                        entries = sessionStore.loadAsync(key).get();
-                    } catch (java.util.concurrent.ExecutionException ee) {
-                        return java.util.Map.<String, SDKSessionInfo>entry(slot.sessionId(),
-                                sentinelOnError(slot, projectPath));
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        return java.util.Map.<String, SDKSessionInfo>entry(slot.sessionId(),
-                                sentinelOnError(slot, projectPath));
-                    }
-                    if (entries == null || entries.isEmpty()) {
-                        return java.util.Map.<String, SDKSessionInfo>entry(slot.sessionId(), null);
-                    }
-                    long mtime = slot.mtime() != 0
-                            ? slot.mtime()
-                            : mtimeFromEntriesTail(entries);
-                    SessionSummaryEntry folded = SessionSummary.foldSessionSummary(null, key, entries);
-                    SessionSummaryEntry stamped = new SessionSummaryEntry(
-                            folded.sessionId(), mtime, folded.data());
-                    SDKSessionInfo info = SessionSummary.summaryEntryToSdkInfo(stamped, projectPath);
-                    return java.util.Map.<String, SDKSessionInfo>entry(slot.sessionId(), info);
-                } finally {
-                    sem.release();
+                if (entries == null || entries.isEmpty()) {
+                    return null;
                 }
-            }, in.vidyalai.claude.sdk.types.session.SessionStoreExecutor.getDefault()));
+                long mtime = slot.mtime() != 0
+                        ? slot.mtime()
+                        : mtimeFromEntriesTail(entries);
+                SessionSummaryEntry folded = SessionSummary.foldSessionSummary(null, key, entries);
+                SessionSummaryEntry stamped = new SessionSummaryEntry(
+                        folded.sessionId(), mtime, folded.data());
+                return SessionSummary.summaryEntryToSdkInfo(stamped, projectPath);
+            }));
         }
 
         Map<String, SDKSessionInfo> result = new java.util.LinkedHashMap<>();
-        for (java.util.concurrent.CompletableFuture<Map.Entry<String, SDKSessionInfo>> f : futures) {
+        for (int i = 0; i < futures.size(); i++) {
             try {
-                Map.Entry<String, SDKSessionInfo> entry = f.get();
-                if (entry.getValue() != null) {
-                    result.put(entry.getKey(), entry.getValue());
+                SDKSessionInfo info = futures.get(i).get();
+                if (info != null) {
+                    result.put(issued.get(i).sessionId(), info);
                 }
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (java.util.concurrent.ExecutionException ee) {
-                // already converted to sentinel above; skip silently
+                // handle() above already maps failures to a sentinel; anything still
+                // failing here is not something a listing should surface.
             }
         }
         return result;
