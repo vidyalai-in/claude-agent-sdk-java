@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-09-17
+
+### Fixed
+- **0.2.0's Javadoc jar was empty; this restores it.** 532 bytes and four entries against 1.47 MB and 504 files in 0.1.25, its only content an empty `src/in.vidyalai.claude.sdk/` directory — the modular-javadoc output layout, and the tell. `maven-javadoc-plugin` reads `Automatic-Module-Name` out of `maven-jar-plugin`'s `manifestEntries`, concludes the project is a named module, and switches to modular processing; with no `module-info.java` it then found nothing to document, reported `error: No source files for package in.vidyalai.claude.sdk.types`, and wrote an empty jar. `failOnError=false` kept the build green while publishing it. `legacyMode=true` holds the plugin on non-modular processing: the jar is back to 1.36 MB / 495 files **and** `Automatic-Module-Name` stays in the manifest, so the JPMS module name and the documentation were never actually a trade-off. Maven Central artifacts cannot be replaced, so 0.2.0's javadoc jar stays empty — hence this release.
+
+### Changed
+- **The release workflow's `softprops/action-gh-release` step moved from `v2` to `v3`.** The `v2` tag is pinned to the 2.x line, which declares `using: node20`; GitHub-hosted runners now force those onto Node 24 and warn, and once the forcing stops the step breaks rather than warns. `v3.0.0` moved the runtime and changed nothing else, so the step's inputs are unaffected. No effect on published artifacts.
+- **The Maven and Gradle install snippets in the READMEs now point at a current release.** They still read `0.1.21`, four releases behind and — since 0.2.0 — contradicting the "Java 17 or newer" requirement stated directly above them, because 0.1.21 requires Java 25.
+
 ## [0.2.0] - 2026-09-17
 
 ### Changed

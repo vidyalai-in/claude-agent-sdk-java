@@ -36,7 +36,7 @@
 
     <properties>
         <!-- CI Friendly Versions - Define version once here -->
-        <revision>0.2.0</revision>
+        <revision>0.2.1</revision>
 
         <!-- Baseline: Java 17 (LTS). `release` - not source/target - is what
              actually rejects post-17 JDK APIs at compile time; source/target
