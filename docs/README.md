@@ -365,6 +365,8 @@ Contributions are welcome! Please see the repository for contribution guidelines
 
 ## Version
 
-Current version: 0.1.21
+The current release is whatever [Maven Central](https://central.sonatype.com/artifact/in.vidyalai/claude-agent-sdk-java)
+lists — deliberately not repeated here, since a hand-maintained copy of it went
+four releases out of date.
 
 See [CHANGELOG.md](./CHANGELOG.md) for version history and release notes.

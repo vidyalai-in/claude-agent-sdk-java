@@ -30,7 +30,7 @@
              resolved from the reactor when building from the repository root.
              To build this module standalone against a published release, either
              run `mvn install` in ../sdk first or set this to a released version
-             (e.g. 0.1.21) — no authentication is required for Maven Central.
+             (e.g. 0.2.1) — no authentication is required for Maven Central.
         -->
         <dependency>
             <groupId>in.vidyalai</groupId>
