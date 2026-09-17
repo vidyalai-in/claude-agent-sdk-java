@@ -133,7 +133,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        # v3 is the Node 24 line. v2 is pinned to the 2.x releases, which run on
+        # Node 20 -- deprecated on GitHub-hosted runners, which now force them
+        # onto Node 24 and warn. v3.0.0 changed nothing but that runtime, so the
+        # inputs below are unaffected.
+        uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
