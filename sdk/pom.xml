@@ -101,16 +101,15 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <configuration>
-                    <archive>
-                        <manifestEntries>
-                            <!-- Names the automatic module so JPMS consumers get a
-                                 stable module name instead of one derived from the
-                                 jar filename. -->
-                            <Automatic-Module-Name>in.vidyalai.claude.sdk</Automatic-Module-Name>
-                        </manifestEntries>
-                    </archive>
-                </configuration>
+                <!-- No Automatic-Module-Name here. maven-javadoc-plugin reads it
+                     from these manifest entries and switches to modular
+                     processing, which this project cannot satisfy without a
+                     module-info.java: it then documents nothing at all (0.2.0
+                     shipped a 532-byte javadoc jar this way). Forcing
+                     legacyMode=true avoids that but silently drops packages that
+                     contain only package-info.java, breaking the 32 links to
+                     in.vidyalai.claude.sdk (0.2.1). Add a real module-info.java
+                     first if JPMS naming is wanted. -->
             </plugin>
             <!-- Copy dependencies to target/dependency for java -cp usage -->
             <plugin>
@@ -150,7 +149,6 @@
                 <configuration>
                     <!-- Disable strict doclint checking -->
                     <doclint>none</doclint>
-                    <legacyMode>true</legacyMode>
                     <!-- Don't fail build on javadoc errors -->
                     <failOnError>false</failOnError>
                     <failOnWarnings>false</failOnWarnings>

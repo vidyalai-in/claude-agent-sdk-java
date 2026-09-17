@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-09-17
+
+### Fixed
+- **Restored the last missing piece of the Javadoc, by dropping `Automatic-Module-Name`.** 0.2.1 fixed 0.2.0's empty javadoc jar but not completely: `legacyMode=true` keeps `maven-javadoc-plugin` out of modular processing, but it also silently drops packages containing only a `package-info.java`. `in.vidyalai.claude.sdk` is exactly that, so its page was never generated and the 32 `{@link in.vidyalai.claude.sdk.types}` references across the message, hook and permission types resolved to nothing — 32 build warnings, and dead text where a link belonged. Measured across all three configurations: `Automatic-Module-Name` alone documents nothing (0.2.0), with `legacyMode` documents everything but that package (0.2.1), and without either documents everything with zero warnings. `Automatic-Module-Name` was added in 0.2.0 as a convenience for JPMS consumers and has now cost two javadoc regressions, so it is gone; the honest way to get a stable module name is a real `module-info.java`, which this SDK does not yet have. JPMS consumers fall back to the filename-derived `claude.agent.sdk.java`, as they did up to 0.1.25.
+
 ## [0.2.1] - 2026-09-17
 
 ### Fixed
