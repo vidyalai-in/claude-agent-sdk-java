@@ -1,31 +1,33 @@
 # Claude Agent SDK for Java
 
-**English** · [简体中文](docs/zh/README.md) · [日本語](docs/ja/README.md) · [한국어](docs/ko/README.md) · [Português](docs/pt/README.md) · [Español](docs/es/README.md)
+[English](../../README.md) · [简体中文](../zh/README.md) · [日本語](../ja/README.md) · **한국어** · [Português](../pt/README.md) · [Español](../es/README.md)
 
-Java SDK for Claude Agent. This SDK provides a comprehensive Java API for interacting with Claude Code, enabling you to build AI-powered applications with Claude's capabilities.
+> **번역 안내**: 공식 문서는 영어판뿐입니다. 이 번역은 [영어 원문](../../README.md)보다 뒤처져 있을 수 있으며, 내용이 어긋날 경우 영어판이 기준입니다. 코드 블록은 영어 원문과 완전히 동일하게 유지되며 번역하지 않습니다. 자세한 내용은 [docs/TRANSLATIONS.md](../TRANSLATIONS.md)를 참고하세요.
 
-## Requirements
+Claude Agent를 위한 Java SDK입니다. 이 SDK는 Claude Code와 상호작용하기 위한 포괄적인 Java API를 제공하여, Claude의 기능을 활용한 AI 애플리케이션을 만들 수 있게 해줍니다.
 
-- Java 17 or newer (uses sealed interfaces and records)
-  - On Java 21+ the SDK runs its background work on virtual threads; on 17-20
-    it uses named daemon platform threads instead. No configuration needed.
+## 요구 사항
+
+- Java 17 이상 (sealed 인터페이스와 record를 사용합니다)
+  - Java 21 이상에서는 SDK가 백그라운드 작업을 가상 스레드에서 실행합니다. 17~20에서는
+    대신 이름이 지정된 데몬 플랫폼 스레드를 사용합니다. 별도의 설정은 필요 없습니다.
 - Maven 3.6+
 
-**Note:** The Claude Code CLI must be installed separately:
+**참고:** Claude Code CLI는 별도로 설치해야 합니다:
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-Or specify a custom path:
+또는 사용자 지정 경로를 지정합니다:
 ```java
 ClaudeAgentOptions.builder()
     .cliPath(Path.of("/path/to/claude"))
     .build();
 ```
 
-## Installation
+## 설치
 
-Released to Maven Central, so no repository or authentication setup is needed.
+Maven Central에 배포되어 있으므로 저장소나 인증 설정이 필요하지 않습니다.
 
 ### Maven
 
@@ -49,16 +51,16 @@ dependencies {
 }
 ```
 
-### Alternative: GitHub Packages
+### 대안: GitHub Packages
 
-Releases are also mirrored to GitHub Packages for consumers who already depend
-on it. This route requires a GitHub personal access token even though the
-artifacts are public, so prefer Maven Central unless you have a reason not to.
+이미 GitHub Packages에 의존하고 있는 사용자를 위해 릴리스는 그곳에도 미러링됩니다.
+아티팩트가 공개되어 있음에도 이 경로는 GitHub 개인 액세스 토큰을 요구하므로, 특별한 이유가
+없다면 Maven Central을 사용하세요.
 
 <details>
-<summary>GitHub Packages setup</summary>
+<summary>GitHub Packages 설정</summary>
 
-Add the repository to your `pom.xml`:
+`pom.xml`에 저장소를 추가합니다:
 
 ```xml
 <repositories>
@@ -69,7 +71,7 @@ Add the repository to your `pom.xml`:
 </repositories>
 ```
 
-Or to your `build.gradle.kts`:
+또는 `build.gradle.kts`에 추가합니다:
 
 ```kotlin
 repositories {
@@ -83,7 +85,7 @@ repositories {
 }
 ```
 
-Then authenticate. For Maven, add this to your `~/.m2/settings.xml`:
+그런 다음 인증을 설정합니다. Maven의 경우 `~/.m2/settings.xml`에 다음을 추가합니다:
 
 ```xml
 <settings>
@@ -97,18 +99,18 @@ Then authenticate. For Maven, add this to your `~/.m2/settings.xml`:
 </settings>
 ```
 
-For Gradle, create or update `~/.gradle/gradle.properties`:
+Gradle의 경우 `~/.gradle/gradle.properties`를 만들거나 수정합니다:
 
 ```properties
 gpr.user=YOUR_GITHUB_USERNAME
 gpr.key=YOUR_GITHUB_PERSONAL_ACCESS_TOKEN
 ```
 
-Generate a personal access token with `read:packages` scope at: https://github.com/settings/tokens
+`read:packages` 범위를 가진 개인 액세스 토큰은 https://github.com/settings/tokens 에서 생성하세요.
 
 </details>
 
-## Quick Start
+## 빠른 시작
 
 ```java
 import in.vidyalai.claude.sdk.ClaudeSDK;
@@ -127,9 +129,10 @@ public class QuickStart {
 }
 ```
 
-## Basic Usage: ClaudeSDK.query()
+## 기본 사용법: ClaudeSDK.query()
 
-`ClaudeSDK.query()` is for simple, one-shot queries. It returns a `List<Message>` with all response messages.
+`ClaudeSDK.query()`는 간단한 일회성 질의를 위한 것입니다. 모든 응답 메시지를 담은
+`List<Message>`를 반환합니다.
 
 ```java
 import in.vidyalai.claude.sdk.ClaudeSDK;
@@ -157,7 +160,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 List<Message> response = ClaudeSDK.query("Tell me a joke", options);
 ```
 
-### Convenience Methods
+### 편의 메서드
 
 ```java
 // Get just the text response
@@ -169,7 +172,7 @@ ResultMessage result = ClaudeSDK.queryForResult("Do something", options);
 System.out.println("Cost: $" + result.totalCostUsd());
 ```
 
-### Using Tools
+### 도구 사용하기
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -193,7 +196,7 @@ for (Message msg : messages) {
 }
 ```
 
-### Working Directory
+### 작업 디렉터리
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -201,7 +204,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Streaming Input (Multiple Messages)
+### 스트리밍 입력 (여러 메시지)
 
 ```java
 // Send multiple messages in sequence
@@ -217,9 +220,10 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 
 ## ClaudeSDKClient
 
-`ClaudeSDKClient` supports bidirectional, interactive conversations with Claude Code. Unlike `query()`, it enables **multi-turn conversations**, **custom tools**, **hooks**, and **real-time interaction**.
+`ClaudeSDKClient`는 Claude Code와의 양방향 대화형 세션을 지원합니다. `query()`와 달리
+**멀티턴 대화**, **사용자 정의 도구**, **훅(hooks)**, **실시간 상호작용**을 가능하게 합니다.
 
-### Basic Usage
+### 기본 사용법
 
 ```java
 import in.vidyalai.claude.sdk.ClaudeSDKClient;
@@ -253,7 +257,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Manual Connection Management
+### 연결 수동 관리
 
 ```java
 ClaudeSDKClient client = new ClaudeSDKClient();
@@ -275,7 +279,7 @@ try {
 }
 ```
 
-### Interrupt Execution
+### 실행 중단
 
 ```java
 try (var client = ClaudeSDK.createClient()) {
@@ -286,7 +290,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Dynamic Model Switching
+### 모델 동적 전환
 
 ```java
 try (var client = ClaudeSDK.createClient()) {
@@ -299,7 +303,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Permission Mode Changes
+### 권한 모드 변경
 
 ```java
 try (var client = ClaudeSDK.createClient()) {
@@ -312,7 +316,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### MCP Server Status
+### MCP 서버 상태
 
 ```java
 try (var client = ClaudeSDK.createClient(options)) {
@@ -330,7 +334,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-### SDK Utilities
+### SDK 유틸리티
 
 ```java
 // Get SDK version
@@ -346,11 +350,11 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-## Custom Tools (SDK MCP Servers)
+## 사용자 정의 도구 (SDK MCP 서버)
 
-Create in-process MCP servers that run directly within your Java application.
+Java 애플리케이션 내부에서 직접 실행되는 인프로세스 MCP 서버를 만듭니다.
 
-### Using @Tool Annotation
+### @Tool 어노테이션 사용
 
 ```java
 import in.vidyalai.claude.sdk.mcp.Tool;
@@ -405,7 +409,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-### Using SdkMcpTool Directly
+### SdkMcpTool 직접 사용
 
 ```java
 import in.vidyalai.claude.sdk.mcp.*;
@@ -439,7 +443,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Tool Result Types
+### 도구 결과 타입
 
 ```java
 // Text result
@@ -461,13 +465,12 @@ ToolResult.builder()
     .build()
 ```
 
-### Cancelling a Long-Running Tool
+### 오래 실행되는 도구 취소하기
 
-The CLI gives up on a tool that outruns its MCP timeout and sends
-`notifications/cancelled`. The call is answered without waiting, but the
-handler keeps running unless it looks — a `CompletableFuture` cannot be
-interrupted from outside. Take a `ToolCallContext` alongside the arguments to
-see it:
+CLI는 MCP 타임아웃을 넘긴 도구를 포기하고 `notifications/cancelled`를 보냅니다. 호출은
+기다리지 않고 응답되지만, 핸들러 자신이 확인하지 않는 한 계속 실행됩니다 —
+`CompletableFuture`는 외부에서 인터럽트할 수 없기 때문입니다. 인자와 함께
+`ToolCallContext`를 받으면 취소를 감지할 수 있습니다:
 
 ```java
 SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
@@ -484,40 +487,41 @@ SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
     }));
 ```
 
-Handlers that take only their arguments are unaffected. `context.onCancel(...)`
-covers work that cannot poll, such as a blocking read.
+인자만 받는 핸들러는 영향을 받지 않습니다. 블로킹 읽기처럼 폴링할 수 없는 작업에는
+`context.onCancel(...)`을 사용하세요.
 
-### Bringing Your Own MCP Server
+### 직접 만든 MCP 서버 사용하기
 
-`McpSdkServerConfig` holds an `McpMessageHandler`, so an application that needs
-parts of MCP the built-in server does not serve — resources, prompts,
-completions — can implement the interface itself and register it the same way.
-See [docs/feature-mcp-servers.md](docs/feature-mcp-servers.md#custom-mcp-handlers).
+`McpSdkServerConfig`는 `McpMessageHandler`를 담고 있습니다. 따라서 내장 서버가 제공하지 않는
+MCP 기능(리소스, 프롬프트, 자동완성)이 필요한 애플리케이션은 이 인터페이스를 직접 구현해
+동일한 방식으로 등록할 수 있습니다.
+[docs/feature-mcp-servers.md](../feature-mcp-servers.md#custom-mcp-handlers)를 참고하세요.
 
-### Benefits Over External MCP Servers
+### 외부 MCP 서버 대비 장점
 
-- **No subprocess management** - Runs in the same JVM as your application
-- **Better performance** - No IPC overhead for tool calls
-- **Simpler deployment** - Single Java process instead of multiple
-- **Easier debugging** - All code runs in the same process
-- **Type safety** - Direct Java method calls
+- **서브프로세스 관리 불필요** — 애플리케이션과 같은 JVM에서 실행됩니다
+- **더 나은 성능** — 도구 호출에 IPC 오버헤드가 없습니다
+- **더 간단한 배포** — 여러 프로세스 대신 단일 Java 프로세스
+- **더 쉬운 디버깅** — 모든 코드가 같은 프로세스에서 실행됩니다
+- **타입 안전성** — Java 메서드를 직접 호출합니다
 
-## Hooks
+## 훅 (Hooks)
 
-Hooks are callbacks that Claude Code invokes at specific points in the agent loop. They enable deterministic processing and automated feedback.
+훅은 Claude Code가 에이전트 루프의 특정 지점에서 호출하는 콜백입니다. 결정론적인 처리와
+자동화된 피드백을 가능하게 합니다.
 
-### Hook Events
+### 훅 이벤트
 
-| Event | Description |
+| 이벤트 | 설명 |
 |-------|-------------|
-| `PreToolUse` | Before a tool is executed |
-| `PostToolUse` | After a tool completes |
-| `UserPromptSubmit` | When user submits a prompt |
-| `Stop` | When session stops |
-| `SubagentStop` | When a subagent stops |
-| `PreCompact` | Before context compaction |
+| `PreToolUse` | 도구 실행 전 |
+| `PostToolUse` | 도구 완료 후 |
+| `UserPromptSubmit` | 사용자가 프롬프트를 제출할 때 |
+| `Stop` | 세션이 중지될 때 |
+| `SubagentStop` | 서브에이전트가 중지될 때 |
+| `PreCompact` | 컨텍스트 압축 전 |
 
-### Example: Blocking Dangerous Commands
+### 예시: 위험한 명령 차단
 
 ```java
 import in.vidyalai.claude.sdk.types.*;
@@ -565,7 +569,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-### Example: Logging All Tool Uses
+### 예시: 모든 도구 사용 기록하기
 
 ```java
 HookMatcher.HookCallback logToolUse = (input, context) -> {
@@ -584,9 +588,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-## Permission Callbacks
+## 권한 콜백
 
-Control tool execution with custom permission logic.
+사용자 정의 권한 로직으로 도구 실행을 제어합니다.
 
 ```java
 import in.vidyalai.claude.sdk.types.*;
@@ -618,7 +622,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Modifying Tool Input
+### 도구 입력 수정
 
 ```java
 ClaudeAgentOptions.CanUseTool sanitizeInput = (toolName, input, context) -> {
@@ -635,7 +639,7 @@ ClaudeAgentOptions.CanUseTool sanitizeInput = (toolName, input, context) -> {
 };
 ```
 
-### Permission Updates
+### 권한 업데이트
 
 ```java
 ClaudeAgentOptions.CanUseTool upgradePermissions = (toolName, input, context) -> {
@@ -653,7 +657,7 @@ ClaudeAgentOptions.CanUseTool upgradePermissions = (toolName, input, context) ->
 };
 ```
 
-## Configuration Options
+## 구성 옵션
 
 ### ClaudeAgentOptions
 
@@ -733,7 +737,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Permission Modes
+### 권한 모드
 
 ```java
 PermissionMode.DEFAULT           // CLI prompts for dangerous tools
@@ -742,9 +746,9 @@ PermissionMode.PLAN              // Show plans before execution
 PermissionMode.BYPASS_PERMISSIONS // Allow all tools (use with caution)
 ```
 
-### Thinking Configuration
+### 확장 사고(Thinking) 설정
 
-Control extended thinking behavior with `ThinkingConfig` types (added in v0.1.36):
+`ThinkingConfig` 타입으로 확장 사고 동작을 제어합니다 (v0.1.36에서 추가):
 
 ```java
 import in.vidyalai.claude.sdk.types.config.*;
@@ -765,9 +769,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-**Note:** The `thinking` field takes precedence over the deprecated `maxThinkingTokens` field.
+**참고:** `thinking` 필드는 더 이상 권장되지 않는 `maxThinkingTokens` 필드보다 우선합니다.
 
-### MCP Server Configurations
+### MCP 서버 구성
 
 ```java
 // Stdio server (subprocess)
@@ -802,7 +806,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Sandbox Configuration
+### 샌드박스 구성
 
 ```java
 SandboxSettings sandbox = new SandboxSettings(
@@ -829,9 +833,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-## Message Types
+## 메시지 타입
 
-The SDK uses sealed interfaces for type-safe message handling with pattern matching.
+SDK는 타입 안전한 메시지 처리를 위해 sealed 인터페이스를 사용하며, 패턴 매칭을 지원합니다.
 
 ```java
 import in.vidyalai.claude.sdk.types.*;
@@ -867,16 +871,16 @@ for (Message msg : messages) {
 }
 ```
 
-`Message` is a sealed interface, so an exhaustive `switch` with no `default`
-stops compiling when a new message type is added. Add a `default ->` branch if
-you would rather absorb future additions silently.
+`Message`는 sealed 인터페이스이므로, 새 메시지 타입이 추가되면 `default`가 없는 완전한
+`switch`는 더 이상 컴파일되지 않습니다. 앞으로 추가되는 타입을 조용히 흡수하고 싶다면
+`default ->` 분기를 추가하세요.
 
-### Message Origin
+### 메시지 출처 (Message Origin)
 
-In streaming-input mode one connection interleaves the turns you send with turns
-the session injects on its own — background-task notifications, fired
-scheduled-task prompts, MCP channel messages, messages relayed from peer
-sessions. `origin()` on `UserMessage` and `ResultMessage` tells them apart:
+스트리밍 입력 모드에서는 하나의 연결이 여러분이 보낸 턴과 세션이 스스로 주입하는 턴 —
+백그라운드 작업 알림, 실행된 예약 작업 프롬프트, MCP 채널 메시지, 피어 세션에서 중계된
+메시지 — 을 번갈아 전달합니다. `UserMessage`와 `ResultMessage`의 `origin()`이 둘을
+구분해 줍니다:
 
 ```java
 MessageOrigin origin = result.origin();
@@ -887,13 +891,13 @@ if (origin == null || origin.isHuman()) {
 }
 ```
 
-`origin()` is null when the CLI did not attribute the message. Prompts sent
-through `query()` arrive that way unless you stamp `"origin": {"kind": "human"}`
-on the streamed message map yourself — only the `human` kind is honored from an
-SDK host. A kind newer than this SDK models leaves `kind()` null with the wire
-string still readable from `kindValue()`, and never counts as human.
+CLI가 메시지에 출처를 표시하지 않았다면 `origin()`은 null입니다. `query()`로 보낸 프롬프트는
+스트리밍 메시지 맵에 직접 `"origin": {"kind": "human"}`을 붙이지 않는 한 그렇게 도착합니다 —
+SDK 호스트에서 인정되는 종류는 `human`뿐입니다. 이 SDK가 모델링한 것보다 새로운 종류라면
+`kind()`는 null이 되지만 프로토콜 문자열은 여전히 `kindValue()`로 읽을 수 있으며, 결코
+human으로 간주되지 않습니다.
 
-### Content Blocks
+### 콘텐츠 블록
 
 ```java
 for (ContentBlock block : assistant.content()) {
@@ -914,7 +918,7 @@ for (ContentBlock block : assistant.content()) {
 }
 ```
 
-## Error Handling
+## 오류 처리
 
 ```java
 import in.vidyalai.claude.sdk.exceptions.*;
@@ -960,7 +964,7 @@ try {
 }
 ```
 
-### Exception Hierarchy
+### 예외 계층 구조
 
 ```
 ClaudeSDKException (base)
@@ -973,38 +977,34 @@ ClaudeSDKException (base)
 └── QueryFailedException
 ```
 
-`ResultException` is raised when the CLI ends a failed run by emitting a
-`result` message with `is_error: true` and then exiting non-zero. It replaces
-the bare "exit code 1" `ProcessException` for that case and carries the
-result's payload — `subtype()`, `errors()`, `result()`, `apiErrorStatus()`,
-`terminalReason()`, `sessionId()` and the raw `data()` — so callers can branch
-on *why* the run failed. Note that a run ending on an API failure arrives as
-`subtype() == "success"` with `terminalReason() == "api_error"` and the prose
-in `result()`. Existing `catch (ProcessException e)` handlers keep working.
+`ResultException`은 CLI가 실패한 실행을 `is_error: true`인 `result` 메시지로 끝내고 0이 아닌
+코드로 종료할 때 발생합니다. 이 경우 단순한 "종료 코드 1" `ProcessException`을 대체하며,
+해당 result의 페이로드 — `subtype()`, `errors()`, `result()`, `apiErrorStatus()`,
+`terminalReason()`, `sessionId()` 및 원본 `data()` — 를 담고 있어 호출자가 실행이 실패한
+*이유*에 따라 분기할 수 있습니다. API 장애로 끝난 실행은 `subtype() == "success"`이면서
+`terminalReason() == "api_error"`로 도착하고, 설명 문구는 `result()`에 들어 있다는 점에
+유의하세요. 기존의 `catch (ProcessException e)` 처리는 그대로 동작합니다.
 
-Usually you meet it as `QueryFailedException.getCause()`, not on its own: the
-collecting `query(...)` wraps it so the messages already received are not lost.
-It is thrown directly only by a failed control request, such as an `initialize`
-the CLI refuses at startup. `ClaudeSDKClient.receiveResponse()` does not throw
-it at all — that iterator stops at the `ResultMessage`, so check
-`ResultMessage.isError()` there instead.
+보통은 단독으로가 아니라 `QueryFailedException.getCause()`로 만나게 됩니다. 메시지를 모으는
+`query(...)`가 이를 감싸서 이미 받은 메시지가 유실되지 않게 하기 때문입니다. 단독으로
+던져지는 경우는 CLI가 시작 시 거부한 `initialize`처럼 제어 요청이 실패했을 때뿐입니다.
+`ClaudeSDKClient.receiveResponse()`는 이 예외를 전혀 던지지 않습니다 — 그 이터레이터는
+`ResultMessage`에서 멈추므로, 거기서는 대신 `ResultMessage.isError()`를 확인하세요.
 
-`QueryFailedException` is specific to the collecting `ClaudeSDK.query(...)`
-family. The CLI reports conditions like `error_max_turns` and
-`error_max_budget_usd` by emitting a complete turn — including a final
-`ResultMessage` carrying the subtype and cost — and *then* exiting non-zero.
-A streaming consumer (`ClaudeSDKClient.receiveMessages()` /
-`receiveResponse()`) sees every one of those messages before the raise; a
-collecting call has to either return a list or throw, so it throws this and
-hands the collected messages back via `partialMessages()` and the
-`resultMessage()` convenience accessor; its `getCause()` is the
-`ResultException` described above. Catch it whenever you set `maxTurns`
-or `maxBudgetUsd`: reaching a cap you configured is an expected outcome, not
-a crash.
+`QueryFailedException`은 메시지를 모으는 `ClaudeSDK.query(...)` 계열에 특화된 예외입니다.
+CLI는 `error_max_turns`나 `error_max_budget_usd` 같은 상황을 하나의 완전한 턴 — subtype과
+비용을 담은 마지막 `ResultMessage` 포함 — 을 내보낸 *다음에* 0이 아닌 코드로 종료하는
+방식으로 알립니다. 스트리밍 소비자(`ClaudeSDKClient.receiveMessages()` /
+`receiveResponse()`)는 예외가 발생하기 전에 그 메시지들을 모두 볼 수 있습니다. 반면 모아서
+돌려주는 호출은 리스트를 반환하거나 예외를 던지는 것 중 하나만 할 수 있으므로 이 예외를
+던지고, 모아 둔 메시지는 `partialMessages()`와 편의 접근자 `resultMessage()`를 통해
+돌려줍니다. 그 `getCause()`가 바로 위에서 설명한 `ResultException`입니다. `maxTurns`나
+`maxBudgetUsd`를 설정했다면 반드시 이 예외를 잡으세요. 직접 설정한 한도에 도달하는 것은
+충돌이 아니라 예상된 결과입니다.
 
-## Streaming Events
+## 스트리밍 이벤트
 
-Enable partial message streaming for real-time updates.
+실시간 업데이트를 위해 부분 메시지 스트리밍을 활성화합니다.
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -1029,9 +1029,9 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-## File Checkpointing
+## 파일 체크포인트
 
-Track file changes and rewind to previous states.
+파일 변경을 추적하고 이전 상태로 되돌립니다.
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -1055,9 +1055,9 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-## Custom Agents
+## 사용자 정의 에이전트
 
-Define custom agents with specific capabilities.
+특정 역량을 갖춘 사용자 정의 에이전트를 정의합니다.
 
 ```java
 AgentDefinition codeReviewer = new AgentDefinition(
@@ -1082,40 +1082,42 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-## Examples
+## 예제
 
-See the `examples/` module for complete working examples:
+완전히 동작하는 예제는 `examples/` 모듈을 참고하세요:
 
-- `QuickStart.java` - Basic usage
-- `MultiTurnConversation.java` - Interactive conversations
-- `ToolUsage.java` - Using built-in tools
-- `McpServer.java` - Creating custom MCP tools
-- `AutoSchemaGeneration.java` - Automatic schema generation for tools
-- `Hooks.java` - Hook callbacks (including new hook events: Notification, SubagentStart, PermissionRequest)
-- `PermissionCallbacks.java` - Custom permission logic
-- `StreamingEvents.java` - Real-time streaming
-- `StructuredOutputExample.java` - Structured output with JSON Schema validation (simple, nested, enum, with tools)
-- `DynamicControlExample.java` - Dynamic control features (setPermissionMode, setModel, interrupt)
-- `ErrorHandling.java` - Exception handling
-- `AdvancedFeatures.java` - Checkpointing, sandbox, structured output
-- `ToolsConfigurationExample.java` - Tools configuration (array, preset, empty)
-- `MaxBudgetExample.java` - Budget limiting and cost control
-- `SettingSourcesExample.java` - Settings sources (user, project, local)
-- `StderrCallbackExample.java` - Capturing CLI stderr output
-- `PluginsExample.java` - Plugin system usage
-- `AgentsExample.java` - Programmatic subagent definitions
-- `FilesystemAgentsExample.java` - Filesystem-based agent configuration
-- `LargeAgentsExample.java` - Large agent definitions (260KB+) via initialize request
-- `SystemPromptExample.java` - Custom system prompt usage
-- `IncludePartialMessagesExample.java` - Streaming with partial message updates
+- `QuickStart.java` — 기본 사용법
+- `MultiTurnConversation.java` — 대화형 세션
+- `ToolUsage.java` — 내장 도구 사용
+- `McpServer.java` — 사용자 정의 MCP 도구 만들기
+- `AutoSchemaGeneration.java` — 도구 스키마 자동 생성
+- `Hooks.java` — 훅 콜백 (새 훅 이벤트 Notification, SubagentStart, PermissionRequest 포함)
+- `PermissionCallbacks.java` — 사용자 정의 권한 로직
+- `StreamingEvents.java` — 실시간 스트리밍
+- `StructuredOutputExample.java` — JSON Schema 검증을 곁들인 구조화 출력 (단순, 중첩, 열거형, 도구 병용)
+- `DynamicControlExample.java` — 동적 제어 기능 (setPermissionMode, setModel, interrupt)
+- `ErrorHandling.java` — 예외 처리
+- `AdvancedFeatures.java` — 체크포인트, 샌드박스, 구조화 출력
+- `ToolsConfigurationExample.java` — 도구 구성 (배열, 프리셋, 빈 값)
+- `MaxBudgetExample.java` — 예산 제한과 비용 관리
+- `SettingSourcesExample.java` — 설정 출처 (user, project, local)
+- `StderrCallbackExample.java` — CLI stderr 출력 수집
+- `PluginsExample.java` — 플러그인 시스템 사용법
+- `AgentsExample.java` — 프로그래밍 방식의 서브에이전트 정의
+- `FilesystemAgentsExample.java` — 파일시스템 기반 에이전트 구성
+- `LargeAgentsExample.java` — initialize 요청을 통한 대용량 에이전트 정의 (260KB 이상)
+- `SystemPromptExample.java` — 사용자 정의 시스템 프롬프트 사용법
+- `IncludePartialMessagesExample.java` — 부분 메시지 업데이트를 포함한 스트리밍
 
-### Running Examples
+### 예제 실행하기
 
-The examples module is a separate Maven module that depends on the SDK. Building from the repository root satisfies that dependency from the reactor; building `examples/` on its own resolves it from Maven Central, which requires no repository or authentication setup.
+examples 모듈은 SDK에 의존하는 별도의 Maven 모듈입니다. 저장소 루트에서 빌드하면 그 의존성은
+리액터에서 충족되고, `examples/`만 따로 빌드하면 Maven Central에서 해석되므로 저장소나 인증
+설정이 필요하지 않습니다.
 
-#### Option 1: Run Examples from Root Directory (Recommended)
+#### 방법 1: 루트 디렉터리에서 예제 실행 (권장)
 
-Build all modules and run an example:
+모든 모듈을 빌드하고 예제를 실행합니다:
 
 ```bash
 # Build all modules (SDK + examples)
@@ -1129,7 +1131,7 @@ mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation" -pl examples
 mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples
 ```
 
-#### Option 2: Run Examples from Examples Directory
+#### 방법 2: examples 디렉터리에서 실행
 
 ```bash
 # Navigate to examples directory
@@ -1145,18 +1147,18 @@ mvn exec:java -Dexec.mainClass="examples.QuickStart"
 java -cp target/classes:target/dependency/* examples.QuickStart
 ```
 
-#### Option 3: Run Examples with Local Development SDK
+#### 방법 3: 로컬 개발 버전 SDK로 예제 실행
 
-To test examples against your local development version of the SDK (not the published version):
+배포된 버전이 아니라 로컬에서 개발 중인 SDK로 예제를 시험하려면:
 
-1. Install the SDK locally:
+1. SDK를 로컬에 설치합니다:
    ```bash
    cd sdk
    mvn clean install -DskipTests
    cd ..
    ```
 
-2. Update `examples/pom.xml` to use the SNAPSHOT version:
+2. `examples/pom.xml`을 SNAPSHOT 버전으로 수정합니다:
    ```xml
    <dependency>
        <groupId>in.vidyalai</groupId>
@@ -1165,23 +1167,28 @@ To test examples against your local development version of the SDK (not the publ
    </dependency>
    ```
 
-3. Run examples as described in Option 1 or 2.
+3. 방법 1 또는 방법 2대로 예제를 실행합니다.
 
-**Note:** You can also pin the examples module to a released SDK version by setting the dependency's `<version>` in `examples/pom.xml` to that release (e.g. `0.2.2`). It resolves from Maven Central, so no repository or authentication setup is needed.
+**참고:** `examples/pom.xml`의 의존성 `<version>`을 배포된 버전(예: `0.2.2`)으로 지정해
+examples 모듈을 해당 릴리스에 고정할 수도 있습니다. Maven Central에서 해석되므로 저장소나
+인증 설정은 필요하지 않습니다.
 
-## Thread Safety
+## 스레드 안전성
 
-- `ClaudeSDKClient` is **not thread-safe**. Use one client per thread or synchronize access.
-- `ClaudeSDK.query()` methods create new connections and are safe to call from multiple threads.
-- Callbacks (hooks, permissions) may be called from different threads; ensure your callback implementations are thread-safe.
+- `ClaudeSDKClient`는 **스레드 안전하지 않습니다**. 스레드마다 하나의 client를 쓰거나 접근을
+  동기화하세요.
+- `ClaudeSDK.query()` 메서드들은 새 연결을 만들므로 여러 스레드에서 안전하게 호출할 수 있습니다.
+- 콜백(훅, 권한)은 서로 다른 스레드에서 호출될 수 있습니다. 콜백 구현이 스레드 안전한지
+  확인하세요.
 
-## Concurrency Model: Python vs Java
+## 동시성 모델: Python과 Java
 
-The Java SDK uses a fundamentally different concurrency model than the Python SDK. Understanding these differences helps when porting code or comparing examples.
+Java SDK는 Python SDK와 근본적으로 다른 동시성 모델을 사용합니다. 이 차이를 이해하면 코드를
+이식하거나 예제를 비교할 때 도움이 됩니다.
 
-### Python SDK: Async/Await Model
+### Python SDK: Async/Await 모델
 
-The Python SDK uses Python's `async`/`await` syntax with asyncio or trio:
+Python SDK는 asyncio 또는 trio와 함께 Python의 `async`/`await` 문법을 사용합니다:
 
 ```python
 # Python SDK - async/await with asyncio
@@ -1199,16 +1206,16 @@ async def message_stream():
 await client.connect(message_stream())
 ```
 
-**Key Python Features:**
-- `async`/`await` keywords for non-blocking operations
-- `async for` for iterating over async iterables
-- `async with` for async context managers
-- Async iterables/generators (`async def` with `yield`)
-- Libraries: asyncio, trio
+**Python의 주요 특징:**
+- 논블로킹 작업을 위한 `async`/`await` 키워드
+- 비동기 이터러블을 순회하는 `async for`
+- 비동기 컨텍스트 매니저를 위한 `async with`
+- 비동기 이터러블/제너레이터 (`async def`와 `yield`)
+- 라이브러리: asyncio, trio
 
-### Java SDK: Synchronous + CompletableFuture Model
+### Java SDK: 동기 + CompletableFuture 모델
 
-The Java SDK uses synchronous APIs with CompletableFuture for asynchronous operations:
+Java SDK는 동기 API를 사용하고, 비동기 작업에는 CompletableFuture를 씁니다:
 
 ```java
 // Java SDK - synchronous with try-with-resources
@@ -1227,27 +1234,28 @@ List<Map<String, Object>> messages = List.of(
 client.query(messages.iterator());
 ```
 
-**Key Java Features:**
-- **Synchronous iterators** (`Iterator<Message>`) instead of async iterables
-- **Try-with-resources** (`try (...)`) instead of async context managers
-- **CompletableFuture** for async callbacks (hooks, permissions)
-- **Virtual threads** for efficient blocking I/O when running on Java 21+, with a platform-thread fallback on 17-20
-- **ExecutorService** for background task management
+**Java의 주요 특징:**
+- 비동기 이터러블 대신 **동기 이터레이터** (`Iterator<Message>`)
+- 비동기 컨텍스트 매니저 대신 **try-with-resources** (`try (...)`)
+- 비동기 콜백(훅, 권한)을 위한 **CompletableFuture**
+- Java 21 이상에서 블로킹 I/O를 효율적으로 처리하는 **가상 스레드** (17~20에서는 플랫폼 스레드로 대체)
+- 백그라운드 작업 관리를 위한 **ExecutorService**
 
-### Why Python Async Examples Don't Directly Translate
+### Python의 비동기 예제가 그대로 옮겨지지 않는 이유
 
-Some Python SDK examples don't have direct Java equivalents because they demonstrate async-specific patterns:
+Python SDK 예제 중 일부는 비동기 고유의 패턴을 보여 주기 때문에 Java에 직접 대응하는 것이
+없습니다:
 
-| Python Example | Why Not in Java | Java Equivalent |
+| Python 예제 | Java에 없는 이유 | Java에서의 대응 |
 |----------------|-----------------|-----------------|
-| `streaming_mode_ipython.py` | IPython-specific async REPL integration | Use Java REPL (jshell) with synchronous APIs |
-| `streaming_mode_trio.py` | Trio-specific concurrency library | Use standard Java concurrency (ExecutorService, virtual threads) |
-| `test_connect_with_async_iterable` | Async generator pattern | `client.query(Iterator<Map>)` with regular Iterator |
-| `test_concurrent_send_receive` | Async concurrent operations | Use `Thread.startVirtualThread()` or ExecutorService |
+| `streaming_mode_ipython.py` | IPython 전용 비동기 REPL 통합 | Java REPL(jshell)과 동기 API 사용 |
+| `streaming_mode_trio.py` | Trio 전용 동시성 라이브러리 | 표준 Java 동시성(ExecutorService, 가상 스레드) 사용 |
+| `test_connect_with_async_iterable` | 비동기 제너레이터 패턴 | 일반 Iterator를 쓰는 `client.query(Iterator<Map>)` |
+| `test_concurrent_send_receive` | 비동기 동시 작업 | `Thread.startVirtualThread()` 또는 ExecutorService 사용 |
 
-### Concurrent Operations in Java
+### Java에서의 동시 작업
 
-For operations that need true concurrency in Java:
+Java에서 진짜 동시성이 필요한 작업의 경우:
 
 ```java
 // Concurrent send and receive using virtual threads
@@ -1271,39 +1279,44 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Performance Considerations
+### 성능 고려 사항
 
-- **Python**: Async I/O is efficient for I/O-bound operations but requires explicit `await` points
-- **Java**: Virtual threads (Project Loom) make blocking I/O as efficient as async without syntax changes
-- **Java**: Synchronous APIs are simpler to use and debug than async code
-- **Python**: Trio provides structured concurrency; Java achieves similar with try-with-resources and ExecutorService
+- **Python**: 비동기 I/O는 I/O 바운드 작업에 효율적이지만 명시적인 `await` 지점이 필요합니다
+- **Java**: 가상 스레드(Project Loom) 덕분에 문법을 바꾸지 않고도 블로킹 I/O가 비동기만큼 효율적입니다
+- **Java**: 동기 API는 비동기 코드보다 사용하고 디버깅하기 쉽습니다
+- **Python**: Trio는 구조적 동시성을 제공하고, Java는 try-with-resources와 ExecutorService로 비슷한 것을 이룹니다
 
-### Migration Guide: Python to Java
+### 마이그레이션 가이드: Python에서 Java로
 
-| Python Pattern | Java Equivalent |
+| Python 패턴 | Java 대응 |
 |----------------|-----------------|
 | `async with client:` | `try (var client = ...) {` |
-| `await client.connect()` | `client.connect()` (synchronous) |
+| `await client.connect()` | `client.connect()` (동기) |
 | `async for msg in client.receive():` | `for (Message msg : client.receiveResponse())` |
 | `await asyncio.sleep(1)` | `Thread.sleep(1000)` |
 | `asyncio.create_task()` | `Thread.startVirtualThread(() -> ...)` |
-| `async def generator():` + `yield` | `Iterator<T>` implementation |
+| `async def generator():` + `yield` | `Iterator<T>` 구현 |
 | `CompletableFuture.completed()` | `CompletableFuture.completedFuture()` |
 
-**Bottom Line:** The Java SDK prioritizes simplicity and uses synchronous APIs with virtual threads for efficient concurrency, while the Python SDK uses async/await for non-blocking operations. Both achieve similar functionality with their respective language idioms.
+**요약:** Java SDK는 단순함을 우선해 동기 API와 가상 스레드로 효율적인 동시성을 얻고,
+Python SDK는 논블로킹 작업을 위해 async/await를 사용합니다. 둘 다 각 언어의 관용적인 방식으로
+비슷한 기능을 달성합니다.
 
-## Best Practices
+## 모범 사례
 
-1. **Always close clients** - Use try-with-resources or call `disconnect()` in a finally block.
-2. **Handle errors gracefully** - Catch specific exceptions for better error messages.
-3. **Set appropriate timeouts** - Use `maxTurns` and `maxBudgetUsd` to limit execution.
-4. **Use permission callbacks for security** - Don't rely solely on `permissionMode`.
-5. **Prefer SDK MCP servers** - They're faster and easier to debug than external processes.
+1. **client는 항상 닫기** — try-with-resources를 쓰거나 finally 블록에서 `disconnect()`를 호출하세요.
+2. **오류를 우아하게 처리하기** — 구체적인 예외를 잡으면 더 나은 오류 메시지를 얻습니다.
+3. **적절한 한도 설정하기** — `maxTurns`와 `maxBudgetUsd`로 실행량을 제한하세요.
+4. **보안에는 권한 콜백 사용하기** — `permissionMode`에만 의존하지 마세요.
+5. **SDK MCP 서버 선호하기** — 외부 프로세스보다 빠르고 디버깅하기 쉽습니다.
 
-## Documentation
+## 문서
 
-- **[Python SDK Feature Parity Analysis](docs/PYTHON_SDK_PARITY.md)** - Comprehensive comparison between Python and Java SDKs, including feature parity status, type system comparison, examples coverage, and implementation details.
+- **[Python SDK 기능 동등성 분석](../PYTHON_SDK_PARITY.md)** — Python SDK와 Java SDK의 포괄적인
+  비교로, 기능 동등성 현황, 타입 시스템 비교, 예제 커버리지, 구현 세부 사항을 담고 있습니다. (영어)
+- **[기술 문서 색인](./index.md)** — 아키텍처, 기능 가이드, API 레퍼런스 (이 언어판).
+- **[번역 안내](../TRANSLATIONS.md)** — 번역 범위, 동기화 정책, 기여 방법. (영어)
 
-## License
+## 라이선스
 
-[MIT](LICENSE) 
+[MIT](../../LICENSE)

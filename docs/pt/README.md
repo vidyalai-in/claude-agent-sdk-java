@@ -1,31 +1,33 @@
 # Claude Agent SDK for Java
 
-**English** · [简体中文](docs/zh/README.md) · [日本語](docs/ja/README.md) · [한국어](docs/ko/README.md) · [Português](docs/pt/README.md) · [Español](docs/es/README.md)
+[English](../../README.md) · [简体中文](../zh/README.md) · [日本語](../ja/README.md) · [한국어](../ko/README.md) · **Português** · [Español](../es/README.md)
 
-Java SDK for Claude Agent. This SDK provides a comprehensive Java API for interacting with Claude Code, enabling you to build AI-powered applications with Claude's capabilities.
+> **Sobre esta tradução**: a documentação em inglês é a única autoritativa. Esta tradução pode estar desatualizada em relação ao [original em inglês](../../README.md); em caso de divergência, o inglês prevalece. Os blocos de código são mantidos idênticos ao original e não foram traduzidos. Veja [docs/TRANSLATIONS.md](../TRANSLATIONS.md) para mais detalhes.
 
-## Requirements
+SDK Java para o Claude Agent. Este SDK oferece uma API Java abrangente para interagir com o Claude Code, permitindo que você construa aplicações com IA usando os recursos do Claude.
 
-- Java 17 or newer (uses sealed interfaces and records)
-  - On Java 21+ the SDK runs its background work on virtual threads; on 17-20
-    it uses named daemon platform threads instead. No configuration needed.
+## Requisitos
+
+- Java 17 ou mais recente (usa interfaces seladas e records)
+  - No Java 21+, o SDK executa seu trabalho em segundo plano em threads virtuais; no 17-20
+    ele usa threads de plataforma daemon nomeadas. Nenhuma configuração é necessária.
 - Maven 3.6+
 
-**Note:** The Claude Code CLI must be installed separately:
+**Observação:** o Claude Code CLI precisa ser instalado separadamente:
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-Or specify a custom path:
+Ou informe um caminho personalizado:
 ```java
 ClaudeAgentOptions.builder()
     .cliPath(Path.of("/path/to/claude"))
     .build();
 ```
 
-## Installation
+## Instalação
 
-Released to Maven Central, so no repository or authentication setup is needed.
+Publicado no Maven Central, portanto não é preciso configurar repositório nem autenticação.
 
 ### Maven
 
@@ -49,16 +51,16 @@ dependencies {
 }
 ```
 
-### Alternative: GitHub Packages
+### Alternativa: GitHub Packages
 
-Releases are also mirrored to GitHub Packages for consumers who already depend
-on it. This route requires a GitHub personal access token even though the
-artifacts are public, so prefer Maven Central unless you have a reason not to.
+As versões também são espelhadas no GitHub Packages para quem já depende desse canal. Esse
+caminho exige um token de acesso pessoal do GitHub mesmo que os artefatos sejam públicos, então
+prefira o Maven Central a menos que tenha um motivo para não usá-lo.
 
 <details>
-<summary>GitHub Packages setup</summary>
+<summary>Configuração do GitHub Packages</summary>
 
-Add the repository to your `pom.xml`:
+Adicione o repositório ao seu `pom.xml`:
 
 ```xml
 <repositories>
@@ -69,7 +71,7 @@ Add the repository to your `pom.xml`:
 </repositories>
 ```
 
-Or to your `build.gradle.kts`:
+Ou ao seu `build.gradle.kts`:
 
 ```kotlin
 repositories {
@@ -83,7 +85,7 @@ repositories {
 }
 ```
 
-Then authenticate. For Maven, add this to your `~/.m2/settings.xml`:
+Depois configure a autenticação. No Maven, adicione isto ao seu `~/.m2/settings.xml`:
 
 ```xml
 <settings>
@@ -97,18 +99,18 @@ Then authenticate. For Maven, add this to your `~/.m2/settings.xml`:
 </settings>
 ```
 
-For Gradle, create or update `~/.gradle/gradle.properties`:
+No Gradle, crie ou atualize `~/.gradle/gradle.properties`:
 
 ```properties
 gpr.user=YOUR_GITHUB_USERNAME
 gpr.key=YOUR_GITHUB_PERSONAL_ACCESS_TOKEN
 ```
 
-Generate a personal access token with `read:packages` scope at: https://github.com/settings/tokens
+Gere um token de acesso pessoal com o escopo `read:packages` em: https://github.com/settings/tokens
 
 </details>
 
-## Quick Start
+## Início rápido
 
 ```java
 import in.vidyalai.claude.sdk.ClaudeSDK;
@@ -127,9 +129,10 @@ public class QuickStart {
 }
 ```
 
-## Basic Usage: ClaudeSDK.query()
+## Uso básico: ClaudeSDK.query()
 
-`ClaudeSDK.query()` is for simple, one-shot queries. It returns a `List<Message>` with all response messages.
+`ClaudeSDK.query()` serve para consultas simples e pontuais. Retorna um `List<Message>` com
+todas as mensagens da resposta.
 
 ```java
 import in.vidyalai.claude.sdk.ClaudeSDK;
@@ -157,7 +160,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 List<Message> response = ClaudeSDK.query("Tell me a joke", options);
 ```
 
-### Convenience Methods
+### Métodos de conveniência
 
 ```java
 // Get just the text response
@@ -169,7 +172,7 @@ ResultMessage result = ClaudeSDK.queryForResult("Do something", options);
 System.out.println("Cost: $" + result.totalCostUsd());
 ```
 
-### Using Tools
+### Usando ferramentas
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -193,7 +196,7 @@ for (Message msg : messages) {
 }
 ```
 
-### Working Directory
+### Diretório de trabalho
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -201,7 +204,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Streaming Input (Multiple Messages)
+### Entrada por streaming (várias mensagens)
 
 ```java
 // Send multiple messages in sequence
@@ -217,9 +220,11 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 
 ## ClaudeSDKClient
 
-`ClaudeSDKClient` supports bidirectional, interactive conversations with Claude Code. Unlike `query()`, it enables **multi-turn conversations**, **custom tools**, **hooks**, and **real-time interaction**.
+`ClaudeSDKClient` dá suporte a conversas bidirecionais e interativas com o Claude Code. Ao
+contrário de `query()`, ele habilita **conversas de múltiplos turnos**, **ferramentas
+personalizadas**, **hooks** e **interação em tempo real**.
 
-### Basic Usage
+### Uso básico
 
 ```java
 import in.vidyalai.claude.sdk.ClaudeSDKClient;
@@ -253,7 +258,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Manual Connection Management
+### Gerenciamento manual da conexão
 
 ```java
 ClaudeSDKClient client = new ClaudeSDKClient();
@@ -275,7 +280,7 @@ try {
 }
 ```
 
-### Interrupt Execution
+### Interromper a execução
 
 ```java
 try (var client = ClaudeSDK.createClient()) {
@@ -286,7 +291,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Dynamic Model Switching
+### Troca dinâmica de modelo
 
 ```java
 try (var client = ClaudeSDK.createClient()) {
@@ -299,7 +304,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Permission Mode Changes
+### Mudanças no modo de permissão
 
 ```java
 try (var client = ClaudeSDK.createClient()) {
@@ -312,7 +317,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### MCP Server Status
+### Status do servidor MCP
 
 ```java
 try (var client = ClaudeSDK.createClient(options)) {
@@ -330,7 +335,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-### SDK Utilities
+### Utilitários do SDK
 
 ```java
 // Get SDK version
@@ -346,11 +351,11 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-## Custom Tools (SDK MCP Servers)
+## Ferramentas personalizadas (servidores MCP do SDK)
 
-Create in-process MCP servers that run directly within your Java application.
+Crie servidores MCP in-process que rodam diretamente dentro da sua aplicação Java.
 
-### Using @Tool Annotation
+### Usando a anotação @Tool
 
 ```java
 import in.vidyalai.claude.sdk.mcp.Tool;
@@ -405,7 +410,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-### Using SdkMcpTool Directly
+### Usando SdkMcpTool diretamente
 
 ```java
 import in.vidyalai.claude.sdk.mcp.*;
@@ -439,7 +444,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Tool Result Types
+### Tipos de resultado de ferramenta
 
 ```java
 // Text result
@@ -461,13 +466,12 @@ ToolResult.builder()
     .build()
 ```
 
-### Cancelling a Long-Running Tool
+### Cancelando uma ferramenta de longa duração
 
-The CLI gives up on a tool that outruns its MCP timeout and sends
-`notifications/cancelled`. The call is answered without waiting, but the
-handler keeps running unless it looks — a `CompletableFuture` cannot be
-interrupted from outside. Take a `ToolCallContext` alongside the arguments to
-see it:
+O CLI desiste de uma ferramenta que ultrapassa o tempo limite do MCP e envia
+`notifications/cancelled`. A chamada é respondida sem espera, mas o handler continua rodando a
+menos que ele próprio verifique — um `CompletableFuture` não pode ser interrompido de fora.
+Receba um `ToolCallContext` junto com os argumentos para perceber isso:
 
 ```java
 SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
@@ -484,40 +488,41 @@ SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
     }));
 ```
 
-Handlers that take only their arguments are unaffected. `context.onCancel(...)`
-covers work that cannot poll, such as a blocking read.
+Handlers que recebem apenas os argumentos não são afetados. `context.onCancel(...)` cobre
+trabalhos que não podem fazer polling, como uma leitura bloqueante.
 
-### Bringing Your Own MCP Server
+### Trazendo seu próprio servidor MCP
 
-`McpSdkServerConfig` holds an `McpMessageHandler`, so an application that needs
-parts of MCP the built-in server does not serve — resources, prompts,
-completions — can implement the interface itself and register it the same way.
-See [docs/feature-mcp-servers.md](docs/feature-mcp-servers.md#custom-mcp-handlers).
+`McpSdkServerConfig` guarda um `McpMessageHandler`, então uma aplicação que precise de partes
+do MCP que o servidor embutido não atende — recursos, prompts, completions — pode implementar
+a interface por conta própria e registrá-la da mesma forma.
+Veja [docs/feature-mcp-servers.md](../feature-mcp-servers.md#custom-mcp-handlers).
 
-### Benefits Over External MCP Servers
+### Vantagens sobre servidores MCP externos
 
-- **No subprocess management** - Runs in the same JVM as your application
-- **Better performance** - No IPC overhead for tool calls
-- **Simpler deployment** - Single Java process instead of multiple
-- **Easier debugging** - All code runs in the same process
-- **Type safety** - Direct Java method calls
+- **Sem gerenciamento de subprocessos** — roda na mesma JVM da sua aplicação
+- **Melhor desempenho** — sem sobrecarga de IPC nas chamadas de ferramenta
+- **Implantação mais simples** — um único processo Java em vez de vários
+- **Depuração mais fácil** — todo o código roda no mesmo processo
+- **Segurança de tipos** — chamadas diretas a métodos Java
 
 ## Hooks
 
-Hooks are callbacks that Claude Code invokes at specific points in the agent loop. They enable deterministic processing and automated feedback.
+Hooks são callbacks que o Claude Code invoca em pontos específicos do laço do agente. Eles
+permitem processamento determinístico e feedback automatizado.
 
-### Hook Events
+### Eventos de hook
 
-| Event | Description |
+| Evento | Descrição |
 |-------|-------------|
-| `PreToolUse` | Before a tool is executed |
-| `PostToolUse` | After a tool completes |
-| `UserPromptSubmit` | When user submits a prompt |
-| `Stop` | When session stops |
-| `SubagentStop` | When a subagent stops |
-| `PreCompact` | Before context compaction |
+| `PreToolUse` | Antes de uma ferramenta ser executada |
+| `PostToolUse` | Depois que uma ferramenta termina |
+| `UserPromptSubmit` | Quando o usuário envia um prompt |
+| `Stop` | Quando a sessão para |
+| `SubagentStop` | Quando um subagente para |
+| `PreCompact` | Antes da compactação de contexto |
 
-### Example: Blocking Dangerous Commands
+### Exemplo: bloqueando comandos perigosos
 
 ```java
 import in.vidyalai.claude.sdk.types.*;
@@ -565,7 +570,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-### Example: Logging All Tool Uses
+### Exemplo: registrando todos os usos de ferramenta
 
 ```java
 HookMatcher.HookCallback logToolUse = (input, context) -> {
@@ -584,9 +589,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-## Permission Callbacks
+## Callbacks de permissão
 
-Control tool execution with custom permission logic.
+Controle a execução de ferramentas com lógica de permissão personalizada.
 
 ```java
 import in.vidyalai.claude.sdk.types.*;
@@ -618,7 +623,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Modifying Tool Input
+### Modificando a entrada da ferramenta
 
 ```java
 ClaudeAgentOptions.CanUseTool sanitizeInput = (toolName, input, context) -> {
@@ -635,7 +640,7 @@ ClaudeAgentOptions.CanUseTool sanitizeInput = (toolName, input, context) -> {
 };
 ```
 
-### Permission Updates
+### Atualizações de permissão
 
 ```java
 ClaudeAgentOptions.CanUseTool upgradePermissions = (toolName, input, context) -> {
@@ -653,7 +658,7 @@ ClaudeAgentOptions.CanUseTool upgradePermissions = (toolName, input, context) ->
 };
 ```
 
-## Configuration Options
+## Opções de configuração
 
 ### ClaudeAgentOptions
 
@@ -733,7 +738,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Permission Modes
+### Modos de permissão
 
 ```java
 PermissionMode.DEFAULT           // CLI prompts for dangerous tools
@@ -742,9 +747,10 @@ PermissionMode.PLAN              // Show plans before execution
 PermissionMode.BYPASS_PERMISSIONS // Allow all tools (use with caution)
 ```
 
-### Thinking Configuration
+### Configuração de raciocínio (thinking)
 
-Control extended thinking behavior with `ThinkingConfig` types (added in v0.1.36):
+Controle o comportamento do raciocínio estendido com os tipos `ThinkingConfig` (adicionados na
+v0.1.36):
 
 ```java
 import in.vidyalai.claude.sdk.types.config.*;
@@ -765,9 +771,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-**Note:** The `thinking` field takes precedence over the deprecated `maxThinkingTokens` field.
+**Observação:** o campo `thinking` tem precedência sobre o campo obsoleto `maxThinkingTokens`.
 
-### MCP Server Configurations
+### Configurações de servidor MCP
 
 ```java
 // Stdio server (subprocess)
@@ -802,7 +808,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Sandbox Configuration
+### Configuração de sandbox
 
 ```java
 SandboxSettings sandbox = new SandboxSettings(
@@ -829,9 +835,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-## Message Types
+## Tipos de mensagem
 
-The SDK uses sealed interfaces for type-safe message handling with pattern matching.
+O SDK usa interfaces seladas para um tratamento de mensagens com segurança de tipos e
+casamento de padrões.
 
 ```java
 import in.vidyalai.claude.sdk.types.*;
@@ -867,16 +874,16 @@ for (Message msg : messages) {
 }
 ```
 
-`Message` is a sealed interface, so an exhaustive `switch` with no `default`
-stops compiling when a new message type is added. Add a `default ->` branch if
-you would rather absorb future additions silently.
+`Message` é uma interface selada, então um `switch` exaustivo sem `default` deixa de compilar
+quando um novo tipo de mensagem é adicionado. Acrescente um ramo `default ->` se preferir
+absorver silenciosamente as adições futuras.
 
-### Message Origin
+### Origem da mensagem
 
-In streaming-input mode one connection interleaves the turns you send with turns
-the session injects on its own — background-task notifications, fired
-scheduled-task prompts, MCP channel messages, messages relayed from peer
-sessions. `origin()` on `UserMessage` and `ResultMessage` tells them apart:
+No modo de entrada por streaming, uma única conexão intercala os turnos que você envia com os
+turnos que a sessão injeta por conta própria — notificações de tarefas em segundo plano,
+prompts de tarefas agendadas que dispararam, mensagens de canais MCP, mensagens repassadas de
+sessões pares. O método `origin()` em `UserMessage` e `ResultMessage` os diferencia:
 
 ```java
 MessageOrigin origin = result.origin();
@@ -887,13 +894,13 @@ if (origin == null || origin.isHuman()) {
 }
 ```
 
-`origin()` is null when the CLI did not attribute the message. Prompts sent
-through `query()` arrive that way unless you stamp `"origin": {"kind": "human"}`
-on the streamed message map yourself — only the `human` kind is honored from an
-SDK host. A kind newer than this SDK models leaves `kind()` null with the wire
-string still readable from `kindValue()`, and never counts as human.
+`origin()` é null quando o CLI não atribuiu origem à mensagem. Prompts enviados via `query()`
+chegam assim, a menos que você mesmo marque `"origin": {"kind": "human"}` no map da mensagem
+transmitida — apenas o tipo `human` é aceito vindo de um host do SDK. Um tipo mais novo do que
+este SDK modela deixa `kind()` como null, com a string do protocolo ainda legível em
+`kindValue()`, e nunca conta como humano.
 
-### Content Blocks
+### Blocos de conteúdo
 
 ```java
 for (ContentBlock block : assistant.content()) {
@@ -914,7 +921,7 @@ for (ContentBlock block : assistant.content()) {
 }
 ```
 
-## Error Handling
+## Tratamento de erros
 
 ```java
 import in.vidyalai.claude.sdk.exceptions.*;
@@ -960,7 +967,7 @@ try {
 }
 ```
 
-### Exception Hierarchy
+### Hierarquia de exceções
 
 ```
 ClaudeSDKException (base)
@@ -973,38 +980,35 @@ ClaudeSDKException (base)
 └── QueryFailedException
 ```
 
-`ResultException` is raised when the CLI ends a failed run by emitting a
-`result` message with `is_error: true` and then exiting non-zero. It replaces
-the bare "exit code 1" `ProcessException` for that case and carries the
-result's payload — `subtype()`, `errors()`, `result()`, `apiErrorStatus()`,
-`terminalReason()`, `sessionId()` and the raw `data()` — so callers can branch
-on *why* the run failed. Note that a run ending on an API failure arrives as
-`subtype() == "success"` with `terminalReason() == "api_error"` and the prose
-in `result()`. Existing `catch (ProcessException e)` handlers keep working.
+`ResultException` é lançada quando o CLI encerra uma execução malsucedida emitindo uma mensagem
+`result` com `is_error: true` e então sai com código diferente de zero. Ela substitui, nesse
+caso, a `ProcessException` genérica de "exit code 1" e carrega o payload do resultado —
+`subtype()`, `errors()`, `result()`, `apiErrorStatus()`, `terminalReason()`, `sessionId()` e o
+`data()` bruto — para que quem chama possa ramificar conforme o *motivo* da falha. Note que uma
+execução encerrada por uma falha de API chega com `subtype() == "success"` e
+`terminalReason() == "api_error"`, com o texto explicativo em `result()`. Handlers existentes
+com `catch (ProcessException e)` continuam funcionando.
 
-Usually you meet it as `QueryFailedException.getCause()`, not on its own: the
-collecting `query(...)` wraps it so the messages already received are not lost.
-It is thrown directly only by a failed control request, such as an `initialize`
-the CLI refuses at startup. `ClaudeSDKClient.receiveResponse()` does not throw
-it at all — that iterator stops at the `ResultMessage`, so check
-`ResultMessage.isError()` there instead.
+Normalmente você a encontra como `QueryFailedException.getCause()`, e não sozinha: o `query(...)`
+que coleta mensagens a envolve para que as mensagens já recebidas não se percam. Ela é lançada
+diretamente apenas por uma requisição de controle que falhou, como um `initialize` recusado
+pelo CLI na inicialização. `ClaudeSDKClient.receiveResponse()` não a lança de forma alguma —
+esse iterador para no `ResultMessage`, então verifique `ResultMessage.isError()` ali.
 
-`QueryFailedException` is specific to the collecting `ClaudeSDK.query(...)`
-family. The CLI reports conditions like `error_max_turns` and
-`error_max_budget_usd` by emitting a complete turn — including a final
-`ResultMessage` carrying the subtype and cost — and *then* exiting non-zero.
-A streaming consumer (`ClaudeSDKClient.receiveMessages()` /
-`receiveResponse()`) sees every one of those messages before the raise; a
-collecting call has to either return a list or throw, so it throws this and
-hands the collected messages back via `partialMessages()` and the
-`resultMessage()` convenience accessor; its `getCause()` is the
-`ResultException` described above. Catch it whenever you set `maxTurns`
-or `maxBudgetUsd`: reaching a cap you configured is an expected outcome, not
-a crash.
+`QueryFailedException` é específica da família `ClaudeSDK.query(...)` que coleta mensagens. O
+CLI reporta condições como `error_max_turns` e `error_max_budget_usd` emitindo um turno completo
+— incluindo um `ResultMessage` final com o subtipo e o custo — e *depois* saindo com código
+diferente de zero. Um consumidor de streaming (`ClaudeSDKClient.receiveMessages()` /
+`receiveResponse()`) vê cada uma dessas mensagens antes do lançamento; uma chamada que coleta
+precisa ou retornar uma lista ou lançar, então ela lança esta exceção e devolve as mensagens
+coletadas via `partialMessages()` e o acessor de conveniência `resultMessage()`; o
+`getCause()` dela é a `ResultException` descrita acima. Capture-a sempre que definir `maxTurns`
+ou `maxBudgetUsd`: atingir um limite que você mesmo configurou é um desfecho esperado, não uma
+falha.
 
-## Streaming Events
+## Eventos de streaming
 
-Enable partial message streaming for real-time updates.
+Habilite o streaming de mensagens parciais para atualizações em tempo real.
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -1029,9 +1033,9 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-## File Checkpointing
+## Checkpoints de arquivo
 
-Track file changes and rewind to previous states.
+Acompanhe alterações em arquivos e volte a estados anteriores.
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -1055,9 +1059,9 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-## Custom Agents
+## Agentes personalizados
 
-Define custom agents with specific capabilities.
+Defina agentes personalizados com capacidades específicas.
 
 ```java
 AgentDefinition codeReviewer = new AgentDefinition(
@@ -1082,40 +1086,42 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-## Examples
+## Exemplos
 
-See the `examples/` module for complete working examples:
+Veja o módulo `examples/` para exemplos completos e funcionais:
 
-- `QuickStart.java` - Basic usage
-- `MultiTurnConversation.java` - Interactive conversations
-- `ToolUsage.java` - Using built-in tools
-- `McpServer.java` - Creating custom MCP tools
-- `AutoSchemaGeneration.java` - Automatic schema generation for tools
-- `Hooks.java` - Hook callbacks (including new hook events: Notification, SubagentStart, PermissionRequest)
-- `PermissionCallbacks.java` - Custom permission logic
-- `StreamingEvents.java` - Real-time streaming
-- `StructuredOutputExample.java` - Structured output with JSON Schema validation (simple, nested, enum, with tools)
-- `DynamicControlExample.java` - Dynamic control features (setPermissionMode, setModel, interrupt)
-- `ErrorHandling.java` - Exception handling
-- `AdvancedFeatures.java` - Checkpointing, sandbox, structured output
-- `ToolsConfigurationExample.java` - Tools configuration (array, preset, empty)
-- `MaxBudgetExample.java` - Budget limiting and cost control
-- `SettingSourcesExample.java` - Settings sources (user, project, local)
-- `StderrCallbackExample.java` - Capturing CLI stderr output
-- `PluginsExample.java` - Plugin system usage
-- `AgentsExample.java` - Programmatic subagent definitions
-- `FilesystemAgentsExample.java` - Filesystem-based agent configuration
-- `LargeAgentsExample.java` - Large agent definitions (260KB+) via initialize request
-- `SystemPromptExample.java` - Custom system prompt usage
-- `IncludePartialMessagesExample.java` - Streaming with partial message updates
+- `QuickStart.java` — uso básico
+- `MultiTurnConversation.java` — conversas interativas
+- `ToolUsage.java` — usando ferramentas embutidas
+- `McpServer.java` — criando ferramentas MCP personalizadas
+- `AutoSchemaGeneration.java` — geração automática de schema para ferramentas
+- `Hooks.java` — callbacks de hook (incluindo os novos eventos: Notification, SubagentStart, PermissionRequest)
+- `PermissionCallbacks.java` — lógica de permissão personalizada
+- `StreamingEvents.java` — streaming em tempo real
+- `StructuredOutputExample.java` — saída estruturada com validação por JSON Schema (simples, aninhada, enum, com ferramentas)
+- `DynamicControlExample.java` — recursos de controle dinâmico (setPermissionMode, setModel, interrupt)
+- `ErrorHandling.java` — tratamento de exceções
+- `AdvancedFeatures.java` — checkpoints, sandbox, saída estruturada
+- `ToolsConfigurationExample.java` — configuração de ferramentas (array, preset, vazio)
+- `MaxBudgetExample.java` — limite de orçamento e controle de custo
+- `SettingSourcesExample.java` — fontes de configuração (user, project, local)
+- `StderrCallbackExample.java` — capturando a saída stderr do CLI
+- `PluginsExample.java` — uso do sistema de plugins
+- `AgentsExample.java` — definições programáticas de subagentes
+- `FilesystemAgentsExample.java` — configuração de agentes baseada no sistema de arquivos
+- `LargeAgentsExample.java` — definições grandes de agente (260KB+) via requisição initialize
+- `SystemPromptExample.java` — uso de prompt de sistema personalizado
+- `IncludePartialMessagesExample.java` — streaming com atualizações de mensagens parciais
 
-### Running Examples
+### Executando os exemplos
 
-The examples module is a separate Maven module that depends on the SDK. Building from the repository root satisfies that dependency from the reactor; building `examples/` on its own resolves it from Maven Central, which requires no repository or authentication setup.
+O módulo de exemplos é um módulo Maven separado que depende do SDK. Compilar a partir da raiz do
+repositório satisfaz essa dependência pelo reactor; compilar `examples/` sozinho a resolve pelo
+Maven Central, o que não exige configuração de repositório nem de autenticação.
 
-#### Option 1: Run Examples from Root Directory (Recommended)
+#### Opção 1: executar os exemplos a partir do diretório raiz (recomendado)
 
-Build all modules and run an example:
+Compile todos os módulos e execute um exemplo:
 
 ```bash
 # Build all modules (SDK + examples)
@@ -1129,7 +1135,7 @@ mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation" -pl examples
 mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples
 ```
 
-#### Option 2: Run Examples from Examples Directory
+#### Opção 2: executar os exemplos a partir do diretório examples
 
 ```bash
 # Navigate to examples directory
@@ -1145,18 +1151,18 @@ mvn exec:java -Dexec.mainClass="examples.QuickStart"
 java -cp target/classes:target/dependency/* examples.QuickStart
 ```
 
-#### Option 3: Run Examples with Local Development SDK
+#### Opção 3: executar os exemplos com o SDK de desenvolvimento local
 
-To test examples against your local development version of the SDK (not the published version):
+Para testar os exemplos contra sua versão local de desenvolvimento do SDK (não a publicada):
 
-1. Install the SDK locally:
+1. Instale o SDK localmente:
    ```bash
    cd sdk
    mvn clean install -DskipTests
    cd ..
    ```
 
-2. Update `examples/pom.xml` to use the SNAPSHOT version:
+2. Atualize `examples/pom.xml` para usar a versão SNAPSHOT:
    ```xml
    <dependency>
        <groupId>in.vidyalai</groupId>
@@ -1165,23 +1171,29 @@ To test examples against your local development version of the SDK (not the publ
    </dependency>
    ```
 
-3. Run examples as described in Option 1 or 2.
+3. Execute os exemplos como descrito na Opção 1 ou 2.
 
-**Note:** You can also pin the examples module to a released SDK version by setting the dependency's `<version>` in `examples/pom.xml` to that release (e.g. `0.2.2`). It resolves from Maven Central, so no repository or authentication setup is needed.
+**Observação:** você também pode fixar o módulo de exemplos em uma versão publicada do SDK
+definindo o `<version>` da dependência em `examples/pom.xml` para essa versão (por exemplo,
+`0.2.2`). Ela é resolvida pelo Maven Central, então não é preciso configurar repositório nem
+autenticação.
 
-## Thread Safety
+## Segurança em relação a threads
 
-- `ClaudeSDKClient` is **not thread-safe**. Use one client per thread or synchronize access.
-- `ClaudeSDK.query()` methods create new connections and are safe to call from multiple threads.
-- Callbacks (hooks, permissions) may be called from different threads; ensure your callback implementations are thread-safe.
+- `ClaudeSDKClient` **não é thread-safe**. Use um client por thread ou sincronize o acesso.
+- Os métodos `ClaudeSDK.query()` criam novas conexões e podem ser chamados com segurança a
+  partir de várias threads.
+- Callbacks (hooks, permissões) podem ser chamados a partir de threads diferentes; garanta que
+  suas implementações de callback sejam thread-safe.
 
-## Concurrency Model: Python vs Java
+## Modelo de concorrência: Python vs Java
 
-The Java SDK uses a fundamentally different concurrency model than the Python SDK. Understanding these differences helps when porting code or comparing examples.
+O SDK Java usa um modelo de concorrência fundamentalmente diferente do SDK Python. Entender
+essas diferenças ajuda ao portar código ou comparar exemplos.
 
-### Python SDK: Async/Await Model
+### SDK Python: modelo async/await
 
-The Python SDK uses Python's `async`/`await` syntax with asyncio or trio:
+O SDK Python usa a sintaxe `async`/`await` do Python com asyncio ou trio:
 
 ```python
 # Python SDK - async/await with asyncio
@@ -1199,16 +1211,16 @@ async def message_stream():
 await client.connect(message_stream())
 ```
 
-**Key Python Features:**
-- `async`/`await` keywords for non-blocking operations
-- `async for` for iterating over async iterables
-- `async with` for async context managers
-- Async iterables/generators (`async def` with `yield`)
-- Libraries: asyncio, trio
+**Principais recursos do Python:**
+- Palavras-chave `async`/`await` para operações não bloqueantes
+- `async for` para iterar sobre iteráveis assíncronos
+- `async with` para gerenciadores de contexto assíncronos
+- Iteráveis/geradores assíncronos (`async def` com `yield`)
+- Bibliotecas: asyncio, trio
 
-### Java SDK: Synchronous + CompletableFuture Model
+### SDK Java: modelo síncrono + CompletableFuture
 
-The Java SDK uses synchronous APIs with CompletableFuture for asynchronous operations:
+O SDK Java usa APIs síncronas com CompletableFuture para operações assíncronas:
 
 ```java
 // Java SDK - synchronous with try-with-resources
@@ -1227,27 +1239,28 @@ List<Map<String, Object>> messages = List.of(
 client.query(messages.iterator());
 ```
 
-**Key Java Features:**
-- **Synchronous iterators** (`Iterator<Message>`) instead of async iterables
-- **Try-with-resources** (`try (...)`) instead of async context managers
-- **CompletableFuture** for async callbacks (hooks, permissions)
-- **Virtual threads** for efficient blocking I/O when running on Java 21+, with a platform-thread fallback on 17-20
-- **ExecutorService** for background task management
+**Principais recursos do Java:**
+- **Iteradores síncronos** (`Iterator<Message>`) em vez de iteráveis assíncronos
+- **Try-with-resources** (`try (...)`) em vez de gerenciadores de contexto assíncronos
+- **CompletableFuture** para callbacks assíncronos (hooks, permissões)
+- **Threads virtuais** para I/O bloqueante eficiente no Java 21+, com fallback para threads de plataforma no 17-20
+- **ExecutorService** para gerenciamento de tarefas em segundo plano
 
-### Why Python Async Examples Don't Directly Translate
+### Por que os exemplos assíncronos do Python não se traduzem diretamente
 
-Some Python SDK examples don't have direct Java equivalents because they demonstrate async-specific patterns:
+Alguns exemplos do SDK Python não têm equivalente direto em Java porque demonstram padrões
+específicos de código assíncrono:
 
-| Python Example | Why Not in Java | Java Equivalent |
+| Exemplo em Python | Por que não existe em Java | Equivalente em Java |
 |----------------|-----------------|-----------------|
-| `streaming_mode_ipython.py` | IPython-specific async REPL integration | Use Java REPL (jshell) with synchronous APIs |
-| `streaming_mode_trio.py` | Trio-specific concurrency library | Use standard Java concurrency (ExecutorService, virtual threads) |
-| `test_connect_with_async_iterable` | Async generator pattern | `client.query(Iterator<Map>)` with regular Iterator |
-| `test_concurrent_send_receive` | Async concurrent operations | Use `Thread.startVirtualThread()` or ExecutorService |
+| `streaming_mode_ipython.py` | Integração com o REPL assíncrono específico do IPython | Use o REPL do Java (jshell) com as APIs síncronas |
+| `streaming_mode_trio.py` | Biblioteca de concorrência específica do Trio | Use a concorrência padrão do Java (ExecutorService, threads virtuais) |
+| `test_connect_with_async_iterable` | Padrão de gerador assíncrono | `client.query(Iterator<Map>)` com um Iterator comum |
+| `test_concurrent_send_receive` | Operações concorrentes assíncronas | Use `Thread.startVirtualThread()` ou ExecutorService |
 
-### Concurrent Operations in Java
+### Operações concorrentes em Java
 
-For operations that need true concurrency in Java:
+Para operações que realmente precisam de concorrência em Java:
 
 ```java
 // Concurrent send and receive using virtual threads
@@ -1271,39 +1284,47 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Performance Considerations
+### Considerações de desempenho
 
-- **Python**: Async I/O is efficient for I/O-bound operations but requires explicit `await` points
-- **Java**: Virtual threads (Project Loom) make blocking I/O as efficient as async without syntax changes
-- **Java**: Synchronous APIs are simpler to use and debug than async code
-- **Python**: Trio provides structured concurrency; Java achieves similar with try-with-resources and ExecutorService
+- **Python**: I/O assíncrono é eficiente para operações limitadas por I/O, mas exige pontos explícitos de `await`
+- **Java**: threads virtuais (Project Loom) tornam o I/O bloqueante tão eficiente quanto o assíncrono, sem mudanças de sintaxe
+- **Java**: APIs síncronas são mais simples de usar e depurar do que código assíncrono
+- **Python**: o Trio oferece concorrência estruturada; o Java alcança algo semelhante com try-with-resources e ExecutorService
 
-### Migration Guide: Python to Java
+### Guia de migração: de Python para Java
 
-| Python Pattern | Java Equivalent |
+| Padrão em Python | Equivalente em Java |
 |----------------|-----------------|
 | `async with client:` | `try (var client = ...) {` |
-| `await client.connect()` | `client.connect()` (synchronous) |
+| `await client.connect()` | `client.connect()` (síncrono) |
 | `async for msg in client.receive():` | `for (Message msg : client.receiveResponse())` |
 | `await asyncio.sleep(1)` | `Thread.sleep(1000)` |
 | `asyncio.create_task()` | `Thread.startVirtualThread(() -> ...)` |
-| `async def generator():` + `yield` | `Iterator<T>` implementation |
+| `async def generator():` + `yield` | Implementação de `Iterator<T>` |
 | `CompletableFuture.completed()` | `CompletableFuture.completedFuture()` |
 
-**Bottom Line:** The Java SDK prioritizes simplicity and uses synchronous APIs with virtual threads for efficient concurrency, while the Python SDK uses async/await for non-blocking operations. Both achieve similar functionality with their respective language idioms.
+**Conclusão:** o SDK Java prioriza a simplicidade e usa APIs síncronas com threads virtuais para
+concorrência eficiente, enquanto o SDK Python usa async/await para operações não bloqueantes.
+Ambos alcançam funcionalidade semelhante com os idiomas de suas respectivas linguagens.
 
-## Best Practices
+## Boas práticas
 
-1. **Always close clients** - Use try-with-resources or call `disconnect()` in a finally block.
-2. **Handle errors gracefully** - Catch specific exceptions for better error messages.
-3. **Set appropriate timeouts** - Use `maxTurns` and `maxBudgetUsd` to limit execution.
-4. **Use permission callbacks for security** - Don't rely solely on `permissionMode`.
-5. **Prefer SDK MCP servers** - They're faster and easier to debug than external processes.
+1. **Sempre feche os clients** — use try-with-resources ou chame `disconnect()` em um bloco finally.
+2. **Trate os erros com elegância** — capture exceções específicas para obter mensagens de erro melhores.
+3. **Defina limites apropriados** — use `maxTurns` e `maxBudgetUsd` para limitar a execução.
+4. **Use callbacks de permissão para segurança** — não dependa apenas do `permissionMode`.
+5. **Prefira servidores MCP do SDK** — são mais rápidos e mais fáceis de depurar do que processos externos.
 
-## Documentation
+## Documentação
 
-- **[Python SDK Feature Parity Analysis](docs/PYTHON_SDK_PARITY.md)** - Comprehensive comparison between Python and Java SDKs, including feature parity status, type system comparison, examples coverage, and implementation details.
+- **[Análise de paridade com o SDK Python](../PYTHON_SDK_PARITY.md)** — comparação abrangente
+  entre os SDKs Python e Java, incluindo o estado da paridade de recursos, comparação dos
+  sistemas de tipos, cobertura de exemplos e detalhes de implementação. (em inglês)
+- **[Índice da documentação técnica](./index.md)** — arquitetura, guias de recursos e referência
+  da API (nesta língua).
+- **[Sobre as traduções](../TRANSLATIONS.md)** — escopo das traduções, política de sincronização
+  e como contribuir. (em inglês)
 
-## License
+## Licença
 
-[MIT](LICENSE) 
+[MIT](../../LICENSE)

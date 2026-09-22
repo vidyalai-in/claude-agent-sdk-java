@@ -1,31 +1,33 @@
 # Claude Agent SDK for Java
 
-**English** · [简体中文](docs/zh/README.md) · [日本語](docs/ja/README.md) · [한국어](docs/ko/README.md) · [Português](docs/pt/README.md) · [Español](docs/es/README.md)
+[English](../../README.md) · **简体中文** · [日本語](../ja/README.md) · [한국어](../ko/README.md) · [Português](../pt/README.md) · [Español](../es/README.md)
 
-Java SDK for Claude Agent. This SDK provides a comprehensive Java API for interacting with Claude Code, enabling you to build AI-powered applications with Claude's capabilities.
+> **关于本译文**：英文文档是唯一权威版本。本译文可能滞后于[英文原文](../../README.md)；若两者不一致，以英文为准。代码块保持与英文原文完全一致，未作翻译。详见 [docs/TRANSLATIONS.md](../TRANSLATIONS.md)。
 
-## Requirements
+面向 Claude Agent 的 Java SDK。本 SDK 提供了一套完整的 Java API，用于与 Claude Code 交互，让你能够构建由 Claude 能力驱动的 AI 应用。
 
-- Java 17 or newer (uses sealed interfaces and records)
-  - On Java 21+ the SDK runs its background work on virtual threads; on 17-20
-    it uses named daemon platform threads instead. No configuration needed.
+## 环境要求
+
+- Java 17 或更高版本（使用了密封接口和 record）
+  - 在 Java 21+ 上，SDK 的后台任务运行在虚拟线程上；在 17-20 上则改用具名守护
+    平台线程。无需任何配置。
 - Maven 3.6+
 
-**Note:** The Claude Code CLI must be installed separately:
+**注意：** Claude Code CLI 需要单独安装：
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-Or specify a custom path:
+或者指定自定义路径：
 ```java
 ClaudeAgentOptions.builder()
     .cliPath(Path.of("/path/to/claude"))
     .build();
 ```
 
-## Installation
+## 安装
 
-Released to Maven Central, so no repository or authentication setup is needed.
+已发布至 Maven Central，因此无需配置仓库或身份认证。
 
 ### Maven
 
@@ -49,16 +51,15 @@ dependencies {
 }
 ```
 
-### Alternative: GitHub Packages
+### 备选方案：GitHub Packages
 
-Releases are also mirrored to GitHub Packages for consumers who already depend
-on it. This route requires a GitHub personal access token even though the
-artifacts are public, so prefer Maven Central unless you have a reason not to.
+为了兼容已经依赖该渠道的使用者，各版本也会镜像发布到 GitHub Packages。即使制品是公开的，
+这条路径仍然需要 GitHub 个人访问令牌，因此除非你有特殊理由，否则请优先使用 Maven Central。
 
 <details>
-<summary>GitHub Packages setup</summary>
+<summary>GitHub Packages 配置</summary>
 
-Add the repository to your `pom.xml`:
+在 `pom.xml` 中添加仓库：
 
 ```xml
 <repositories>
@@ -69,7 +70,7 @@ Add the repository to your `pom.xml`:
 </repositories>
 ```
 
-Or to your `build.gradle.kts`:
+或者添加到 `build.gradle.kts`：
 
 ```kotlin
 repositories {
@@ -83,7 +84,7 @@ repositories {
 }
 ```
 
-Then authenticate. For Maven, add this to your `~/.m2/settings.xml`:
+然后配置身份认证。对于 Maven，在 `~/.m2/settings.xml` 中添加：
 
 ```xml
 <settings>
@@ -97,18 +98,18 @@ Then authenticate. For Maven, add this to your `~/.m2/settings.xml`:
 </settings>
 ```
 
-For Gradle, create or update `~/.gradle/gradle.properties`:
+对于 Gradle，创建或更新 `~/.gradle/gradle.properties`：
 
 ```properties
 gpr.user=YOUR_GITHUB_USERNAME
 gpr.key=YOUR_GITHUB_PERSONAL_ACCESS_TOKEN
 ```
 
-Generate a personal access token with `read:packages` scope at: https://github.com/settings/tokens
+请在 https://github.com/settings/tokens 生成具有 `read:packages` 权限的个人访问令牌。
 
 </details>
 
-## Quick Start
+## 快速开始
 
 ```java
 import in.vidyalai.claude.sdk.ClaudeSDK;
@@ -127,9 +128,9 @@ public class QuickStart {
 }
 ```
 
-## Basic Usage: ClaudeSDK.query()
+## 基础用法：ClaudeSDK.query()
 
-`ClaudeSDK.query()` is for simple, one-shot queries. It returns a `List<Message>` with all response messages.
+`ClaudeSDK.query()` 用于简单的一次性查询。它返回包含全部响应消息的 `List<Message>`。
 
 ```java
 import in.vidyalai.claude.sdk.ClaudeSDK;
@@ -157,7 +158,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 List<Message> response = ClaudeSDK.query("Tell me a joke", options);
 ```
 
-### Convenience Methods
+### 便捷方法
 
 ```java
 // Get just the text response
@@ -169,7 +170,7 @@ ResultMessage result = ClaudeSDK.queryForResult("Do something", options);
 System.out.println("Cost: $" + result.totalCostUsd());
 ```
 
-### Using Tools
+### 使用工具
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -193,7 +194,7 @@ for (Message msg : messages) {
 }
 ```
 
-### Working Directory
+### 工作目录
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -201,7 +202,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Streaming Input (Multiple Messages)
+### 流式输入（多条消息）
 
 ```java
 // Send multiple messages in sequence
@@ -217,9 +218,10 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 
 ## ClaudeSDKClient
 
-`ClaudeSDKClient` supports bidirectional, interactive conversations with Claude Code. Unlike `query()`, it enables **multi-turn conversations**, **custom tools**, **hooks**, and **real-time interaction**.
+`ClaudeSDKClient` 支持与 Claude Code 进行双向的交互式会话。与 `query()` 不同，它支持
+**多轮会话**、**自定义工具**、**钩子（hooks）**以及**实时交互**。
 
-### Basic Usage
+### 基础用法
 
 ```java
 import in.vidyalai.claude.sdk.ClaudeSDKClient;
@@ -253,7 +255,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Manual Connection Management
+### 手动管理连接
 
 ```java
 ClaudeSDKClient client = new ClaudeSDKClient();
@@ -275,7 +277,7 @@ try {
 }
 ```
 
-### Interrupt Execution
+### 中断执行
 
 ```java
 try (var client = ClaudeSDK.createClient()) {
@@ -286,7 +288,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Dynamic Model Switching
+### 动态切换模型
 
 ```java
 try (var client = ClaudeSDK.createClient()) {
@@ -299,7 +301,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Permission Mode Changes
+### 变更权限模式
 
 ```java
 try (var client = ClaudeSDK.createClient()) {
@@ -312,7 +314,7 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### MCP Server Status
+### MCP 服务器状态
 
 ```java
 try (var client = ClaudeSDK.createClient(options)) {
@@ -330,7 +332,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-### SDK Utilities
+### SDK 实用方法
 
 ```java
 // Get SDK version
@@ -346,11 +348,11 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-## Custom Tools (SDK MCP Servers)
+## 自定义工具（SDK MCP 服务器）
 
-Create in-process MCP servers that run directly within your Java application.
+创建直接运行在你的 Java 应用进程内的 MCP 服务器。
 
-### Using @Tool Annotation
+### 使用 @Tool 注解
 
 ```java
 import in.vidyalai.claude.sdk.mcp.Tool;
@@ -405,7 +407,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-### Using SdkMcpTool Directly
+### 直接使用 SdkMcpTool
 
 ```java
 import in.vidyalai.claude.sdk.mcp.*;
@@ -439,7 +441,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Tool Result Types
+### 工具结果类型
 
 ```java
 // Text result
@@ -461,13 +463,12 @@ ToolResult.builder()
     .build()
 ```
 
-### Cancelling a Long-Running Tool
+### 取消长时间运行的工具
 
-The CLI gives up on a tool that outruns its MCP timeout and sends
-`notifications/cancelled`. The call is answered without waiting, but the
-handler keeps running unless it looks — a `CompletableFuture` cannot be
-interrupted from outside. Take a `ToolCallContext` alongside the arguments to
-see it:
+当某个工具的执行时间超过 MCP 超时限制时，CLI 会放弃等待并发送
+`notifications/cancelled`。该调用会立即得到应答而不再等待，但处理函数会继续运行，
+除非它主动去检查——`CompletableFuture` 无法从外部中断。在参数之外再接收一个
+`ToolCallContext`，即可感知取消：
 
 ```java
 SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
@@ -484,40 +485,40 @@ SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
     }));
 ```
 
-Handlers that take only their arguments are unaffected. `context.onCancel(...)`
-covers work that cannot poll, such as a blocking read.
+只接收参数的处理函数不受影响。对于无法轮询的工作（例如阻塞式读取），可以使用
+`context.onCancel(...)`。
 
-### Bringing Your Own MCP Server
+### 接入你自己的 MCP 服务器
 
-`McpSdkServerConfig` holds an `McpMessageHandler`, so an application that needs
-parts of MCP the built-in server does not serve — resources, prompts,
-completions — can implement the interface itself and register it the same way.
-See [docs/feature-mcp-servers.md](docs/feature-mcp-servers.md#custom-mcp-handlers).
+`McpSdkServerConfig` 持有一个 `McpMessageHandler`，因此当应用需要内置服务器并未提供的
+MCP 能力（资源、提示词、补全）时，可以自行实现该接口并以同样的方式注册。
+参见 [docs/feature-mcp-servers.md](../feature-mcp-servers.md#custom-mcp-handlers)。
 
-### Benefits Over External MCP Servers
+### 相比外部 MCP 服务器的优势
 
-- **No subprocess management** - Runs in the same JVM as your application
-- **Better performance** - No IPC overhead for tool calls
-- **Simpler deployment** - Single Java process instead of multiple
-- **Easier debugging** - All code runs in the same process
-- **Type safety** - Direct Java method calls
+- **无需管理子进程** —— 与你的应用运行在同一个 JVM 中
+- **性能更好** —— 工具调用没有进程间通信开销
+- **部署更简单** —— 单个 Java 进程，而非多个进程
+- **调试更容易** —— 所有代码运行在同一进程内
+- **类型安全** —— 直接的 Java 方法调用
 
-## Hooks
+## 钩子（Hooks）
 
-Hooks are callbacks that Claude Code invokes at specific points in the agent loop. They enable deterministic processing and automated feedback.
+钩子是 Claude Code 在 agent 循环的特定节点上调用的回调。它们可以实现确定性的处理逻辑和
+自动化反馈。
 
-### Hook Events
+### 钩子事件
 
-| Event | Description |
+| 事件 | 说明 |
 |-------|-------------|
-| `PreToolUse` | Before a tool is executed |
-| `PostToolUse` | After a tool completes |
-| `UserPromptSubmit` | When user submits a prompt |
-| `Stop` | When session stops |
-| `SubagentStop` | When a subagent stops |
-| `PreCompact` | Before context compaction |
+| `PreToolUse` | 工具执行之前 |
+| `PostToolUse` | 工具执行完成之后 |
+| `UserPromptSubmit` | 用户提交提示词时 |
+| `Stop` | 会话停止时 |
+| `SubagentStop` | 子 agent 停止时 |
+| `PreCompact` | 上下文压缩之前 |
 
-### Example: Blocking Dangerous Commands
+### 示例：拦截危险命令
 
 ```java
 import in.vidyalai.claude.sdk.types.*;
@@ -565,7 +566,7 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-### Example: Logging All Tool Uses
+### 示例：记录所有工具调用
 
 ```java
 HookMatcher.HookCallback logToolUse = (input, context) -> {
@@ -584,9 +585,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-## Permission Callbacks
+## 权限回调
 
-Control tool execution with custom permission logic.
+用自定义的权限逻辑来控制工具的执行。
 
 ```java
 import in.vidyalai.claude.sdk.types.*;
@@ -618,7 +619,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Modifying Tool Input
+### 修改工具输入
 
 ```java
 ClaudeAgentOptions.CanUseTool sanitizeInput = (toolName, input, context) -> {
@@ -635,7 +636,7 @@ ClaudeAgentOptions.CanUseTool sanitizeInput = (toolName, input, context) -> {
 };
 ```
 
-### Permission Updates
+### 权限更新
 
 ```java
 ClaudeAgentOptions.CanUseTool upgradePermissions = (toolName, input, context) -> {
@@ -653,7 +654,7 @@ ClaudeAgentOptions.CanUseTool upgradePermissions = (toolName, input, context) ->
 };
 ```
 
-## Configuration Options
+## 配置选项
 
 ### ClaudeAgentOptions
 
@@ -733,7 +734,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Permission Modes
+### 权限模式
 
 ```java
 PermissionMode.DEFAULT           // CLI prompts for dangerous tools
@@ -742,9 +743,9 @@ PermissionMode.PLAN              // Show plans before execution
 PermissionMode.BYPASS_PERMISSIONS // Allow all tools (use with caution)
 ```
 
-### Thinking Configuration
+### 思考（Thinking）配置
 
-Control extended thinking behavior with `ThinkingConfig` types (added in v0.1.36):
+使用 `ThinkingConfig` 类型控制扩展思考行为（自 v0.1.36 起新增）：
 
 ```java
 import in.vidyalai.claude.sdk.types.config.*;
@@ -765,9 +766,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-**Note:** The `thinking` field takes precedence over the deprecated `maxThinkingTokens` field.
+**注意：** `thinking` 字段的优先级高于已废弃的 `maxThinkingTokens` 字段。
 
-### MCP Server Configurations
+### MCP 服务器配置
 
 ```java
 // Stdio server (subprocess)
@@ -802,7 +803,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-### Sandbox Configuration
+### 沙箱配置
 
 ```java
 SandboxSettings sandbox = new SandboxSettings(
@@ -829,9 +830,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-## Message Types
+## 消息类型
 
-The SDK uses sealed interfaces for type-safe message handling with pattern matching.
+SDK 使用密封接口来实现类型安全的消息处理，并支持模式匹配。
 
 ```java
 import in.vidyalai.claude.sdk.types.*;
@@ -867,16 +868,14 @@ for (Message msg : messages) {
 }
 ```
 
-`Message` is a sealed interface, so an exhaustive `switch` with no `default`
-stops compiling when a new message type is added. Add a `default ->` branch if
-you would rather absorb future additions silently.
+`Message` 是一个密封接口，因此当新增消息类型时，没有 `default` 分支的穷尽式 `switch`
+将无法通过编译。如果你希望默默忽略未来新增的类型，请添加 `default ->` 分支。
 
-### Message Origin
+### 消息来源（Message Origin）
 
-In streaming-input mode one connection interleaves the turns you send with turns
-the session injects on its own — background-task notifications, fired
-scheduled-task prompts, MCP channel messages, messages relayed from peer
-sessions. `origin()` on `UserMessage` and `ResultMessage` tells them apart:
+在流式输入模式下，同一个连接会把你发送的轮次与会话自行注入的轮次交织在一起——后台任务
+通知、被触发的定时任务提示词、MCP 通道消息、从对等会话转发来的消息。`UserMessage` 和
+`ResultMessage` 上的 `origin()` 可以区分它们：
 
 ```java
 MessageOrigin origin = result.origin();
@@ -887,13 +886,12 @@ if (origin == null || origin.isHuman()) {
 }
 ```
 
-`origin()` is null when the CLI did not attribute the message. Prompts sent
-through `query()` arrive that way unless you stamp `"origin": {"kind": "human"}`
-on the streamed message map yourself — only the `human` kind is honored from an
-SDK host. A kind newer than this SDK models leaves `kind()` null with the wire
-string still readable from `kindValue()`, and never counts as human.
+当 CLI 未标注消息来源时，`origin()` 为 null。通过 `query()` 发送的提示词就属于这种情况，
+除非你自己在流式消息 map 上标注 `"origin": {"kind": "human"}`——SDK 宿主端只有 `human`
+这一种取值会被接受。若某个 kind 比本 SDK 建模的更新，`kind()` 会是 null，但仍可通过
+`kindValue()` 读取其原始协议字符串，并且它永远不会被视为 human。
 
-### Content Blocks
+### 内容块（Content Blocks）
 
 ```java
 for (ContentBlock block : assistant.content()) {
@@ -914,7 +912,7 @@ for (ContentBlock block : assistant.content()) {
 }
 ```
 
-## Error Handling
+## 错误处理
 
 ```java
 import in.vidyalai.claude.sdk.exceptions.*;
@@ -960,7 +958,7 @@ try {
 }
 ```
 
-### Exception Hierarchy
+### 异常层次结构
 
 ```
 ClaudeSDKException (base)
@@ -973,38 +971,32 @@ ClaudeSDKException (base)
 └── QueryFailedException
 ```
 
-`ResultException` is raised when the CLI ends a failed run by emitting a
-`result` message with `is_error: true` and then exiting non-zero. It replaces
-the bare "exit code 1" `ProcessException` for that case and carries the
-result's payload — `subtype()`, `errors()`, `result()`, `apiErrorStatus()`,
-`terminalReason()`, `sessionId()` and the raw `data()` — so callers can branch
-on *why* the run failed. Note that a run ending on an API failure arrives as
-`subtype() == "success"` with `terminalReason() == "api_error"` and the prose
-in `result()`. Existing `catch (ProcessException e)` handlers keep working.
+当 CLI 以发出 `is_error: true` 的 `result` 消息并随后以非零状态码退出的方式结束一次失败
+运行时，会抛出 `ResultException`。对于这种情况，它取代了原本那个只有"退出码 1"的
+`ProcessException`，并携带该 result 的负载——`subtype()`、`errors()`、`result()`、
+`apiErrorStatus()`、`terminalReason()`、`sessionId()` 以及原始的 `data()`——以便调用方能够
+根据运行失败的*原因*分别处理。请注意，因 API 故障而结束的运行，其 `subtype()` 为
+`"success"`，`terminalReason()` 为 `"api_error"`，说明文字则在 `result()` 中。现有的
+`catch (ProcessException e)` 处理逻辑仍然有效。
 
-Usually you meet it as `QueryFailedException.getCause()`, not on its own: the
-collecting `query(...)` wraps it so the messages already received are not lost.
-It is thrown directly only by a failed control request, such as an `initialize`
-the CLI refuses at startup. `ClaudeSDKClient.receiveResponse()` does not throw
-it at all — that iterator stops at the `ResultMessage`, so check
-`ResultMessage.isError()` there instead.
+通常你会以 `QueryFailedException.getCause()` 的形式遇到它，而不是单独遇到：进行收集的
+`query(...)` 会将其包装起来，以免已经收到的消息丢失。只有在控制请求失败时它才会被直接
+抛出，例如 CLI 在启动时拒绝了某个 `initialize`。`ClaudeSDKClient.receiveResponse()`
+根本不会抛出它——该迭代器在 `ResultMessage` 处停止，因此在那里请改为检查
+`ResultMessage.isError()`。
 
-`QueryFailedException` is specific to the collecting `ClaudeSDK.query(...)`
-family. The CLI reports conditions like `error_max_turns` and
-`error_max_budget_usd` by emitting a complete turn — including a final
-`ResultMessage` carrying the subtype and cost — and *then* exiting non-zero.
-A streaming consumer (`ClaudeSDKClient.receiveMessages()` /
-`receiveResponse()`) sees every one of those messages before the raise; a
-collecting call has to either return a list or throw, so it throws this and
-hands the collected messages back via `partialMessages()` and the
-`resultMessage()` convenience accessor; its `getCause()` is the
-`ResultException` described above. Catch it whenever you set `maxTurns`
-or `maxBudgetUsd`: reaching a cap you configured is an expected outcome, not
-a crash.
+`QueryFailedException` 是进行收集的 `ClaudeSDK.query(...)` 系列方法所特有的。对于
+`error_max_turns` 和 `error_max_budget_usd` 这类情况，CLI 的报告方式是发出一个完整的轮次
+——包括携带 subtype 和费用的最终 `ResultMessage`——*然后*才以非零状态码退出。流式消费者
+（`ClaudeSDKClient.receiveMessages()` / `receiveResponse()`）在抛出之前能看到上述每一条
+消息；而进行收集的调用要么返回一个列表、要么抛出异常，因此它选择抛出本异常，并通过
+`partialMessages()` 以及便捷访问器 `resultMessage()` 把已收集的消息交还给你；它的
+`getCause()` 就是上文所述的 `ResultException`。只要你设置了 `maxTurns` 或
+`maxBudgetUsd`，就应当捕获它：达到你自己配置的上限是预期内的结果，而不是崩溃。
 
-## Streaming Events
+## 流式事件
 
-Enable partial message streaming for real-time updates.
+启用部分消息流式传输，以获得实时更新。
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -1029,9 +1021,9 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-## File Checkpointing
+## 文件检查点
 
-Track file changes and rewind to previous states.
+跟踪文件变更并回退到之前的状态。
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -1055,9 +1047,9 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
-## Custom Agents
+## 自定义 Agent
 
-Define custom agents with specific capabilities.
+定义具备特定能力的自定义 agent。
 
 ```java
 AgentDefinition codeReviewer = new AgentDefinition(
@@ -1082,40 +1074,41 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
-## Examples
+## 示例
 
-See the `examples/` module for complete working examples:
+完整的可运行示例请参见 `examples/` 模块：
 
-- `QuickStart.java` - Basic usage
-- `MultiTurnConversation.java` - Interactive conversations
-- `ToolUsage.java` - Using built-in tools
-- `McpServer.java` - Creating custom MCP tools
-- `AutoSchemaGeneration.java` - Automatic schema generation for tools
-- `Hooks.java` - Hook callbacks (including new hook events: Notification, SubagentStart, PermissionRequest)
-- `PermissionCallbacks.java` - Custom permission logic
-- `StreamingEvents.java` - Real-time streaming
-- `StructuredOutputExample.java` - Structured output with JSON Schema validation (simple, nested, enum, with tools)
-- `DynamicControlExample.java` - Dynamic control features (setPermissionMode, setModel, interrupt)
-- `ErrorHandling.java` - Exception handling
-- `AdvancedFeatures.java` - Checkpointing, sandbox, structured output
-- `ToolsConfigurationExample.java` - Tools configuration (array, preset, empty)
-- `MaxBudgetExample.java` - Budget limiting and cost control
-- `SettingSourcesExample.java` - Settings sources (user, project, local)
-- `StderrCallbackExample.java` - Capturing CLI stderr output
-- `PluginsExample.java` - Plugin system usage
-- `AgentsExample.java` - Programmatic subagent definitions
-- `FilesystemAgentsExample.java` - Filesystem-based agent configuration
-- `LargeAgentsExample.java` - Large agent definitions (260KB+) via initialize request
-- `SystemPromptExample.java` - Custom system prompt usage
-- `IncludePartialMessagesExample.java` - Streaming with partial message updates
+- `QuickStart.java` —— 基础用法
+- `MultiTurnConversation.java` —— 交互式会话
+- `ToolUsage.java` —— 使用内置工具
+- `McpServer.java` —— 创建自定义 MCP 工具
+- `AutoSchemaGeneration.java` —— 为工具自动生成 schema
+- `Hooks.java` —— 钩子回调（包含新增的钩子事件：Notification、SubagentStart、PermissionRequest）
+- `PermissionCallbacks.java` —— 自定义权限逻辑
+- `StreamingEvents.java` —— 实时流式传输
+- `StructuredOutputExample.java` —— 带 JSON Schema 校验的结构化输出（简单、嵌套、枚举、配合工具）
+- `DynamicControlExample.java` —— 动态控制功能（setPermissionMode、setModel、interrupt）
+- `ErrorHandling.java` —— 异常处理
+- `AdvancedFeatures.java` —— 检查点、沙箱、结构化输出
+- `ToolsConfigurationExample.java` —— 工具配置（数组、预设、空）
+- `MaxBudgetExample.java` —— 预算限制与成本控制
+- `SettingSourcesExample.java` —— 设置来源（user、project、local）
+- `StderrCallbackExample.java` —— 捕获 CLI 的 stderr 输出
+- `PluginsExample.java` —— 插件系统用法
+- `AgentsExample.java` —— 以编程方式定义子 agent
+- `FilesystemAgentsExample.java` —— 基于文件系统的 agent 配置
+- `LargeAgentsExample.java` —— 通过 initialize 请求传递大型 agent 定义（260KB+）
+- `SystemPromptExample.java` —— 自定义系统提示词用法
+- `IncludePartialMessagesExample.java` —— 带部分消息更新的流式传输
 
-### Running Examples
+### 运行示例
 
-The examples module is a separate Maven module that depends on the SDK. Building from the repository root satisfies that dependency from the reactor; building `examples/` on its own resolves it from Maven Central, which requires no repository or authentication setup.
+examples 模块是一个依赖 SDK 的独立 Maven 模块。从仓库根目录构建时，该依赖由 reactor
+提供；单独构建 `examples/` 时，则从 Maven Central 解析，无需任何仓库或身份认证配置。
 
-#### Option 1: Run Examples from Root Directory (Recommended)
+#### 方式一：从根目录运行示例（推荐）
 
-Build all modules and run an example:
+构建所有模块并运行某个示例：
 
 ```bash
 # Build all modules (SDK + examples)
@@ -1129,7 +1122,7 @@ mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation" -pl examples
 mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples
 ```
 
-#### Option 2: Run Examples from Examples Directory
+#### 方式二：从 examples 目录运行
 
 ```bash
 # Navigate to examples directory
@@ -1145,18 +1138,18 @@ mvn exec:java -Dexec.mainClass="examples.QuickStart"
 java -cp target/classes:target/dependency/* examples.QuickStart
 ```
 
-#### Option 3: Run Examples with Local Development SDK
+#### 方式三：使用本地开发版 SDK 运行示例
 
-To test examples against your local development version of the SDK (not the published version):
+若要针对本地开发版（而非已发布版本）的 SDK 测试示例：
 
-1. Install the SDK locally:
+1. 在本地安装 SDK：
    ```bash
    cd sdk
    mvn clean install -DskipTests
    cd ..
    ```
 
-2. Update `examples/pom.xml` to use the SNAPSHOT version:
+2. 更新 `examples/pom.xml` 以使用 SNAPSHOT 版本：
    ```xml
    <dependency>
        <groupId>in.vidyalai</groupId>
@@ -1165,23 +1158,25 @@ To test examples against your local development version of the SDK (not the publ
    </dependency>
    ```
 
-3. Run examples as described in Option 1 or 2.
+3. 按方式一或方式二运行示例。
 
-**Note:** You can also pin the examples module to a released SDK version by setting the dependency's `<version>` in `examples/pom.xml` to that release (e.g. `0.2.2`). It resolves from Maven Central, so no repository or authentication setup is needed.
+**注意：** 你也可以把 `examples/pom.xml` 中依赖的 `<version>` 设为某个已发布版本
+（例如 `0.2.2`），从而将 examples 模块固定到该版本。它会从 Maven Central 解析，因此无需
+任何仓库或身份认证配置。
 
-## Thread Safety
+## 线程安全
 
-- `ClaudeSDKClient` is **not thread-safe**. Use one client per thread or synchronize access.
-- `ClaudeSDK.query()` methods create new connections and are safe to call from multiple threads.
-- Callbacks (hooks, permissions) may be called from different threads; ensure your callback implementations are thread-safe.
+- `ClaudeSDKClient` **不是线程安全的**。请为每个线程使用独立的 client，或对访问加以同步。
+- `ClaudeSDK.query()` 系列方法会创建新的连接，可以安全地从多个线程调用。
+- 回调（钩子、权限）可能在不同线程上被调用；请确保你的回调实现是线程安全的。
 
-## Concurrency Model: Python vs Java
+## 并发模型：Python 与 Java 对比
 
-The Java SDK uses a fundamentally different concurrency model than the Python SDK. Understanding these differences helps when porting code or comparing examples.
+Java SDK 采用的并发模型与 Python SDK 有本质区别。理解这些差异有助于移植代码或对照示例。
 
-### Python SDK: Async/Await Model
+### Python SDK：Async/Await 模型
 
-The Python SDK uses Python's `async`/`await` syntax with asyncio or trio:
+Python SDK 使用 Python 的 `async`/`await` 语法，配合 asyncio 或 trio：
 
 ```python
 # Python SDK - async/await with asyncio
@@ -1199,16 +1194,16 @@ async def message_stream():
 await client.connect(message_stream())
 ```
 
-**Key Python Features:**
-- `async`/`await` keywords for non-blocking operations
-- `async for` for iterating over async iterables
-- `async with` for async context managers
-- Async iterables/generators (`async def` with `yield`)
-- Libraries: asyncio, trio
+**Python 的关键特性：**
+- 用于非阻塞操作的 `async`/`await` 关键字
+- 用于遍历异步可迭代对象的 `async for`
+- 用于异步上下文管理器的 `async with`
+- 异步可迭代对象/生成器（`async def` 配合 `yield`）
+- 相关库：asyncio、trio
 
-### Java SDK: Synchronous + CompletableFuture Model
+### Java SDK：同步 + CompletableFuture 模型
 
-The Java SDK uses synchronous APIs with CompletableFuture for asynchronous operations:
+Java SDK 使用同步 API，并以 CompletableFuture 处理异步操作：
 
 ```java
 // Java SDK - synchronous with try-with-resources
@@ -1227,27 +1222,27 @@ List<Map<String, Object>> messages = List.of(
 client.query(messages.iterator());
 ```
 
-**Key Java Features:**
-- **Synchronous iterators** (`Iterator<Message>`) instead of async iterables
-- **Try-with-resources** (`try (...)`) instead of async context managers
-- **CompletableFuture** for async callbacks (hooks, permissions)
-- **Virtual threads** for efficient blocking I/O when running on Java 21+, with a platform-thread fallback on 17-20
-- **ExecutorService** for background task management
+**Java 的关键特性：**
+- **同步迭代器**（`Iterator<Message>`）而非异步可迭代对象
+- **try-with-resources**（`try (...)`）而非异步上下文管理器
+- **CompletableFuture** 用于异步回调（钩子、权限）
+- **虚拟线程**：在 Java 21+ 上高效地执行阻塞式 I/O，在 17-20 上回退为平台线程
+- **ExecutorService** 用于后台任务管理
 
-### Why Python Async Examples Don't Directly Translate
+### 为什么 Python 的异步示例无法直接对应
 
-Some Python SDK examples don't have direct Java equivalents because they demonstrate async-specific patterns:
+有些 Python SDK 示例没有直接的 Java 对应物，因为它们演示的是异步特有的模式：
 
-| Python Example | Why Not in Java | Java Equivalent |
+| Python 示例 | 为何 Java 中没有 | Java 等价做法 |
 |----------------|-----------------|-----------------|
-| `streaming_mode_ipython.py` | IPython-specific async REPL integration | Use Java REPL (jshell) with synchronous APIs |
-| `streaming_mode_trio.py` | Trio-specific concurrency library | Use standard Java concurrency (ExecutorService, virtual threads) |
-| `test_connect_with_async_iterable` | Async generator pattern | `client.query(Iterator<Map>)` with regular Iterator |
-| `test_concurrent_send_receive` | Async concurrent operations | Use `Thread.startVirtualThread()` or ExecutorService |
+| `streaming_mode_ipython.py` | IPython 特有的异步 REPL 集成 | 使用 Java REPL（jshell）配合同步 API |
+| `streaming_mode_trio.py` | Trio 特有的并发库 | 使用标准 Java 并发设施（ExecutorService、虚拟线程） |
+| `test_connect_with_async_iterable` | 异步生成器模式 | `client.query(Iterator<Map>)` 配合普通 Iterator |
+| `test_concurrent_send_receive` | 异步并发操作 | 使用 `Thread.startVirtualThread()` 或 ExecutorService |
 
-### Concurrent Operations in Java
+### Java 中的并发操作
 
-For operations that need true concurrency in Java:
+对于在 Java 中确实需要真正并发的场景：
 
 ```java
 // Concurrent send and receive using virtual threads
@@ -1271,39 +1266,43 @@ try (var client = ClaudeSDK.createClient()) {
 }
 ```
 
-### Performance Considerations
+### 性能考量
 
-- **Python**: Async I/O is efficient for I/O-bound operations but requires explicit `await` points
-- **Java**: Virtual threads (Project Loom) make blocking I/O as efficient as async without syntax changes
-- **Java**: Synchronous APIs are simpler to use and debug than async code
-- **Python**: Trio provides structured concurrency; Java achieves similar with try-with-resources and ExecutorService
+- **Python**：异步 I/O 对 I/O 密集型操作很高效，但需要显式的 `await` 点
+- **Java**：虚拟线程（Project Loom）让阻塞式 I/O 达到与异步相当的效率，且无需改变语法
+- **Java**：同步 API 比异步代码更易于使用和调试
+- **Python**：Trio 提供结构化并发；Java 则通过 try-with-resources 和 ExecutorService 达成类似效果
 
-### Migration Guide: Python to Java
+### 迁移指南：Python 到 Java
 
-| Python Pattern | Java Equivalent |
+| Python 写法 | Java 等价写法 |
 |----------------|-----------------|
 | `async with client:` | `try (var client = ...) {` |
-| `await client.connect()` | `client.connect()` (synchronous) |
+| `await client.connect()` | `client.connect()`（同步） |
 | `async for msg in client.receive():` | `for (Message msg : client.receiveResponse())` |
 | `await asyncio.sleep(1)` | `Thread.sleep(1000)` |
 | `asyncio.create_task()` | `Thread.startVirtualThread(() -> ...)` |
-| `async def generator():` + `yield` | `Iterator<T>` implementation |
+| `async def generator():` + `yield` | 实现 `Iterator<T>` |
 | `CompletableFuture.completed()` | `CompletableFuture.completedFuture()` |
 
-**Bottom Line:** The Java SDK prioritizes simplicity and uses synchronous APIs with virtual threads for efficient concurrency, while the Python SDK uses async/await for non-blocking operations. Both achieve similar functionality with their respective language idioms.
+**结论：** Java SDK 优先考虑简洁性，采用同步 API 并借助虚拟线程实现高效并发；而 Python
+SDK 使用 async/await 来完成非阻塞操作。两者以各自语言的惯用方式实现了相似的功能。
 
-## Best Practices
+## 最佳实践
 
-1. **Always close clients** - Use try-with-resources or call `disconnect()` in a finally block.
-2. **Handle errors gracefully** - Catch specific exceptions for better error messages.
-3. **Set appropriate timeouts** - Use `maxTurns` and `maxBudgetUsd` to limit execution.
-4. **Use permission callbacks for security** - Don't rely solely on `permissionMode`.
-5. **Prefer SDK MCP servers** - They're faster and easier to debug than external processes.
+1. **始终关闭 client** —— 使用 try-with-resources，或在 finally 块中调用 `disconnect()`。
+2. **优雅地处理错误** —— 捕获具体的异常类型，以获得更清晰的错误信息。
+3. **设置合理的上限** —— 使用 `maxTurns` 和 `maxBudgetUsd` 限制执行规模。
+4. **用权限回调来保障安全** —— 不要只依赖 `permissionMode`。
+5. **优先使用 SDK MCP 服务器** —— 它们比外部进程更快、更易于调试。
 
-## Documentation
+## 文档
 
-- **[Python SDK Feature Parity Analysis](docs/PYTHON_SDK_PARITY.md)** - Comprehensive comparison between Python and Java SDKs, including feature parity status, type system comparison, examples coverage, and implementation details.
+- **[Python SDK 功能对等分析](../PYTHON_SDK_PARITY.md)** —— Python 与 Java SDK 的全面对比，
+  包括功能对等状态、类型系统对比、示例覆盖情况和实现细节。（英文）
+- **[技术文档索引](./index.md)** —— 架构、功能指南与 API 参考（本语言版本）。
+- **[翻译说明](../TRANSLATIONS.md)** —— 翻译范围、同步策略与贡献方式。（英文）
 
-## License
+## 许可证
 
-[MIT](LICENSE) 
+[MIT](../../LICENSE)

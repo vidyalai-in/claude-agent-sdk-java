@@ -1,5 +1,7 @@
 # Claude Agent SDK for Java - Technical Documentation
 
+**English** · [简体中文](./zh/index.md) · [日本語](./ja/index.md) · [한국어](./ko/index.md) · [Português](./pt/index.md) · [Español](./es/index.md)
+
 Welcome to the technical documentation for the Claude Agent SDK for Java. This documentation provides comprehensive information about the SDK's architecture, features, and usage.
 
 ## Overview

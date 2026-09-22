@@ -1,0 +1,30 @@
+name: Translation sync
+
+on:
+  pull_request:
+    paths:
+      - 'README.md'
+      - 'docs/**'
+
+jobs:
+  report:
+    name: Report stale translations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # check-translations.sh compares commit ancestry, so it needs history.
+          fetch-depth: 0
+
+      - name: Check translations
+        run: |
+          {
+            echo '## Translation status'
+            echo
+            echo 'English is authoritative. This job reports, it never blocks —'
+            echo 'see [docs/TRANSLATIONS.md](../blob/main/docs/TRANSLATIONS.md).'
+            echo
+            echo '```'
+            ./scripts/check-translations.sh
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
