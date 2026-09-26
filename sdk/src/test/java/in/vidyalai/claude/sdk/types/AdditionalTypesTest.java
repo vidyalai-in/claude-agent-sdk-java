@@ -16,6 +16,8 @@ import in.vidyalai.claude.sdk.types.config.SandboxNetworkConfig;
 import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
+import in.vidyalai.claude.sdk.ClaudeAgentOptions;
+import in.vidyalai.claude.sdk.types.config.SystemPromptCustom;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.config.ToolsPreset;
 import in.vidyalai.claude.sdk.types.hook.HookContext;
@@ -70,6 +72,31 @@ class AdditionalTypesTest {
         assertThat(preset.type()).isEqualTo("preset");
         assertThat(preset.preset()).isEqualTo("claude_code");
         assertThat(preset.append()).isEqualTo("Additional instructions");
+    }
+
+    @Test
+    void testSystemPromptPresetSnapshot() {
+        SystemPromptPreset preset = SystemPromptPreset.claudeCode("Be concise.").withSnapshot(false);
+
+        assertThat(preset.preset()).isEqualTo("claude_code");
+        assertThat(preset.append()).isEqualTo("Be concise.");
+        assertThat(preset.snapshot()).isFalse();
+        // Unset unless asked for, so the CLI's own default applies.
+        assertThat(SystemPromptPreset.claudeCode().snapshot()).isNull();
+        assertThat(new SystemPromptPreset("claude_code", null, true).snapshot()).isNull();
+    }
+
+    @Test
+    void testSystemPromptCustom() {
+        SystemPromptCustom custom = SystemPromptCustom.of("You are a helpful assistant.", true);
+
+        assertThat(custom.type()).isEqualTo("custom");
+        assertThat(custom.prompt()).isEqualTo("You are a helpful assistant.");
+        assertThat(custom.snapshot()).isTrue();
+        assertThat(new SystemPromptCustom("x").snapshot()).isNull();
+
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder().systemPrompt(custom).build();
+        assertThat(options.systemPrompt()).isEqualTo(custom);
     }
 
     @Test

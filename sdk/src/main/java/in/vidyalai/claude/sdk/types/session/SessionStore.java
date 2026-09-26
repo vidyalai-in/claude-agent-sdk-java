@@ -9,9 +9,8 @@ import org.jspecify.annotations.Nullable;
 /**
  * Adapter for mirroring session transcripts to external storage.
  *
- * <p>The CLI subprocess still writes to local disk (set
- * {@code CLAUDE_CONFIG_DIR=/tmp} for an ephemeral local copy); the adapter
- * receives a secondary copy.
+ * <p>The CLI subprocess still writes to local disk under
+ * {@code CLAUDE_CONFIG_DIR}; the adapter receives a secondary copy.
  *
  * <p>The SDK never deletes from your store unless you call
  * {@link in.vidyalai.claude.sdk.ClaudeSDK#deleteSessionViaStore} (or equivalent)
@@ -56,9 +55,16 @@ public interface SessionStore {
     /**
      * Load a full session for resume.
      *
-     * <p>Called once, in the SDK parent, before subprocess spawn. The result is
-     * materialized to a temporary JSONL file; the subprocess resumes from that
-     * file using its existing resume code.
+     * <p>During a store-backed resume, called in the SDK parent before
+     * subprocess spawn: once for an explicit {@code resume} session id; for
+     * {@code continueConversation}, once per candidate walked newest-first
+     * until a non-sidechain session loads; and once per subpath when
+     * {@link #listSubkeys} is implemented. The result is materialized to a
+     * temporary JSONL file; the subprocess resumes from that file using its
+     * existing resume code. The store-reading helpers
+     * ({@code getSessionMessagesFromStore}, {@code getSubagentMessagesFromStore},
+     * {@code forkSessionViaStore}, and {@code listSessionsFromStore} when
+     * {@code listSessionSummaries} is unimplemented) call it as well.
      *
      * <p>Return {@code null} for a key that was never written; adapters that
      * cannot distinguish "never written" from "emptied" may return {@code null}

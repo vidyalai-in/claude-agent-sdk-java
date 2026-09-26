@@ -169,6 +169,12 @@ class ForwardSubagentTextTest {
             }
         }
 
+        List<String> allWrites() {
+            synchronized (writes) {
+                return List.copyOf(writes);
+            }
+        }
+
         @Override
         public void connect() {
             ready.set(true);

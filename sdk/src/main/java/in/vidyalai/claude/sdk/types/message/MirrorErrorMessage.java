@@ -12,8 +12,9 @@ import in.vidyalai.claude.sdk.types.session.SessionKey;
  * System message emitted when a {@code SessionStore.append} call fails.
  *
  * <p>Non-fatal — the local-disk transcript is already durable, so the session
- * continues unaffected. The mirrored copy in the external store will be missing
- * the failed batch.
+ * continues unaffected. The failed batch has been dropped (retries exhausted, or
+ * a single attempt timed out), so the external store may be missing it. A
+ * timed-out {@code append} may still land.
  *
  * <p>Modeled as a top-level record in the {@link Message} sealed hierarchy
  * (Java doesn't allow records to extend records). The {@code subtype} is

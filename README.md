@@ -215,6 +215,19 @@ var messages = List.of(
 List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 ```
 
+### System Prompt
+
+By default, Claude Code builds the system prompt on a session's first request, records it, and reuses it on every later request, including after you resume the session. A changed custom prompt, or changed `append` text on the `claude_code` preset, then has no effect until the session is compacted or you start a new session. To rebuild the prompt on every request instead, for example while you iterate on its wording, set `snapshot` to `false` on a `SystemPromptCustom` or `SystemPromptPreset`:
+
+```java
+var options = ClaudeAgentOptions.builder()
+    .systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+    // or: .systemPrompt(SystemPromptPreset.claudeCode("Be concise.").withSnapshot(false))
+    .build();
+```
+
+Requires Claude Code CLI 2.1.257 or later. Before 2.1.265, a session with an `append` or custom prompt recorded it only when `snapshot` was `true`. See [Modifying system prompts](https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts#change-the-prompt-of-an-existing-session) for details.
+
 ## ClaudeSDKClient
 
 `ClaudeSDKClient` supports bidirectional, interactive conversations with Claude Code. Unlike `query()`, it enables **multi-turn conversations**, **custom tools**, **hooks**, and **real-time interaction**.
@@ -293,7 +306,7 @@ try (var client = ClaudeSDK.createClient()) {
     client.connect("Start with default model");
 
     // Switch to a different model mid-conversation
-    client.setModel("claude-sonnet-4-5");
+    client.setModel("claude-sonnet-5");
 
     client.sendMessage("Continue with new model");
 }

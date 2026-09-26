@@ -26,6 +26,7 @@ import in.vidyalai.claude.sdk.internal.TranscriptMirrorBatcher;
 import in.vidyalai.claude.sdk.internal.transport.SubprocessCLITransport;
 import in.vidyalai.claude.sdk.mcp.McpMessageHandler;
 import in.vidyalai.claude.sdk.transport.Transport;
+import in.vidyalai.claude.sdk.types.config.SystemPromptCustom;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.mcp.ContextUsageResponse;
 import in.vidyalai.claude.sdk.types.mcp.McpStatusResponse;
@@ -170,10 +171,17 @@ public class ClaudeSDKClient implements AutoCloseable {
     }
 
     /**
-     * Creates a new client with custom transport (for testing).
+     * Creates a new client with a custom transport.
+     *
+     * <p>
+     * When {@code transport} is non-null it is used instead of the default
+     * subprocess transport, and the CLI-flag options in {@code options} are not
+     * applied to it; see {@link ClaudeSDK#query(String, ClaudeAgentOptions, Transport)}
+     * for what the SDK does and does not configure on a custom transport.
      *
      * @param options   the agent options
-     * @param transport custom transport implementation
+     * @param transport custom transport implementation, or null for the
+     *                  default subprocess transport
      */
     public ClaudeSDKClient(ClaudeAgentOptions options, @Nullable Transport transport) {
         this.options = options;
@@ -284,8 +292,11 @@ public class ClaudeSDKClient implements AutoCloseable {
                 sdkMcpServers,
                 effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
                 excludeDynamicSections,
+                extractSystemPromptSnapshot(effectiveOptions),
                 effectiveOptions.skills(),
                 effectiveOptions.forwardSubagentText(),
+                effectiveOptions.verbatimPrompts(),
+                QueryHandler.runEndCeilingMs(effectiveOptions.env()),
                 initializeTimeout,
                 effectiveOptions.maxMsgQSize());
 
@@ -323,7 +334,8 @@ public class ClaudeSDKClient implements AutoCloseable {
                 message.put("message", messageContent);
                 message.put("parent_tool_use_id", null);
                 message.put("session_id", "default");
-                String json = MAPPER.writeValueAsString(message);
+                String json = MAPPER.writeValueAsString(
+                        QueryHandler.stampUserMessage(message, effectiveOptions.verbatimPrompts()));
                 transport.write(json + "\n");
             } catch (JsonProcessingException e) {
                 throw new CLIConnectionException("Failed to serialize initial prompt", e);
@@ -363,7 +375,8 @@ public class ClaudeSDKClient implements AutoCloseable {
         message.put("message", innerMessage);
 
         try {
-            transport.write(MAPPER.writeValueAsString(message) + "\n");
+            transport.write(MAPPER.writeValueAsString(
+                    QueryHandler.stampUserMessage(message, options.verbatimPrompts())) + "\n");
         } catch (JsonProcessingException e) {
             throw new CLIConnectionException("Failed to serialize message", e);
         }
@@ -474,7 +487,8 @@ public class ClaudeSDKClient implements AutoCloseable {
                 message = withSession;
             }
             try {
-                transport.write(MAPPER.writeValueAsString(message) + "\n");
+                transport.write(MAPPER.writeValueAsString(
+                        QueryHandler.stampUserMessage(message, options.verbatimPrompts())) + "\n");
             } catch (JsonProcessingException e) {
                 throw new CLIConnectionException("Failed to serialize streamed message", e);
             }
@@ -669,10 +683,14 @@ public class ClaudeSDKClient implements AutoCloseable {
      * Stops a running task (only works with streaming mode).
      *
      * <p>
-     * After this resolves, a {@code task_notification} system message with status
-     * {@code "stopped"} will be emitted by the CLI in the message stream.
+     * After this resolves, the CLI reports the task's end in the message stream
+     * as a {@code TaskUpdatedMessage} whose status is terminal ({@code "killed"}
+     * for a stopped task). A {@code TaskNotificationMessage} with status
+     * {@code "stopped"} may follow, but is sometimes suppressed, so clear the
+     * task id on a terminal status from either message (see
+     * {@code TaskUpdatedMessage.TERMINAL_TASK_STATUSES}).
      *
-     * @param taskId the task ID from task_notification events
+     * @param taskId the task ID from the {@code TaskStartedMessage}
      * @throws CLIConnectionException if not connected
      * @throws IllegalStateException  if client is closed
      */
@@ -711,7 +729,7 @@ public class ClaudeSDKClient implements AutoCloseable {
     /**
      * Changes the AI model during conversation.
      *
-     * @param model the model to use, or null for default e.g. 'claude-sonnet-4-5'
+     * @param model the model to use, or null for default, e.g. 'claude-sonnet-5'
      * @throws CLIConnectionException if not connected
      * @throws IllegalStateException  if client is closed
      */
@@ -725,10 +743,9 @@ public class ClaudeSDKClient implements AutoCloseable {
      * Rewinds tracked files to their state at a specific user message.
      *
      * <p>
-     * Requires file checkpointing to be enabled via the
-     * {@code enableFileCheckpointing} option AND
-     * `extra_args={"replay-user-messages": None}` to receive UserMessage
-     * objects with `uuid` in the response stream
+     * Requires {@code enableFileCheckpointing(true)} to track file changes,
+     * and {@code extraArgs(Map.of("replay-user-messages", ""))} to receive
+     * {@code UserMessage} objects with a {@code uuid} in the response stream.
      *
      * @param userMessageId UUID of the user message to rewind to
      * @throws CLIConnectionException if not connected
@@ -749,7 +766,8 @@ public class ClaudeSDKClient implements AutoCloseable {
      * - Current and available output styles
      * - Server capabilities
      *
-     * @return initialization info, or null if not in streaming mode
+     * @return server info from the initialize response (null only if the CLI
+     *         returned none)
      * @throws CLIConnectionException if not connected
      * @throws IllegalStateException  if client is closed
      */
@@ -865,6 +883,24 @@ public class ClaudeSDKClient implements AutoCloseable {
         Object systemPrompt = options.systemPrompt();
         if (systemPrompt instanceof SystemPromptPreset preset) {
             return preset.excludeDynamicSections();
+        }
+        return null;
+    }
+
+    /**
+     * Extracts {@code snapshot} from a preset or custom system prompt for the
+     * initialize request (older CLIs ignore unknown initialize fields).
+     *
+     * @return the boolean value if set, or null
+     */
+    @Nullable
+    private static Boolean extractSystemPromptSnapshot(ClaudeAgentOptions options) {
+        Object systemPrompt = options.systemPrompt();
+        if (systemPrompt instanceof SystemPromptPreset preset) {
+            return preset.snapshot();
+        }
+        if (systemPrompt instanceof SystemPromptCustom custom) {
+            return custom.snapshot();
         }
         return null;
     }

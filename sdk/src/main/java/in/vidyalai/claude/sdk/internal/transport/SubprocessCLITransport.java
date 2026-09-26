@@ -43,6 +43,7 @@ import in.vidyalai.claude.sdk.internal.Threads;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
+import in.vidyalai.claude.sdk.types.config.SystemPromptCustom;
 import in.vidyalai.claude.sdk.types.config.SystemPromptFile;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.config.ThinkingConfig;
@@ -179,6 +180,18 @@ public class SubprocessCLITransport implements Transport {
     private static final int DEFAULT_MSG_Q_SIZE = 1000;
     private static final int DEFAULT_MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
     private static final String MINIMUM_CLAUDE_CODE_VERSION = "2.0.0";
+    /**
+     * First Claude Code version that honors {@code client_composed} on user
+     * messages, which {@link ClaudeAgentOptions#verbatimPrompts()} relies on.
+     */
+    static final String VERBATIM_PROMPTS_MINIMUM_CLAUDE_CODE_VERSION = "2.1.248";
+    /**
+     * Asks the CLI for {@code session_state_changed} frames marked
+     * {@code sdk_host_only}, which QueryHandler reads to tell when the run is
+     * over and keeps out of the caller's stream. CLIs that predate it send no
+     * frames.
+     */
+    static final String SDK_READS_SESSION_STATE_ENV = "CLAUDE_CODE_SDK_READS_SESSION_STATE";
     private static final String CLAUDE_CLI_NAME = "claude";
 
     /**
@@ -794,6 +807,15 @@ public class SubprocessCLITransport implements Transport {
         env.putAll(options.env());
         env.put("CLAUDE_AGENT_SDK_VERSION", SdkVersion.VERSION);
 
+        // QueryHandler waits for the CLI's session_state_changed "idle" before
+        // closing stdin on a run that serves control requests. Ask for the
+        // frames it drops (sdk_host_only) unless the caller chose a value, in
+        // any case; CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS stays the caller's
+        // own opt-in to seeing them.
+        if (env.keySet().stream().noneMatch(SDK_READS_SESSION_STATE_ENV::equalsIgnoreCase)) {
+            env.put(SDK_READS_SESSION_STATE_ENV, "1");
+        }
+
         if (options.enableFileCheckpointing()) {
             env.put("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");
         }
@@ -1112,6 +1134,9 @@ public class SubprocessCLITransport implements Transport {
         } else if (options.systemPrompt() instanceof String sp) {
             cmd.add("--system-prompt");
             cmd.add(sp);
+        } else if (options.systemPrompt() instanceof SystemPromptCustom spCustom) {
+            cmd.add("--system-prompt");
+            cmd.add(spCustom.prompt());
         } else if (options.systemPrompt() instanceof SystemPromptPreset spPreset) {
             if ("preset".equals(spPreset.type()) && (spPreset.append() != null)) {
                 cmd.add("--append-system-prompt");
@@ -1487,6 +1512,26 @@ public class SubprocessCLITransport implements Transport {
         }
     }
 
+    /**
+     * The warning for {@link ClaudeAgentOptions#verbatimPrompts()} on a CLI too
+     * old to honor {@code client_composed}, or {@code null} when none applies.
+     *
+     * <p>
+     * Package-private for testing.
+     */
+    @Nullable
+    static String verbatimPromptsWarning(ClaudeAgentOptions options, String version, String cliPath) {
+        if (!options.verbatimPrompts() || version.isEmpty()
+                || compareVersions(version, VERBATIM_PROMPTS_MINIMUM_CLAUDE_CODE_VERSION) >= 0) {
+            return null;
+        }
+        return String.format(
+                "verbatimPrompts is enabled, but Claude Code version %s at %s ignores it: prompts will "
+                        + "still have @path mentions expanded and slash commands dispatched. "
+                        + "Claude Code %s or later is required.",
+                version, cliPath, VERBATIM_PROMPTS_MINIMUM_CLAUDE_CODE_VERSION);
+    }
+
     private void checkClaudeVersion() {
         Process versionProcess = null;
         try {
@@ -1512,6 +1557,10 @@ public class SubprocessCLITransport implements Transport {
                         logger.warning(warning);
                         System.err.println(warning);
                     }
+                    String verbatimWarning = verbatimPromptsWarning(options, version, cliPath);
+                    if (verbatimWarning != null) {
+                        logger.warning(verbatimWarning);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -1528,7 +1577,7 @@ public class SubprocessCLITransport implements Transport {
         }
     }
 
-    private int compareVersions(String v1, String v2) {
+    private static int compareVersions(String v1, String v2) {
         String[] parts1 = v1.split("\\.");
         String[] parts2 = v2.split("\\.");
         int len = Math.max(parts1.length, parts2.length);

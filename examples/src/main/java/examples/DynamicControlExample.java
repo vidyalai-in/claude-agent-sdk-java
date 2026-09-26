@@ -164,8 +164,11 @@ public class DynamicControlExample {
             }
 
             // Switch to Haiku model (faster, cheaper)
-            System.out.println("\n   ⚙ Switching to Haiku model (claude-haiku-4-5)...");
-            client.setModel("claude-haiku-4-5");
+            // The CLI checks a model ID with the API, so a retired ID fails
+            // here. An alias is not checked, and the CLI maps it to a current
+            // model.
+            System.out.println("\n   ⚙ Switching to Haiku model (haiku alias)...");
+            client.setModel("haiku");
             System.out.println("   ✓ Model switched to Haiku");
 
             // Second query with Haiku

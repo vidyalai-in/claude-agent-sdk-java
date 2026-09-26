@@ -34,6 +34,10 @@ import com.fasterxml.jackson.annotation.JsonTypeName;
  * @param forwardSubagentText     Ask the CLI to forward subagent text/thinking blocks, not
  *                                just {@code tool_use}/{@code tool_result}. Only included
  *                                when true (omission is the default behavior)
+ * @param systemPromptSnapshot    Optional system-prompt flag: whether the session keeps the
+ *                                system prompt it recorded on its first request (see
+ *                                {@link in.vidyalai.claude.sdk.types.config.SystemPromptPreset#snapshot()}).
+ *                                Sent whenever set, including {@code false}
  */
 @JsonTypeName("initialize")
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -42,7 +46,8 @@ public record SDKControlInitializeRequest(
         @Nullable Map<String, AgentDefinition> agents,
         @Nullable Boolean excludeDynamicSections,
         @Nullable List<String> skills,
-        @Nullable Boolean forwardSubagentText) implements SDKControlRequestData {
+        @Nullable Boolean forwardSubagentText,
+        @Nullable Boolean systemPromptSnapshot) implements SDKControlRequestData {
 
     /**
      * Backwards-compatible constructor without excludeDynamicSections.
@@ -50,7 +55,7 @@ public record SDKControlInitializeRequest(
     public SDKControlInitializeRequest(
             @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
             @Nullable Map<String, AgentDefinition> agents) {
-        this(hooks, agents, null, null, null);
+        this(hooks, agents, null, null, null, null);
     }
 
     /**
@@ -60,7 +65,7 @@ public record SDKControlInitializeRequest(
             @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
             @Nullable Map<String, AgentDefinition> agents,
             @Nullable Boolean excludeDynamicSections) {
-        this(hooks, agents, excludeDynamicSections, null, null);
+        this(hooks, agents, excludeDynamicSections, null, null, null);
     }
 
     /**
@@ -71,7 +76,19 @@ public record SDKControlInitializeRequest(
             @Nullable Map<String, AgentDefinition> agents,
             @Nullable Boolean excludeDynamicSections,
             @Nullable List<String> skills) {
-        this(hooks, agents, excludeDynamicSections, skills, null);
+        this(hooks, agents, excludeDynamicSections, skills, null, null);
+    }
+
+    /**
+     * Backwards-compatible constructor without systemPromptSnapshot.
+     */
+    public SDKControlInitializeRequest(
+            @Nullable Map<HookEvent, List<Map<String, Object>>> hooks,
+            @Nullable Map<String, AgentDefinition> agents,
+            @Nullable Boolean excludeDynamicSections,
+            @Nullable List<String> skills,
+            @Nullable Boolean forwardSubagentText) {
+        this(hooks, agents, excludeDynamicSections, skills, forwardSubagentText, null);
     }
 
     @Override

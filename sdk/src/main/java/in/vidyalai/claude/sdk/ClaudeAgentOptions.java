@@ -15,6 +15,7 @@ import in.vidyalai.claude.sdk.types.config.EffortLevel;
 import in.vidyalai.claude.sdk.types.config.SandboxSettings;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
+import in.vidyalai.claude.sdk.types.config.SystemPromptCustom;
 import in.vidyalai.claude.sdk.types.config.SystemPromptFile;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.config.TaskBudget;
@@ -39,7 +40,7 @@ import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
  * ClaudeAgentOptions options = ClaudeAgentOptions.builder()
  *         .permissionMode(PermissionMode.BYPASS_PERMISSIONS)
  *         .maxTurns(5)
- *         .model("claude-sonnet-4-5")
+ *         .model("claude-sonnet-5")
  *         .build();
  * }</pre>
  */
@@ -53,7 +54,7 @@ public final class ClaudeAgentOptions {
 
     // System prompt
     @Nullable
-    private final Object systemPrompt; // String or SystemPromptPreset
+    private final Object systemPrompt; // String, SystemPromptPreset, SystemPromptCustom or SystemPromptFile
 
     // MCP servers
     @Nullable
@@ -157,6 +158,10 @@ public final class ClaudeAgentOptions {
     // Forward subagent text/thinking blocks as messages in the stream
     private final boolean forwardSubagentText;
 
+    // Deliver every prompt as written (client_composed): no @path expansion,
+    // no slash-command dispatch
+    private final boolean verbatimPrompts;
+
     // When true, only use MCP servers passed via mcpServers, ignoring all
     // other MCP configurations the CLI would otherwise load (e.g. project
     // .mcp.json, user/global settings, plugin-provided servers). Maps to the
@@ -192,8 +197,9 @@ public final class ClaudeAgentOptions {
     private final Object skills;
 
     // Sandbox configuration for bash command isolation.
-    // Filesystem and network restrictions are derived from permission rules
-    // (Read/Edit/WebFetch), not from these sandbox settings.
+    // Tool-level filesystem and network restrictions are derived from
+    // permission rules (Read/Edit/WebFetch); the sandbox's own network key
+    // configures isolation for sandboxed bash commands.
     @Nullable
     private final SandboxSettings sandbox;
 
@@ -278,6 +284,7 @@ public final class ClaudeAgentOptions {
         this.includePartialMessages = builder.includePartialMessages;
         this.includeHookEvents = builder.includeHookEvents;
         this.forwardSubagentText = builder.forwardSubagentText;
+        this.verbatimPrompts = builder.verbatimPrompts;
         this.strictMcpConfig = builder.strictMcpConfig;
         this.agents = ((builder.agents != null) ? Map.copyOf(builder.agents) : null);
         this.settingSources = builder.settingSources;
@@ -356,6 +363,7 @@ public final class ClaudeAgentOptions {
         builder.includePartialMessages = this.includePartialMessages;
         builder.includeHookEvents = this.includeHookEvents;
         builder.forwardSubagentText = this.forwardSubagentText;
+        builder.verbatimPrompts = this.verbatimPrompts;
         builder.strictMcpConfig = this.strictMcpConfig;
         builder.agents = ((this.agents != null) ? new HashMap<>(this.agents) : null);
         builder.settingSources = this.settingSources;
@@ -706,6 +714,23 @@ public final class ClaudeAgentOptions {
     }
 
     /**
+     * Returns whether every prompt is delivered to Claude as written.
+     *
+     * <p>When true, every user message the SDK sends (a string prompt or a
+     * message from a streamed prompt, including those passed to
+     * {@link ClaudeSDKClient#query}) is marked {@code client_composed}. Claude
+     * Code then delivers the text exactly as given: no {@code @path}
+     * file-mention expansion and no slash-command dispatch. See
+     * {@link Builder#verbatimPrompts(boolean)} for the details. Mirrors the
+     * Python SDK's {@code verbatim_prompts}.
+     *
+     * @return true if prompts are marked {@code client_composed}
+     */
+    public boolean verbatimPrompts() {
+        return verbatimPrompts;
+    }
+
+    /**
      * Returns whether the CLI should use only MCP servers passed via
      * {@link #mcpServers()}, ignoring all other MCP configurations.
      *
@@ -969,6 +994,7 @@ public final class ClaudeAgentOptions {
         private boolean includePartialMessages;
         private boolean includeHookEvents;
         private boolean forwardSubagentText;
+        private boolean verbatimPrompts;
         private boolean strictMcpConfig;
         @Nullable
         private Map<String, AgentDefinition> agents;
@@ -1076,6 +1102,18 @@ public final class ClaudeAgentOptions {
         }
 
         /**
+         * Sets a custom system prompt in the form that can also set
+         * {@code snapshot}. Same as {@link #systemPrompt(String)} otherwise.
+         *
+         * @param custom the custom system prompt configuration
+         * @return this builder
+         */
+        public Builder systemPrompt(SystemPromptCustom custom) {
+            this.systemPrompt = custom;
+            return this;
+        }
+
+        /**
          * Sets the MCP server configuration from a map.
          *
          * @param mcpServers map of server names to configurations
@@ -1087,7 +1125,8 @@ public final class ClaudeAgentOptions {
         }
 
         /**
-         * Sets the MCP server configuration from a file path.
+         * Sets the MCP server configuration from a file path, passed as-is to
+         * the {@code --mcp-config} CLI flag.
          *
          * @param path path to MCP server config file
          * @return this builder
@@ -1098,7 +1137,8 @@ public final class ClaudeAgentOptions {
         }
 
         /**
-         * Sets the MCP server configuration from a file path.
+         * Sets the MCP server configuration from a file path, passed as-is to
+         * the {@code --mcp-config} CLI flag.
          *
          * @param path path to MCP server config file
          * @return this builder
@@ -1109,7 +1149,8 @@ public final class ClaudeAgentOptions {
         }
 
         /**
-         * Sets the MCP server configuration from a JSON string.
+         * Sets the MCP server configuration from an inline JSON string, passed
+         * as-is to the {@code --mcp-config} CLI flag.
          *
          * @param json JSON configuration string
          * @return this builder
@@ -1289,9 +1330,13 @@ public final class ClaudeAgentOptions {
         /**
          * Sets the maximum thinking tokens.
          *
+         * <p>On newer models this value is treated as on/off (0 = disabled,
+         * any other value = adaptive).
+         *
          * @param maxThinkingTokens the max thinking tokens
          * @return this builder
-         * @deprecated Use {@link #thinking(ThinkingConfig)} instead
+         * @deprecated Use {@link #thinking(ThinkingConfig)} instead: adaptive,
+         *             enabled with a token budget, or disabled
          */
         @Deprecated
         public Builder maxThinkingTokens(int maxThinkingTokens) {
@@ -1378,9 +1423,20 @@ public final class ClaudeAgentOptions {
         }
 
         /**
-         * Sets the settings file path or name.
+         * Sets the path to an additional settings JSON file to load, or an
+         * inline JSON string.
          *
-         * @param settings the settings identifier
+         * <p>Without {@code sandbox}, the value is passed as-is to the
+         * {@code --settings} CLI flag. When {@code sandbox} is also set, the
+         * settings are merged with the sandbox settings and passed as one JSON
+         * string: an inline string is parsed directly, and a path is read from
+         * disk (a missing file is logged and only the sandbox settings are
+         * passed).
+         *
+         * <p>These are loaded into the "flag settings" layer, which has the
+         * highest priority among user-controlled settings.
+         *
+         * @param settings a settings file path or an inline JSON string
          * @return this builder
          */
         public Builder settings(String settings) {
@@ -1400,7 +1456,22 @@ public final class ClaudeAgentOptions {
         }
 
         /**
-         * Sets the environment variables.
+         * Sets environment variables to pass to the Claude Code subprocess.
+         *
+         * <p>Merged over the parent process's environment: entries here
+         * override inherited values, and {@code CLAUDECODE} is dropped from the
+         * inherited set. The transport sets {@code CLAUDE_CODE_ENTRYPOINT}
+         * (overridable here) and {@code CLAUDE_AGENT_SDK_VERSION} (not
+         * overridable), plus {@code PWD} when {@code cwd} is set,
+         * {@code CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING} when
+         * {@code enableFileCheckpointing} is set,
+         * {@code CLAUDE_CODE_SDK_READS_SESSION_STATE=1} unless this map or the
+         * inherited environment already names it, and W3C trace context from an
+         * active OpenTelemetry span.
+         *
+         * <p>SDK consumers can identify their app/library in the User-Agent
+         * header by setting {@code CLAUDE_AGENT_SDK_CLIENT_APP} (e.g.
+         * {@code "my-app/1.0.0"}).
          *
          * @param env map of environment variable names to values
          * @return this builder
@@ -1529,6 +1600,9 @@ public final class ClaudeAgentOptions {
         /**
          * Sets whether to include partial messages in streaming.
          *
+         * <p>When true, {@link in.vidyalai.claude.sdk.types.message.StreamEvent}
+         * messages are emitted during streaming, one per API stream event.
+         *
          * @param includePartialMessages true to include partial messages
          * @return this builder
          */
@@ -1571,6 +1645,47 @@ public final class ClaudeAgentOptions {
          */
         public Builder forwardSubagentText(boolean forwardSubagentText) {
             this.forwardSubagentText = forwardSubagentText;
+            return this;
+        }
+
+        /**
+         * Sets whether every prompt is delivered to Claude as written.
+         *
+         * <p>When true, every user message the SDK sends (a string prompt or a
+         * message from a streamed prompt, including those passed to
+         * {@link ClaudeSDKClient#query}) is marked {@code client_composed}.
+         * Claude Code then delivers the text exactly as given: no
+         * {@code @path} file-mention expansion and no slash-command dispatch.
+         * Use this when the prompt text is assembled from content the end user
+         * did not type (prior turns, tool results, third-party text), so an
+         * {@code @/absolute/path} inside it cannot make Claude Code read a
+         * local file.
+         *
+         * <p>While this option is on there is no per-message opt-out: any
+         * {@code client_composed} value on a streamed message is overwritten.
+         * For per-turn control, leave the option off and set
+         * {@code "client_composed": true} on individual streamed messages
+         * instead.
+         *
+         * <p>On current Claude Code versions a turn delivered this way also
+         * skips the turn-start attachment pass as a whole: {@code @server:resource}
+         * MCP mentions are not expanded either, and the prompt is sent without
+         * the context Claude Code normally attaches alongside it (nested
+         * {@code CLAUDE.md} and rules files, skill and tool listings, and other
+         * per-turn reminders). The pass Claude Code runs between tool calls is
+         * unaffected, so most of that context arrives after the turn's first
+         * tool call rather than with the prompt.
+         *
+         * <p>Requires Claude Code 2.1.248 or later; older versions ignore the
+         * field, so prompts are still expanded there. The SDK logs a warning
+         * when it connects to an older CLI with this option on. The option is
+         * read when the session starts.
+         *
+         * @param verbatimPrompts true to mark every prompt {@code client_composed}
+         * @return this builder
+         */
+        public Builder verbatimPrompts(boolean verbatimPrompts) {
+            this.verbatimPrompts = verbatimPrompts;
             return this;
         }
 
@@ -1645,6 +1760,13 @@ public final class ClaudeAgentOptions {
 
         /**
          * Sets the sandbox configuration.
+         *
+         * <p>When enabled, commands execute in a sandboxed environment that
+         * restricts filesystem and network access. Tool-level filesystem and
+         * network restrictions are configured via permission rules (Read/Edit
+         * for filesystem, WebFetch for network); the {@code network} setting
+         * here configures the sandbox's own network isolation. See
+         * {@link SandboxSettings}.
          *
          * @param sandbox the sandbox settings
          * @return this builder

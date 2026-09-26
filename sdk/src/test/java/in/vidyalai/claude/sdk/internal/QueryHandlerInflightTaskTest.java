@@ -145,6 +145,17 @@ class QueryHandlerInflightTaskTest {
                 "session_id", "",
                 "message", Map.of("role", "user", "content", "hi")));
         Threads.start("QueryHandlerInflightTaskTest-streamInput-", () -> handler.streamInput(prompt.iterator()));
+        // A real CLI answers only after the prompt arrives. Feeding frames
+        // earlier would let a result end a run that writing the prompt then
+        // reopens (each prompt owes a run of its own).
+        try {
+            if (!transport.awaitWrite(EXPECT_MS)) {
+                throw new AssertionError("streamInput never wrote the prompt");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
         return transport;
     }
 
@@ -332,6 +343,7 @@ class QueryHandlerInflightTaskTest {
 
         private final LinkedBlockingQueue<Map<String, Object>> queue = new LinkedBlockingQueue<>();
         private final CountDownLatch endInputCalled = new CountDownLatch(1);
+        private final CountDownLatch written = new CountDownLatch(1);
         private final AtomicBoolean ready = new AtomicBoolean(false);
         private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -341,6 +353,10 @@ class QueryHandlerInflightTaskTest {
 
         boolean awaitEndInput(long millis) throws InterruptedException {
             return endInputCalled.await(millis, TimeUnit.MILLISECONDS);
+        }
+
+        boolean awaitWrite(long millis) throws InterruptedException {
+            return written.await(millis, TimeUnit.MILLISECONDS);
         }
 
         @Override
@@ -380,6 +396,7 @@ class QueryHandlerInflightTaskTest {
             if (closed.get()) {
                 throw new CLIConnectionException("Transport closed");
             }
+            written.countDown();
         }
 
         @Override

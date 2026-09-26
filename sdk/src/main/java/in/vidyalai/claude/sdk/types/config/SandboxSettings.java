@@ -13,11 +13,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * and network isolation.
  * 
  * <p>
- * Note: Filesystem and network restrictions are configured from permission
- * rules (Read/Edit/WebFetch), not from these sandbox settings.
+ * Note: Tool-level filesystem and network restrictions are configured from
+ * permission rules (Read/Edit/WebFetch), not from these sandbox settings.
  * - Filesystem read restrictions: Use Read deny rules
  * - Filesystem write restrictions: Use Edit allow/deny rules
- * - Network restrictions: Use WebFetch allow/deny rules
+ * - Network restrictions for tools: Use WebFetch allow/deny rules
+ *
+ * <p>
+ * The {@code network} setting is different: it configures the sandbox's own
+ * network isolation for sandboxed bash commands.
  *
  * @param enabled                   enable bash sandboxing (macOS/Linux only).
  *                                  Default: False

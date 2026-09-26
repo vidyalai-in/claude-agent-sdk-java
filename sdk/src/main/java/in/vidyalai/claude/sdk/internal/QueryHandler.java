@@ -1,5 +1,6 @@
 package in.vidyalai.claude.sdk.internal;
 
+import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -256,6 +257,20 @@ public class QueryHandler implements AutoCloseable {
     private static final Set<String> DEFERRING_TASK_TYPES =
             Set.of("local_agent", "local_workflow");
     private static final int CONTROL_THREAD_JOIN_TIMEOUT_SECS = 5;
+
+    /**
+     * The CLI's own wait for background work once stdin is closed; the SDK
+     * bounds its wait for the CLI's "idle" by the same value (see
+     * {@link #armRunEndCeiling}).
+     */
+    static final String RUN_END_CEILING_ENV = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS";
+    /** The CLI's default background-wait ceiling: 10 minutes. */
+    public static final long DEFAULT_RUN_END_CEILING_MS = 600_000;
+    /**
+     * The longest ceiling honored (~24.8 days), as in the TypeScript and Python
+     * SDKs.
+     */
+    static final long MAX_RUN_END_CEILING_MS = Integer.MAX_VALUE;
     private static final ObjectMapper MAPPER;
 
     static {
@@ -297,6 +312,25 @@ public class QueryHandler implements AutoCloseable {
      * Only sent over the wire when true; older CLIs ignore unknown fields.
      */
     private final boolean forwardSubagentText;
+    /**
+     * Optional system-prompt flag sent via initialize (see
+     * {@link in.vidyalai.claude.sdk.types.config.SystemPromptPreset#snapshot()}).
+     * Sent whenever set, including {@code false}.
+     */
+    @Nullable
+    private final Boolean systemPromptSnapshot;
+    /**
+     * Mark every outgoing user message {@code client_composed} so the CLI
+     * delivers it as written (no {@code @path} expansion, no slash-command
+     * dispatch).
+     */
+    private final boolean verbatimPrompts;
+    /**
+     * How long the run stays open past a result with no new turn while the CLI
+     * still reports "running"; {@code 0} waits for "idle" however long it takes
+     * (see {@link #runEndCeilingMs(Map)}).
+     */
+    private final long runEndCeilingMs;
     private final Duration initializeTimeout;
 
     // Control protocol state
@@ -318,11 +352,35 @@ public class QueryHandler implements AutoCloseable {
     private final ExecutorService readerExecutor;
     private final ExecutorService controlExecutor;
 
-    // Completed when a run-ending result arrives (a result frame with no tasks
-    // in flight) so the stdin-closing waiter can wake. Named for history — it
-    // once tracked the literal first result.
-    private final CompletableFuture<Void> firstResultEvent = new CompletableFuture<>();
-    private final Duration streamCloseTimeout;
+    // Run-end state. The reader thread, the stdin writer (streamInput), the
+    // ceiling sleeper and close() all touch it, so every field below is
+    // guarded by runLock.
+    private final Object runLock = new Object();
+    // Completed when the run is over, so the stdin-closing waiter can wake;
+    // see readMessages and inflightTasks below. Work the CLI takes up after
+    // the run ended swaps in a fresh future (reopenRun).
+    private CompletableFuture<Void> runEndedEvent = new CompletableFuture<>();
+    private boolean resultReceived = false;
+    // The CLI's latest session_state_changed state, or null while it sends none
+    // (a CLI too old to honor CLAUDE_CODE_SDK_READS_SESSION_STATE). A CLI that
+    // reports state stays "running" while a background agent is live or its
+    // completion is still to be handled, and reports "idle" once no further
+    // turn is owed.
+    @Nullable
+    private String sessionState = null;
+    // Ends the run if no new turn starts within the ceiling after a result
+    // (armRunEndCeiling). The generation tells a sleeper that woke after it was
+    // cleared or re-armed to stand down.
+    @Nullable
+    private Thread runEndCeilingThread = null;
+    private long runEndCeilingGeneration = 0;
+    // A main-thread turn is under way (its assistant/stream_event frames have
+    // started and its result has not arrived): the ceiling counts only the
+    // wait between turns, so it is not armed meanwhile.
+    private boolean turnInProgress = false;
+    // Set once stdin is closed or the reader is gone: the run then stays
+    // ended, since nothing can wait on a reopened one.
+    private boolean runFinal = false;
 
     // Task IDs of started-but-not-finished tasks. A result frame ends one turn,
     // not the run: background tasks keep running past it and still need stdin
@@ -421,6 +479,55 @@ public class QueryHandler implements AutoCloseable {
             boolean forwardSubagentText,
             Duration initializeTimeout,
             @Nullable Integer maxMsgQSize) {
+        this(transport, isStreamingMode, canUseTool, hooks, sdkMcpServers, agents,
+                excludeDynamicSections, null, skills, forwardSubagentText, false,
+                DEFAULT_RUN_END_CEILING_MS, initializeTimeout, maxMsgQSize);
+    }
+
+    /**
+     * Creates a new QueryHandler with every initialize-request and run-end
+     * setting.
+     *
+     * @param transport                the transport for I/O
+     * @param isStreamingMode          whether using streaming (bidirectional) mode
+     * @param canUseTool               optional callback for tool permission requests (may
+     *                                 be null)
+     * @param hooks                    optional hook configurations
+     * @param sdkMcpServers            optional SDK MCP servers for in-process tool
+     *                                 execution
+     * @param agents                   optional agent definitions to send via initialize
+     *                                 request
+     * @param excludeDynamicSections   optional preset-prompt flag for cross-user caching
+     * @param systemPromptSnapshot     optional system-prompt flag sent via initialize (see
+     *                                 {@link in.vidyalai.claude.sdk.types.config.SystemPromptPreset#snapshot()})
+     * @param skills                   optional skill allowlist sent via initialize so the CLI can
+     *                                 filter which skills are loaded into the system prompt
+     *                                 ({@code null}, the string {@code "all"}, or a {@code List<String>})
+     * @param forwardSubagentText      ask the CLI (via initialize) to forward subagent
+     *                                 text/thinking blocks, not just tool_use/tool_result
+     * @param verbatimPrompts          mark every outgoing user message {@code client_composed}
+     *                                 so the CLI delivers it as written
+     * @param runEndCeilingMs          how long the run stays open past a result with no new
+     *                                 turn while the CLI still reports "running"; {@code 0}
+     *                                 waits for "idle" however long it takes
+     * @param initializeTimeout        timeout for the initialize request
+     * @param maxMsgQSize              max message queue size
+     */
+    public QueryHandler(
+            Transport transport,
+            boolean isStreamingMode,
+            ClaudeAgentOptions.CanUseTool canUseTool, // may be null
+            @Nullable Map<HookEvent, List<HookMatcher>> hooks,
+            @Nullable Map<String, McpMessageHandler> sdkMcpServers,
+            @Nullable Map<String, AgentDefinition> agents,
+            @Nullable Boolean excludeDynamicSections,
+            @Nullable Boolean systemPromptSnapshot,
+            @Nullable Object skills,
+            boolean forwardSubagentText,
+            boolean verbatimPrompts,
+            long runEndCeilingMs,
+            Duration initializeTimeout,
+            @Nullable Integer maxMsgQSize) {
         this.transport = transport;
         this.isStreamingMode = isStreamingMode;
         this.canUseTool = canUseTool;
@@ -430,6 +537,9 @@ public class QueryHandler implements AutoCloseable {
         this.excludeDynamicSections = excludeDynamicSections;
         this.skills = skills;
         this.forwardSubagentText = forwardSubagentText;
+        this.systemPromptSnapshot = systemPromptSnapshot;
+        this.verbatimPrompts = verbatimPrompts;
+        this.runEndCeilingMs = runEndCeilingMs;
         this.initializeTimeout = initializeTimeout;
         this.messageQueue = new LinkedBlockingQueue<>((maxMsgQSize != null) ? maxMsgQSize : DEFAULT_MSG_Q_SIZE);
 
@@ -445,10 +555,62 @@ public class QueryHandler implements AutoCloseable {
         // queue behind the call it exists to cancel, and deadlock. That is why
         // the Java 17 fallback is an unbounded cached pool, not a fixed one.
         this.controlExecutor = Threads.newThreadPerTaskExecutor("QueryHandler-Control-");
+    }
 
-        // Get stream close timeout from env, default 60 seconds
-        long timeoutMs = Long.parseLong(System.getenv().getOrDefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "60000"));
-        this.streamCloseTimeout = Duration.ofMillis(timeoutMs);
+    /**
+     * Reads {@code CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS} as the CLI will see it.
+     *
+     * <p>
+     * {@code optionsEnv} ({@link ClaudeAgentOptions#env()}) overrides the
+     * inherited environment, as it does for the CLI subprocess. {@code 0} means
+     * no limit; anything that is not a plain non-negative integer falls back to
+     * the CLI's default of 10 minutes (the CLI itself also reads spellings such
+     * as {@code 1e6}).
+     *
+     * @param optionsEnv the environment the options pass to the CLI
+     * @return the ceiling in milliseconds
+     */
+    public static long runEndCeilingMs(Map<String, String> optionsEnv) {
+        return runEndCeilingMs(optionsEnv, System.getenv());
+    }
+
+    static long runEndCeilingMs(Map<String, String> optionsEnv, Map<String, String> ambientEnv) {
+        String raw = optionsEnv.containsKey(RUN_END_CEILING_ENV)
+                ? optionsEnv.get(RUN_END_CEILING_ENV)
+                : ambientEnv.get(RUN_END_CEILING_ENV);
+        if (raw == null) {
+            return DEFAULT_RUN_END_CEILING_MS;
+        }
+        String trimmed = raw.strip();
+        if (!trimmed.matches("\\+?[0-9]+")) {
+            return DEFAULT_RUN_END_CEILING_MS;
+        }
+        // A value past Long.MAX_VALUE is still a valid, very long ceiling: the
+        // sleeper clamps it to MAX_RUN_END_CEILING_MS.
+        BigInteger value = new BigInteger(trimmed);
+        return value.bitLength() < Long.SIZE ? value.longValue() : Long.MAX_VALUE;
+    }
+
+    /**
+     * Applies {@link ClaudeAgentOptions#verbatimPrompts()} to an outgoing user
+     * message.
+     *
+     * <p>
+     * Returns {@code message} unchanged when the option is off; otherwise a
+     * copy with {@code client_composed} set to {@code true} (overwriting any
+     * caller-supplied value) so the CLI delivers the text as written.
+     *
+     * @param message         the user message
+     * @param verbatimPrompts whether the option is on
+     * @return the message to write
+     */
+    public static Map<String, Object> stampUserMessage(Map<String, Object> message, boolean verbatimPrompts) {
+        if (!verbatimPrompts) {
+            return message;
+        }
+        Map<String, Object> stamped = new HashMap<>(message);
+        stamped.put("client_composed", Boolean.TRUE);
+        return stamped;
     }
 
     /**
@@ -514,7 +676,8 @@ public class QueryHandler implements AutoCloseable {
                     ((agents == null) || agents.isEmpty()) ? null : agents,
                     excludeDynamicSections,
                     skillsForWire,
-                    forwardSubagentText ? Boolean.TRUE : null);
+                    forwardSubagentText ? Boolean.TRUE : null,
+                    systemPromptSnapshot);
 
             initializationResult = sendControlRequest(request, initializeTimeout);
             return initializationResult;
@@ -556,8 +719,9 @@ public class QueryHandler implements AutoCloseable {
      * Surface a {@link in.vidyalai.claude.sdk.types.session.SessionStore#append}
      * failure as a {@code mirror_error} system message in the consumer stream.
      *
-     * <p>Called from the batcher's {@code onError}; the dropped batch is not
-     * retried (at-most-once delivery), so this is the consumer's only signal.
+     * <p>Called from the batcher's {@code onError} once a batch has been
+     * dropped (after its retries, or after a single timed-out attempt), so this
+     * is the consumer's only signal.
      * Non-blocking — if the message buffer is full the error is logged and
      * dropped rather than back-pressuring the read loop.
      */
@@ -763,7 +927,24 @@ public class QueryHandler implements AutoCloseable {
                 // Track task lifecycle frames so a result can tell "one turn
                 // ended" apart from "the run is done".
                 if ("system".equals(msgType)) {
+                    boolean hadTasksInFlight = !inflightTasks.isEmpty();
                     trackTaskLifecycle(message);
+                    if (hadTasksInFlight && inflightTasks.isEmpty()) {
+                        // The ceiling left the last tracked agent alone; the
+                        // wait between turns starts over now that it settled.
+                        synchronized (runLock) {
+                            rearmRunEndCeilingBetweenTurns();
+                        }
+                    }
+                    if ("session_state_changed".equals(message.get("subtype"))) {
+                        onSessionState(message.get("state"));
+                        // Frames the CLI sent only because the transport asked
+                        // for them (CLAUDE_CODE_SDK_READS_SESSION_STATE); the
+                        // caller did not opt in.
+                        if (Boolean.TRUE.equals(message.get("sdk_host_only"))) {
+                            continue;
+                        }
+                    }
                 }
 
                 // Track results for proper stream closure
@@ -780,18 +961,25 @@ public class QueryHandler implements AutoCloseable {
                                     + flushEx.getMessage());
                         }
                     }
-                    if (inflightTasks.isEmpty()) {
-                        firstResultEvent.complete(null);
-                    } else {
-                        // One turn ended, but background tasks are still running
-                        // and may need hook/SDK-MCP control responses over stdin.
-                        // Closing it now silently disables hooks and fails
-                        // SDK-MCP calls with "Stream closed". Each task
-                        // completion wakes the parent for a follow-up turn, so a
-                        // later result frame arrives with no tasks in flight and
-                        // closes stdin then.
-                        logger.fine("Result received with " + inflightTasks.size()
-                                + " task(s) in flight; keeping stdin open");
+                    synchronized (runLock) {
+                        resultReceived = true;
+                        turnInProgress = false;
+                        // A result ends a turn, not necessarily the run: a
+                        // background agent that finished just before it still
+                        // wakes the session for another turn, whose hook,
+                        // permission and SDK MCP requests need stdin. A CLI that
+                        // reports session state stays "running" while such a
+                        // turn is owed, so wait for "idle" (some hosts send it
+                        // just before the result). Without state events the
+                        // result is all there is to go on.
+                        if (sessionState == null || "idle".equals(sessionState)
+                                || !hasBidirectionalNeeds()) {
+                            maybeEndRun();
+                        } else if (!"requires_action".equals(sessionState)) {
+                            // While the SDK is still answering a request the
+                            // ceiling waits for the "running" that follows.
+                            armRunEndCeiling();
+                        }
                     }
                     Object isErr = message.get("is_error");
                     if (isErr instanceof Boolean b && b) {
@@ -806,6 +994,18 @@ public class QueryHandler implements AutoCloseable {
                     // now is a fresh crash, not the expected exit from a prior
                     // error result. Mirrors the TS/Python SDK reset logic.
                     lastErrorResult.set(null);
+                    // A main-thread turn is under way, so the ceiling stops (it
+                    // counts only the wait between turns, as the CLI's does)
+                    // and the run reopens even if the ceiling ended it while no
+                    // state changed.
+                    if (("assistant".equals(msgType) || "stream_event".equals(msgType))
+                            && message.get("parent_tool_use_id") == null) {
+                        synchronized (runLock) {
+                            turnInProgress = true;
+                            reopenRun();
+                            clearRunEndCeiling();
+                        }
+                    }
                 }
 
                 // Regular SDK messages go to the stream
@@ -893,8 +1093,12 @@ public class QueryHandler implements AutoCloseable {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            // Complete firstResultEvent in case it's still pending
-            firstResultEvent.complete(null);
+            // Unblock the stdin-closing waiter so it doesn't stall on early
+            // exit.
+            synchronized (runLock) {
+                runFinal = true;
+                endRun();
+            }
         }
     }
 
@@ -1307,10 +1511,13 @@ public class QueryHandler implements AutoCloseable {
      * Stops a running task.
      *
      * <p>
-     * After this resolves, a {@code task_notification} system message with
-     * status {@code "stopped"} will be emitted by the CLI in the message stream.
+     * After this resolves, the CLI reports the task's end in the message stream
+     * as a {@code task_updated} system message whose status is terminal
+     * ({@code "killed"} for a stopped task). A {@code task_notification} with
+     * status {@code "stopped"} may follow, but is sometimes suppressed, so clear
+     * the task id on a terminal status from either message.
      *
-     * @param taskId the task ID from task_notification events
+     * @param taskId the task ID from the {@code task_started} system message
      * @throws ClaudeSDKException if the stop request fails
      */
     public void stopTask(String taskId) {
@@ -1340,25 +1547,225 @@ public class QueryHandler implements AutoCloseable {
     }
 
     /**
-     * Streams input messages to transport.
+     * Waits for the end of the run (if needed), then closes stdin.
+     *
+     * <p>If SDK MCP servers, hooks, or a {@code canUseTool} callback require
+     * bidirectional communication, keeps stdin open until the run ends: the
+     * CLI's "idle" session state after a result, or, from a CLI that reports
+     * no session state, the first result with no tracked tasks in flight. A
+     * result frame ends one turn, not necessarily the run: background tasks
+     * keep running past it, or have just finished and still wake the parent
+     * for a follow-up turn, and those turns need stdin for control responses.
+     *
+     * <p>The wait is bounded between turns: if the CLI still reports "running"
+     * {@code CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS} (10 minutes by default,
+     * {@code 0} for no limit) after a result with no new turn, the run ends
+     * anyway ({@link #armRunEndCeiling}). A turn under way, a request the SDK
+     * is still answering and a tracked background agent still in flight stop
+     * that clock. No other timeout applies: the wait is guaranteed to end when
+     * the run ends as above, or when the reader exits or the handler closes.
+     *
+     * <p>Known limitation: from a CLI that reports no session state, a result
+     * for an earlier prompt of a multi-message prompt iterator still ends the
+     * run even when a later prompt is already queued CLI-side, so control
+     * requests from that later turn can find stdin closed. Single-message and
+     * string prompts, the common one-shot shapes, are fully covered.
+     */
+    private void waitForRunEndAndEndInput() {
+        if (hasBidirectionalNeeds()) {
+            logger.fine("Waiting for the run to end before closing stdin");
+            CompletableFuture<Void> runEnded;
+            synchronized (runLock) {
+                runEnded = runEndedEvent;
+            }
+            try {
+                runEnded.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (ExecutionException e) {
+                // Never completed exceptionally; close stdin regardless.
+            }
+        }
+        synchronized (runLock) {
+            runFinal = true;
+            clearRunEndCeiling();
+        }
+        if (!closed.get()) {
+            transport.endInput();
+        }
+    }
+
+    /**
+     * Tracks the CLI's {@code session_state_changed} state.
+     */
+    private void onSessionState(@Nullable Object state) {
+        synchronized (runLock) {
+            sessionState = (state instanceof String str) ? str : null;
+            if ("idle".equals(sessionState)) {
+                if (resultReceived) {
+                    maybeEndRun();
+                }
+                return;
+            }
+            // Work the CLI took up after the run ended (a finished background
+            // task woke it) reopens the run until the next "idle".
+            reopenRun();
+            if ("requires_action".equals(sessionState)) {
+                // The host is answering a request; stdin must outlast it.
+                clearRunEndCeiling();
+            } else {
+                rearmRunEndCeilingBetweenTurns();
+            }
+        }
+    }
+
+    /**
+     * Ends the run unless a tracked background task is still in flight.
+     *
+     * <p>One turn ended, but background tasks that are still running may need
+     * hook/SDK-MCP control responses over stdin; closing it now silently
+     * disables hooks and fails SDK-MCP calls with "Stream closed". Each task
+     * completion wakes the parent for a follow-up turn, so a later result (or
+     * "idle") ends the run then. A CLI that reports session state never
+     * reports "idle" with an agent still live, so this matters for CLIs that
+     * report "idle" at every turn end or not at all. Caller holds
+     * {@code runLock}.
+     */
+    private void maybeEndRun() {
+        if (!inflightTasks.isEmpty()) {
+            logger.fine("Turn ended with " + inflightTasks.size()
+                    + " task(s) in flight; keeping stdin open");
+            return;
+        }
+        endRun();
+    }
+
+    /**
+     * The run is over: wake the stdin-closing waiter. Idempotent. Caller holds
+     * {@code runLock}.
+     */
+    private void endRun() {
+        clearRunEndCeiling();
+        runEndedEvent.complete(null);
+    }
+
+    /**
+     * Reopens an ended run for work that started after it ended.
+     *
+     * <p>A waiter the ended run already woke still closes stdin; this makes a
+     * later wait (streamInput's, once its prompts are all written) wait for
+     * the new work too. Once stdin is closed, or the reader is gone, the run
+     * stays ended. Caller holds {@code runLock}.
+     */
+    private void reopenRun() {
+        if (runEndedEvent.isDone() && !runFinal) {
+            runEndedEvent = new CompletableFuture<>();
+        }
+    }
+
+    /**
+     * Ends the run anyway once the ceiling passes with no new turn.
+     *
+     * <p>The CLI's own background-wait ceiling only counts once stdin is
+     * closed, so without this, work that never finishes would hold "running",
+     * and stdin, open forever. It counts only the wait between turns:
+     * restarted at each result and whenever the CLI reports "running" again,
+     * cleared by main-thread turn activity and by "requires_action", and never
+     * armed while a turn is under way. Caller holds {@code runLock}.
+     */
+    private void armRunEndCeiling() {
+        clearRunEndCeiling();
+        if (runEndCeilingMs <= 0
+                || runEndedEvent.isDone()
+                || runFinal
+                || closed.get()
+                || turnInProgress
+                || !hasBidirectionalNeeds()) {
+            return;
+        }
+        long generation = runEndCeilingGeneration;
+        runEndCeilingThread = Threads.start("QueryHandler-RunEndCeiling-",
+                () -> endRunAtCeiling(generation));
+    }
+
+    /**
+     * Restarts the ceiling if the run is between turns, past a result, with
+     * the CLI still reporting work ("running"). Caller holds {@code runLock}.
+     */
+    private void rearmRunEndCeilingBetweenTurns() {
+        if (resultReceived && sessionState != null
+                && !"idle".equals(sessionState)
+                && !"requires_action".equals(sessionState)) {
+            armRunEndCeiling();
+        }
+    }
+
+    private void endRunAtCeiling(long generation) {
+        try {
+            Thread.sleep(Math.min(runEndCeilingMs, MAX_RUN_END_CEILING_MS));
+        } catch (InterruptedException e) {
+            // Cleared or re-armed.
+            return;
+        }
+        synchronized (runLock) {
+            // Cleared or re-armed while this sleeper was already waking up.
+            if (generation != runEndCeilingGeneration) {
+                return;
+            }
+            runEndCeilingThread = null;
+            if (!inflightTasks.isEmpty()) {
+                // A tracked background agent is still running and may still
+                // need stdin for its hook, permission and SDK MCP requests, so
+                // it is not cut off, as without session state. The ceiling
+                // starts over once it settles (readMessages).
+                logger.fine("No 'idle' " + runEndCeilingMs + "ms after the last result, but "
+                        + inflightTasks.size() + " tracked task(s) still in flight; keeping stdin open");
+                return;
+            }
+            logger.fine("No 'idle' " + runEndCeilingMs + "ms after the last result; ending the run");
+            endRun();
+        }
+    }
+
+    /** Whether a run-end ceiling sleeper is armed. Package-private for testing. */
+    boolean runEndCeilingArmed() {
+        synchronized (runLock) {
+            return runEndCeilingThread != null;
+        }
+    }
+
+    /** Caller holds {@code runLock}. */
+    private void clearRunEndCeiling() {
+        runEndCeilingGeneration++;
+        Thread sleeper = runEndCeilingThread;
+        runEndCeilingThread = null;
+        if (sleeper != null) {
+            sleeper.interrupt();
+        }
+    }
+
+    /**
+     * Streams input messages to transport, then closes stdin.
      *
      * <p>If SDK MCP servers, hooks, or a {@code canUseTool} callback are
-     * present, waits for a run-ending result before closing stdin so
-     * bidirectional control protocol traffic keeps working.
-     *
-     * <p>Known limitation: the wait is released by the first result frame that
-     * arrives with no tasks in flight, so a prompt iterator that yields several
-     * user messages (several turns) releases the hold at the first turn
-     * boundary; control requests from later turns can then find stdin closed.
-     * Single-message and string prompts — the common one-shot shapes — are
-     * fully covered.
+     * present, waits for the run to end before closing stdin so bidirectional
+     * control protocol traffic keeps working. Each prompt written owes a run
+     * of its own, so the wait is for the last prompt's run, not an earlier
+     * one's. See {@link #waitForRunEndAndEndInput()}.
      */
     public void streamInput(Iterator<Map<String, Object>> stream) {
         int written = 0;
         try {
             while (stream.hasNext() && (!closed.get())) {
                 Map<String, Object> message = stream.next();
-                String json = MAPPER.writeValueAsString(message);
+                // This prompt owes a run of its own, result included: an
+                // earlier one having ended does not end it.
+                synchronized (runLock) {
+                    reopenRun();
+                    resultReceived = false;
+                    clearRunEndCeiling();
+                }
+                String json = MAPPER.writeValueAsString(stampUserMessage(message, verbatimPrompts));
                 transport.write(json + "\n");
                 written++;
             }
@@ -1373,20 +1780,18 @@ public class QueryHandler implements AutoCloseable {
         }
 
         try {
-            if (written > 0 && hasBidirectionalNeeds()) {
-                try {
-                    firstResultEvent.get(streamCloseTimeout.toMillis(), TimeUnit.MILLISECONDS);
-                } catch (TimeoutException e) {
-                    logger.fine("Timed out waiting for first result, closing input stream");
-                } catch (Exception e) {
-                    // Ignore other exceptions
+            if (written > 0) {
+                waitForRunEndAndEndInput();
+            } else {
+                // Nothing was sent, so no result will arrive to release the
+                // hold; close immediately (mirrors the TypeScript SDK's
+                // messageCount guard).
+                synchronized (runLock) {
+                    runFinal = true;
                 }
-            }
-            // Nothing sent means no result will arrive to release the hold, so
-            // close immediately (mirrors the TypeScript SDK's messageCount
-            // guard).
-            if (!closed.get()) {
-                transport.endInput();
+                if (!closed.get()) {
+                    transport.endInput();
+                }
             }
         } catch (Exception e) {
             if (!closed.get()) {
@@ -1502,8 +1907,11 @@ public class QueryHandler implements AutoCloseable {
                 }
             }
 
-            // Complete firstResultEvent if still pending
-            firstResultEvent.complete(null);
+            // Release the stdin-closing waiter and stop any ceiling sleeper
+            synchronized (runLock) {
+                runFinal = true;
+                endRun();
+            }
 
             // 2. Close transport FIRST to unblock any waiting hasNext() calls
             // This ensures the reader thread can exit its message loop quickly

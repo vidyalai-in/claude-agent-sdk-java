@@ -4,6 +4,7 @@ import java.util.List;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDK;
+import in.vidyalai.claude.sdk.types.config.SystemPromptCustom;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
@@ -17,6 +18,8 @@ import in.vidyalai.claude.sdk.types.message.Message;
  * - String system prompt (custom instructions)
  * - Preset system prompt (default Claude Code)
  * - Preset with append (extend default with custom instructions)
+ * - Snapshot off (rebuild the prompt on every request, e.g. while iterating
+ *   on its wording across resumed calls)
  *
  * Usage:
  * mvn exec:java -Dexec.mainClass="examples.SystemPromptExample" -pl examples
@@ -28,6 +31,7 @@ public class SystemPromptExample {
         stringSystemPrompt();
         presetSystemPrompt();
         presetWithAppend();
+        snapshotOff();
     }
 
     /**
@@ -91,6 +95,35 @@ public class SystemPromptExample {
 
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .systemPrompt(SystemPromptPreset.claudeCode("Always end your response with a fun fact."))
+                .build();
+
+        List<Message> messages = ClaudeSDK.query("What is 2 + 2?", options);
+        for (Message msg : messages) {
+            if (msg instanceof AssistantMessage assistant) {
+                System.out.println("Claude: " + assistant.getTextContent());
+            }
+        }
+        System.out.println();
+    }
+
+    /**
+     * Example with {@code snapshot} off.
+     *
+     * <p>
+     * By default Claude Code builds the system prompt on a session's first
+     * request, records it, and reuses it on every later request, including
+     * after the session is resumed. A changed custom prompt, or changed
+     * {@code append} text on the preset, then has no effect until the session
+     * is compacted or a new one starts. {@code snapshot = false} rebuilds the
+     * prompt on every request instead. The same setting is available on the
+     * preset via {@code SystemPromptPreset.claudeCode(...).withSnapshot(false)}.
+     * Requires Claude Code CLI 2.1.257 or later.
+     */
+    static void snapshotOff() {
+        System.out.println("=== Custom System Prompt with snapshot off ===");
+
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .systemPrompt(SystemPromptCustom.of("You are a release bot. Answer in one line.", false))
                 .build();
 
         List<Message> messages = ClaudeSDK.query("What is 2 + 2?", options);

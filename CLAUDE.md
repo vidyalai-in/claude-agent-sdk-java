@@ -107,6 +107,7 @@ mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
 mvn exec:java -Dexec.mainClass="examples.AdvancedFeatures" -pl examples
 mvn exec:java -Dexec.mainClass="examples.AgentsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.AutoSchemaGeneration" -pl examples
+mvn exec:java -Dexec.mainClass="examples.BackgroundAgentHooksExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.DynamicControlExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ErrorHandling" -pl examples
 mvn exec:java -Dexec.mainClass="examples.FilesystemAgentsExample" -pl examples
@@ -133,6 +134,7 @@ mvn exec:java -Dexec.mainClass="examples.SystemPromptExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolsConfigurationExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.ToolUsage" -pl examples
 mvn exec:java -Dexec.mainClass="examples.TruncatingResumeExample" -pl examples
+mvn exec:java -Dexec.mainClass="examples.VerbatimPromptsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.WindowsBatchCliExample" -pl examples
 ```
 
@@ -282,6 +284,7 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
     │   ├── AIModel.java                # AI model enum
     │   ├── AgentDefinition.java        # Agent definition
     │   ├── SystemPromptPreset.java     # System prompt preset
+    │   ├── SystemPromptCustom.java     # Custom system prompt (with snapshot)
     │   ├── ToolsPreset.java            # Tools preset
     │   ├── SettingSource.java          # Setting source enum
     │   ├── SdkBeta.java                # Beta features enum
@@ -375,6 +378,8 @@ examples/src/main/java/examples/
 ├── TruncatingResumeExample.java    # Rewind a session with resumeSessionAt/resumeDropsTurn
 ├── MessageOriginExample.java       # Message provenance + conversation resets
 ├── ForwardSubagentTextExample.java # Forward subagent text/thinking blocks
+├── VerbatimPromptsExample.java     # Deliver prompts as written (no @path expansion)
+├── BackgroundAgentHooksExample.java # Hooks served in a background subagent's follow-up turn
 ├── WindowsBatchCliExample.java     # Windows .cmd CLI opt-in (Windows-only)
 └── plugins/                        # Example plugin implementations
 ```

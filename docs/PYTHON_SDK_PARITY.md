@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-08-19 (Updated)
-**Java SDK Version:** 0.1.24
-**Python SDK Version:** [0.2.140](https://github.com/anthropics/claude-agent-sdk-python/commit/a4eaba4a56f9ad1833fca646030a4b160b2a61f9) (latest)
+**Analysis Date:** 2026-09-26 (Updated)
+**Java SDK Version:** 0.2.3
+**Python SDK Version:** [0.2.160](https://github.com/anthropics/claude-agent-sdk-python/commit/36f95486ee9fc49d8ee1ed56811f07b5e8e23ac6) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,15 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.2.140):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.140. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.160):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.160. These updates include:
+- **v0.2.141-0.2.160** - Three behavioral changes; everything else is bundled-CLI bumps (2.1.236 → 2.1.283), wheel/CI packaging work, and a docstring pass (#1293). Ported to Java:
+  - **Keep stdin open until the CLI reports idle** (PR #1279, v0.2.160, issue #1190): the #1088 task ledger cannot see a background agent that settles *before* the turn's result, yet that completion still wakes the parent for a follow-up turn whose hook, permission and SDK MCP requests need stdin. The transport now sets `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` (unless the caller named it, in any case), so the CLI sends `session_state_changed` frames marked `sdk_host_only`; `QueryHandler` reads them and drops the marked ones before the consumer. With state reported, the run ends at `idle` after a result (still deferring to the ledger); without it, at the first result with nothing tracked in flight, as before. The wait for `idle` is bounded **between turns** by `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (default 600000, `0` = none, read from `options.env` over the ambient environment): restarted at each result and each `running`, stopped by main-thread `assistant`/`stream_event` frames and by `requires_action`, and it never cuts off a tracked agent. Each prompt `streamInput` writes owes a run of its own, so a multi-message prompt waits for its last prompt's run, and work the CLI takes up after `idle` reopens the run while input is still open. 23 tests in `QueryHandlerRunEndTest`, plus the transport env default in `SystemPromptAndSessionStateTransportTest`.
+    - *Stand-in CLI test.* `tests/test_run_end_subprocess.py` is ported as `RunEndSubprocessTest`: the real `SubprocessCLITransport` spawns `FakeSessionStateCli` (a Java program behind a shell script), so the env default, frame filtering, a hook served in the follow-up turn, and the `options.env` ceiling are all exercised through `ClaudeSDK.query`. The same stand-in drives the `verbatimPrompts` older-CLI warning through the real version check.
+    - *e2e.* `e2e-tests/test_run_end.py` is ported as `BackgroundAgentHooksExample`. Run live against CLI 2.1.283 (2026-09-26): that CLI does **not** yet send frames for `CLAUDE_CODE_SDK_READS_SESSION_STATE` — neither the Python nor the Java SDK receives any, which is the case Python's e2e test skips — so without an opt-in stdin still closes at the first result and the follow-up hook is served only when timing allows (1 in 3 runs failed, identically to the Python SDK's behavior). With the caller opt-in `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`, the Java SDK closed stdin at `idle` and served the follow-up turn's hook in 3 of 3 runs.
+    - *Java-side follow-through.* Java's `streamInput` still bounded its wait with `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` (60s) — the timeout Python removed in #731 and Java never did, so a background agent running over a minute lost stdin regardless of the #1088 ledger. The ceiling replaces it; `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` now only sets the initialize timeout, as in Python. `QueryHandlerInflightTaskTest`'s harness fed frames before the prompt was written; since writing a prompt now reopens the run, it waits for the write first, as a real CLI does.
+  - **`verbatimPrompts`** (PR #1269, v0.2.157): marks every user message the SDK writes — `ClaudeSDK.query` string and streamed prompts, `ClaudeSDKClient.connect(String)`, `query(String)` and `query(Iterator)` — `client_composed: true`, overwriting any caller value, so Claude Code skips `@path` expansion and slash-command dispatch. The transport logs a warning when the option is on and the CLI predates 2.1.248. Python captures the flag at `connect()` because its options are mutable (`test_option_is_captured_at_connect`); Java's `ClaudeAgentOptions` are immutable, so reading them is equivalent and that test has no Java counterpart. Python's `test_connect_with_streamed_prompt` has none either: `ClaudeSDKClient` has no `connect(Iterator)` overload. `VerbatimPromptsTest`, plus the warning in `RunEndSubprocessTest`; `e2e-tests/test_verbatim_prompts.py` is ported as `VerbatimPromptsExample`, which run live against CLI 2.1.283 shows the marker leaking by default and not with the option, via both `query` and the client.
+  - **Docstring pass** (PR #1293, v0.2.160): mostly Python-only wording. Where the Java docs made the same stale claims they were corrected: `reportMirrorError` (batches are retried before being dropped, not at-most-once), `SessionStore` (the `CLAUDE_CONFIG_DIR=/tmp` hint; when `load()` is called), `SandboxSettings` (the `network` key configures the sandbox's own isolation), `stopTask` (the task's end arrives as a terminal `task_updated`), `MirrorErrorMessage`, `rewindFiles` (was written in Python syntax), `getServerInfo`, `PermissionMode.AUTO`, the custom-`Transport` overloads of `ClaudeSDK.query` and the `ClaudeSDKClient` constructor (CLI-flag options are not applied, store-backed resume is skipped), the `env` / `settings` / `mcpServers` / `includePartialMessages` / `maxThinkingTokens` / `sandbox` builder docs (each checked against the transport's actual behavior first), and current model names in examples. Every hunk of the Python source and test diff was re-walked on 2026-09-26 and mapped to Java code or a Java test, or recorded as N/A. `e2e-tests/test_dynamic_control.py` switched `set_model` to the `haiku` alias because the CLI rejects retired model IDs; `DynamicControlExample` does the same. The e2e `conftest.py` model pin is Python test infrastructure, N/A.
+  - **System prompt `snapshot`, and `SystemPromptCustom`** (PR #1268, v0.2.153): `SystemPromptPreset` gains a `snapshot` component (and `withSnapshot(boolean)`), and the new `SystemPromptCustom(prompt, snapshot)` is the custom-prompt form that can carry one (sent as `--system-prompt`, like a plain string). Either one's `snapshot` rides on the `initialize` request as `systemPromptSnapshot`, sent even when `false` and omitted when unset; a `SystemPromptFile` or plain string never sends it. `SystemPromptSnapshotTest`.
 - **v0.2.139-0.2.140** - Four behavioral changes and one Python-packaging change, all landed in v0.2.140; v0.2.139 is a CLI-version bump only (2.1.233), and v0.2.140 bumps it again (2.1.235). Ported to Java:
   - **`ResultException` (Python `ResultError`)** (PR #1205, v0.2.140): the CLI ends a failed run by emitting a `result` with `is_error: true` and then exiting non-zero. The SDK already swapped the bare "exit code 1" `ProcessException` for one carrying the result's error text, but the text was all the caller got. The replacement is now a typed `ResultException extends ProcessException` exposing `subtype()`, `errors()`, `result()`, `apiErrorStatus()`, `terminalReason()`, `sessionId()` and the raw `data()`, with the original exit error as its cause. Two text fixes come with it: a run that ends on an API failure arrives as `subtype: "success"` with the prose in `result`, which used to render as the self-contradictory "returned an error result: success" (the text is now `errors[]` → `result` → non-`success` `subtype` → `API error (HTTP n)`), and blank or non-list `errors` no longer produce an empty suffix. The synthetic error frame the reader puts on the message queue now carries the exception object, so the consumer iterator rethrows it as-is instead of flattening every failure to `ClaudeSDKException(String)` — a `CLIConnectionException` or `CLIJSONDecodeException` keeps its type and payload too.
     - *Java-side follow-through.* `MessageParser` cast the result frame's `errors` to `List<String>` unchecked, so the malformed shapes Python's tests exercise (a bare string, an int) raised `MessageParseException` and the caller lost the whole result. Python type-checks nothing there; Java now keeps a bare string as a single-element list and ignores any other shape. Separately, `initialize()` and `sendControlRequest()` wrapped every failure in a base `ClaudeSDKException`, which re-flattened the very exception this PR exists to type; an already-typed `ClaudeSDKException` now propagates as-is, matching Python's `raise result`, and only opaque failures keep the wrapper.
@@ -348,6 +356,7 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | Hook events | `HookEvent` Literal | `HookEvent` enum | ✅ |
 | AI models | String literals | `AIModel` enum | ✅ Java enhancement |
 | System prompt preset | TypedDict | `SystemPromptPreset` class | ✅ |
+| System prompt custom (with `snapshot`) | TypedDict | `SystemPromptCustom` record | ✅ |
 | Tools preset | TypedDict | `ToolsPreset` class | ✅ |
 | Thinking config (base) | Union type | `ThinkingConfig` sealed interface | ✅ |
 | Thinking config adaptive | `ThinkingConfigAdaptive` TypedDict | `ThinkingConfigAdaptive` record | ✅ |
@@ -480,10 +489,10 @@ All 37+ configuration options are implemented with 100% parity:
 | **Agents** (1 option) | ✅ | ✅ | ✅ |
 | **Sandbox** (1 option) | ✅ | ✅ | ✅ |
 | **Plugins** (1 option) | ✅ | ✅ | ✅ |
-| **Advanced features** (6 options, incl. `forwardSubagentText`) | ✅ | ✅ | ✅ |
+| **Advanced features** (7 options, incl. `forwardSubagentText`, `verbatimPrompts`) | ✅ | ✅ | ✅ |
 | **Callbacks** (1 option) | ✅ | ✅ | ✅ |
 
-**Total: 38+ configuration options - 100% parity**
+**Total: 39+ configuration options - 100% parity**
 
 ---
 
@@ -520,11 +529,14 @@ All 37+ configuration options are implemented with 100% parity:
 | **Typed error results** | ✅ `e2e-tests/test_error_results.py` | ✅ `ErrorHandling.java` (`errorResultMessages()`) | ✅ |
 | **`canUseTool` with a string prompt** | ✅ `e2e-tests/test_tool_permissions.py` | ✅ `PermissionCallbacks.java` (`oneShotStringPrompt()`) | ✅ |
 | **Subagent session reads** | ✅ `e2e-tests/test_subagent_session_reads.py` | ✅ `SubagentTranscriptExample.java` | ✅ |
+| **Verbatim prompts** | ✅ `e2e-tests/test_verbatim_prompts.py` | ✅ `VerbatimPromptsExample.java` | ✅ **NEW** |
+| **Follow-up turn after a background subagent (run end)** | ✅ `e2e-tests/test_run_end.py` | ✅ `BackgroundAgentHooksExample.java` | ✅ **NEW** |
+| **System prompt `snapshot`** | ✅ README "System Prompt" | ✅ `SystemPromptExample.java` (`snapshotOff()`), README "System Prompt" | ✅ |
 | Trio async | ✅ `streaming_mode_trio.py` | N/A (Java uses threads) | N/A |
 | IPython interactive | ✅ `streaming_mode_ipython.py` | N/A (Java nature) | N/A |
 
 **Python Examples: 16 files**
-**Java Examples: 25 files** (covers all functionality plus additional examples)
+**Java Examples: 32 files** (covers all functionality plus additional examples)
 **Coverage: 100%** - All Python SDK features have Java examples, plus additional Java-specific examples
 
 ---
@@ -590,6 +602,7 @@ All 37+ configuration options are implemented with 100% parity:
 | **SDK-MCP malformed `inputSchema`** | `jsonschema` raises `SchemaError`; the call is an `isError` result and the handler does not run | Same, with clearer text | ⚠️ Aligned in classification, different wording. Java checks each schema against its dialect's meta-schema at construction and reports `Tool 'x' has an inputSchema this server cannot use...`, deliberately *not* prefixed `Input validation error:` — a broken schema is a server defect the model cannot route around, and telling it to fix its arguments invites an endless retry. |
 | **SDK-MCP server-initiated traffic** | Notifications are dropped; requests (roots, sampling, elicitation) are refused `-32601` | No path for a server to initiate anything | ⚠️ Structural. The Java SPI is request-in/response-out, so progress notifications, sampling and elicitation from a server have nowhere to go. Not reachable through `SdkMcpServer`, which never initiates. |
 | **SDK-MCP invalid arguments** | Validated against `inputSchema`; `Input validation error: ...` as an `isError` result, handler not called | Same | ✅ Aligned (0.1.24). Previously Java did not validate at all, so bad arguments reached the handler and surfaced as a leaked `ClassCastException`/NPE. |
+| **stdin-close wait** | No timeout; bounded between turns by `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` | Same | ✅ Aligned (Python v0.2.160 sync). Java previously kept a 60s `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` cap on the wait that Python dropped in #731. |
 | **SDK-MCP handler exception** | `isError` result carrying the exception text | Same | ✅ Aligned (0.1.24). Previously a JSON-RPC `-32603`, which the CLI degraded into an `isError` result prefixed `Tool invocation failed: `. |
 
 ---
@@ -649,7 +662,7 @@ All 37+ configuration options are implemented with 100% parity:
 
 - [x] All 37+ configuration options
 - [x] Thinking configuration (thinking, effort)
-- [x] System prompts (string, preset)
+- [x] System prompts (string, preset, custom, file; `snapshot`)
 - [x] Tool configuration (array, preset, filtering)
 - [x] Model selection with fallback
 - [x] Resource limits (turns, budget, buffer, thinking)
@@ -889,7 +902,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-08-19
-**Python SDK Version:** 0.2.140 (commit a4eaba4a56f9ad1833fca646030a4b160b2a61f9)
-**Java SDK Version:** 0.1.24
+**Latest Verification:** 2026-09-26
+**Python SDK Version:** 0.2.160 (commit 36f95486ee9fc49d8ee1ed56811f07b5e8e23ac6)
+**Java SDK Version:** 0.2.3
 **Status:** ✅ 100% Feature Parity Maintained

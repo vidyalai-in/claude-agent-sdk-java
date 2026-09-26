@@ -22,11 +22,24 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *                                git status) from the system prompt so it stays static and
  *                                cacheable across users. The stripped content is re-injected
  *                                into the first user message so the model still has access to it.
+ * @param snapshot                whether the session keeps the system prompt it recorded on its
+ *                                first request. When {@code true}, every later request, including
+ *                                after resume, sends the recorded prompt, so changing
+ *                                {@code append} has no effect until the session is compacted or a
+ *                                new session starts. When {@code false}, the prompt is rebuilt on
+ *                                every request, for example while iterating on {@code append} text
+ *                                across calls that resume the same session. When {@code null}, it
+ *                                acts as {@code true}, except in bare mode ({@code --bare}), where
+ *                                it acts as {@code false}. Sent via the initialize control request.
+ *                                Requires Claude Code CLI 2.1.257 or later; before 2.1.265, a
+ *                                session with an {@code append} or custom prompt recorded it only
+ *                                when {@code snapshot} was {@code true}.
  */
 public record SystemPromptPreset(
         @JsonProperty("preset") String preset,
         @JsonProperty("append") @Nullable String append,
-        @JsonProperty("exclude_dynamic_sections") @Nullable Boolean excludeDynamicSections) {
+        @JsonProperty("exclude_dynamic_sections") @Nullable Boolean excludeDynamicSections,
+        @JsonProperty("snapshot") @Nullable Boolean snapshot) {
 
     private static final String PRESET = "claude_code";
     private static final String TYPE = "preset";
@@ -35,7 +48,14 @@ public record SystemPromptPreset(
      * Compact constructor for backwards compatibility (without excludeDynamicSections).
      */
     public SystemPromptPreset(String preset, @Nullable String append) {
-        this(preset, append, null);
+        this(preset, append, null, null);
+    }
+
+    /**
+     * Constructor for backwards compatibility (without snapshot).
+     */
+    public SystemPromptPreset(String preset, @Nullable String append, @Nullable Boolean excludeDynamicSections) {
+        this(preset, append, excludeDynamicSections, null);
     }
 
     /**
@@ -66,6 +86,17 @@ public record SystemPromptPreset(
      */
     public static SystemPromptPreset claudeCode(@Nullable String append, boolean excludeDynamicSections) {
         return new SystemPromptPreset(PRESET, append, excludeDynamicSections);
+    }
+
+    /**
+     * Returns a copy of this preset with {@code snapshot} set.
+     *
+     * @param snapshot whether the session keeps the system prompt it recorded on
+     *                 its first request
+     * @return a new SystemPromptPreset
+     */
+    public SystemPromptPreset withSnapshot(boolean snapshot) {
+        return new SystemPromptPreset(preset, append, excludeDynamicSections, snapshot);
     }
 
     /**

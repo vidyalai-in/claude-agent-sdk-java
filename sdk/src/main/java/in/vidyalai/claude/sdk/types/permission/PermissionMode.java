@@ -33,7 +33,7 @@ public enum PermissionMode {
     DONT_ASK("dontAsk"),
 
     /**
-     * Automatically determine permission mode.
+     * A model classifier approves or denies each tool call.
      */
     AUTO("auto");
 

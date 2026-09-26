@@ -28,6 +28,7 @@ import in.vidyalai.claude.sdk.mcp.McpMessageHandler;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.mcp.SdkMcpTool;
 import in.vidyalai.claude.sdk.transport.Transport;
+import in.vidyalai.claude.sdk.types.config.SystemPromptCustom;
 import in.vidyalai.claude.sdk.types.config.SystemPromptPreset;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
@@ -140,9 +141,20 @@ public final class ClaudeSDK {
     /**
      * Executes a one-shot query and returns all messages.
      *
+     * <p>
+     * If {@code transport} is non-null it is used instead of the default
+     * subprocess transport: the SDK calls its {@code connect()}, delivers the
+     * prompt over {@code write()}, and sends hooks, agents, and the other
+     * initialize-request settings through the control protocol. Command-line
+     * options in {@code options} (model, cwd, permission mode, tools, and the
+     * other fields the subprocess transport turns into CLI flags) are not
+     * applied to a custom transport, and store-backed session resume is
+     * skipped.
+     *
      * @param prompt    the prompt to send
      * @param options   the agent options
-     * @param transport custom transport implementation
+     * @param transport custom transport implementation, or null for the default
+     *                  subprocess transport
      * @return list of all messages received
      * @throws IllegalArgumentException if both canUseTool and
      *                                  permissionPromptToolName are set
@@ -267,8 +279,11 @@ public final class ClaudeSDK {
                     sdkMcpServers,
                     effectiveOptions.agents(), // Agents sent via initialize request (no CLI flag)
                     excludeDynamicSections,
+                    extractSystemPromptSnapshot(effectiveOptions),
                     effectiveOptions.skills(),
                     effectiveOptions.forwardSubagentText(),
+                    effectiveOptions.verbatimPrompts(),
+                    QueryHandler.runEndCeilingMs(effectiveOptions.env()),
                     initializeTimeout,
                     effectiveOptions.maxMsgQSize());
 
@@ -364,6 +379,24 @@ public final class ClaudeSDK {
         Object systemPrompt = options.systemPrompt();
         if (systemPrompt instanceof SystemPromptPreset preset) {
             return preset.excludeDynamicSections();
+        }
+        return null;
+    }
+
+    /**
+     * Extracts {@code snapshot} from a preset or custom system prompt for the
+     * initialize request (older CLIs ignore unknown initialize fields).
+     *
+     * @return the boolean value if set, or null
+     */
+    @Nullable
+    private static Boolean extractSystemPromptSnapshot(ClaudeAgentOptions options) {
+        Object systemPrompt = options.systemPrompt();
+        if (systemPrompt instanceof SystemPromptPreset preset) {
+            return preset.snapshot();
+        }
+        if (systemPrompt instanceof SystemPromptCustom custom) {
+            return custom.snapshot();
         }
         return null;
     }
