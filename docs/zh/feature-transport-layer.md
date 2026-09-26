@@ -40,6 +40,8 @@ Transport transport = new SubprocessCLITransport(options);
 - 自动清理
 - 带宽限期的优雅关闭（在 stdin EOF 之后、发送 SIGTERM 之前，等待子进程把会话文件刷盘）
 - 默认设置 `CLAUDE_CODE_ENTRYPOINT=sdk-java`（可通过 `ClaudeAgentOptions.env()` 覆盖）
+- 设置 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`（除非调用方的 `env()` 或继承的环境中已经出现该变量，不区分大小写），使 CLI 报告标记为 `sdk_host_only` 的 `session_state_changed` 帧；`QueryHandler` 读取这些帧来决定 stdin 何时可以关闭，并在它们到达消费者之前将其丢弃。参见[架构 → stdin 的生命周期](./architecture.md#stdin-的生命周期与一次运行的结束)。传输层设置的完整变量列表见[配置选项 → env()](./feature-configuration-options.md#env)。
+- 当 CLI 版本低于 2.0.0 时，以及开启了 `verbatimPrompts` 但 CLI 版本低于 2.1.248（它会忽略 `client_composed`）时，在连接时发出警告（记录 `WARNING` 日志）。版本检查会运行 `<cli> -v`，设置了 `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` 时跳过。
 
 ### CLI 标志转发
 
@@ -51,6 +53,8 @@ Transport transport = new SubprocessCLITransport(options);
 | `sessionStore(...)` | `--session-mirror` | 当 `sessionStore != null` 时添加。它告诉 CLI 在 stdout 上发出 `transcript_mirror` 帧，SDK 会把这些帧剥离出来并转发给所配置的 `SessionStore`。 |
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display` 只在 `Adaptive` 与 `Enabled` 配置下转发（且仅当 `display != null` 时）；`Disabled` 从不发出它。 |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | 设置了 `display` 时两个标志会一起发出。 |
+| `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | 与普通字符串相同；`snapshot` 则改为随 `initialize` 请求发送。 |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | 每个 `local` 插件一个；其他类型会被跳过。 |
 
 **stderr 管道**：只有当 `options.stderrCallback() != null` 时才会为 stderr 建立管道。旧有的
 `--debug-to-stderr` 额外参数检测已在 0.1.13 中移除（为该 CLI 标志的废弃做准备）。若要捕获 CLI 的
@@ -282,7 +286,7 @@ ClaudeAgentOptions.builder().skills(List.of("x),Bash(*")).build();
 任何 skill 过滤器。
 
 完整的拒绝表、被接受的名称列表，以及与 Python SDK 之间两处刻意的差异（孤立代理项 vs 任意代理项、
-不换行空格的去除）：参见 [Skills → 名称校验](./feature-skills.md#名称校验01122)。
+不换行空格的去除）：参见 [Skills → 名称校验](./feature-skills.md#名称校验0122)。
 
 ## 自定义传输
 
@@ -373,6 +377,8 @@ public class RemoteTransport implements Transport {
 ```
 
 ## 使用自定义传输
+
+使用自定义传输时，SDK 会调用它的 `connect()`，通过 `write()` 投递提示词，并经由控制协议发送钩子、agent 以及其他 `initialize` 请求中的设置（包括 `systemPromptSnapshot`）。`SubprocessCLITransport` 会转换成 CLI 标志或环境变量的一切 —— model、cwd、权限模式、tools、`env` 等 —— 都**不会**被应用，基于存储的会话恢复也会被跳过。`verbatimPrompts` 仍然生效，因为 SDK 会在调用 `write()` 之前给提示词加上标记。
 
 ```java
 // Create custom transport

@@ -363,10 +363,12 @@ client.setPermissionMode(PermissionMode.ACCEPT_EDITS);
 ```
 
 **利用可能なモード**：
-- `ACCEPT_ALL` — すべての権限を自動的に許可
+- `DEFAULT` — 標準の権限動作（CLI のデフォルト）
 - `ACCEPT_EDITS` — 編集は自動許可、それ以外は確認
+- `PLAN` — 計画モード。ツールは実行されない
 - `BYPASS_PERMISSIONS` — 権限チェックをすべてスキップ
-- `PROMPT` — すべて確認する（デフォルト）
+- `DONT_ASK` — 許可ルールで事前承認されていないものはすべて拒否
+- `AUTO` — モデルの分類器が各ツール呼び出しを承認または拒否
 
 ### rewindFiles(String userMessageId)
 
@@ -375,7 +377,8 @@ client.setPermissionMode(PermissionMode.ACCEPT_EDITS);
 ```java
 // Enable checkpointing in options
 var options = ClaudeAgentOptions.builder()
-    .checkpointFiles(true)
+    .enableFileCheckpointing(true)
+    .extraArgs(Map.of("replay-user-messages", ""))  // so UserMessage carries a uuid
     .build();
 
 try (var client = ClaudeSDK.createClient(options)) {
@@ -384,7 +387,7 @@ try (var client = ClaudeSDK.createClient(options)) {
     client.sendMessage("Create file.txt");
     for (var msg : client.receiveResponse()) {
         if (msg instanceof UserMessage user) {
-            String messageId = user.id();
+            String messageId = user.uuid();
             // Save ID for later
         }
     }
@@ -399,8 +402,10 @@ try (var client = ClaudeSDK.createClient(options)) {
 MCP サーバー接続の状態を取得します。
 
 ```java
-Map<String, Object> status = client.getMcpStatus();
-System.out.println("MCP servers: " + status);
+McpStatusResponse status = client.getMcpStatus();
+for (McpServerStatus server : status.mcpServers()) {
+    System.out.println(server.name() + ": " + server.status());
+}
 ```
 
 ### getServerInfo()
@@ -409,7 +414,7 @@ System.out.println("MCP servers: " + status);
 
 ```java
 Map<String, Object> info = client.getServerInfo();
-System.out.println("CLI version: " + info.get("version"));
+System.out.println("Commands: " + info.get("commands"));
 ```
 
 ## セッション管理
@@ -702,7 +707,8 @@ public class MultiSession {
 public class Checkpointing {
     public static void main(String[] args) {
         var options = ClaudeAgentOptions.builder()
-            .checkpointFiles(true)
+            .enableFileCheckpointing(true)
+            .extraArgs(Map.of("replay-user-messages", ""))
             .build();
 
         try (var client = ClaudeSDK.createClient(options)) {
@@ -714,7 +720,7 @@ public class Checkpointing {
             client.sendMessage("Create test.txt with 'Hello'");
             for (var msg : client.receiveResponse()) {
                 if (msg instanceof UserMessage user) {
-                    checkpointId = user.id();
+                    checkpointId = user.uuid();
                 }
             }
 

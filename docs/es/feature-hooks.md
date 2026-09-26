@@ -273,6 +273,15 @@ public class HooksExample {
 }
 ```
 
+## Hooks tras la finalización de un subagente en segundo plano
+
+Con un `ClaudeSDK.query(...)` de un solo uso, un hook del turno que despierta la finalización de un
+subagente en segundo plano solo se ejecuta si el stdin sigue abierto cuando el CLI lo llama. El SDK
+mantiene el stdin abierto hasta que termina la ejecución, y no solo hasta el primer resultado;
+consulta [Agentes → Subagentes en segundo plano y callbacks](./feature-agents.md#subagentes-en-segundo-plano-y-callbacks)
+para ver las reglas y una advertencia sobre la versión del CLI, y `BackgroundAgentHooksExample` para
+una demostración ejecutable.
+
 ## Véase también
 - [Opciones de configuración](./feature-configuration-options.md#hooks)
 - [Ejemplo de Hooks](../../examples/src/main/java/examples/Hooks.java)

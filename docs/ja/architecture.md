@@ -107,7 +107,8 @@ SDK は、関心事をはっきり分けた階層アーキテクチャを採っ�
   - フック：`hooks()`
   - MCP：`mcpServers()`
   - エージェント：`agents()`（stdin の initialize リクエストで送信、サイズ上限なし）
-  - 高度な設定：`sandbox()`、`outputFormat()`、`checkpointFiles()`
+  - システムプロンプト：`systemPrompt()` —— 文字列、`SystemPromptPreset`、`SystemPromptCustom`、または `SystemPromptFile`
+  - 高度な設定：`sandbox()`、`outputFormat()`、`enableFileCheckpointing()`、`forwardSubagentText()`、`verbatimPrompts()`
 
 **設計パターン**：Builder + 不変オブジェクト
 
@@ -120,7 +121,13 @@ SDK は、関心事をはっきり分けた階層アーキテクチャを採っ�
   - フックのコールバック
   - ツール権限のコールバック
   - メッセージのストリーミング
-  - 初期化のハンドシェイク（フック、エージェント定義、excludeDynamicSections を含む）
+  - 初期化のハンドシェイク（フック、エージェント定義、`excludeDynamicSections`、`systemPromptSnapshot`、skills の許可リスト、`forwardSubagentText` を含む）
+  - **プロンプトへのスタンプ**：`verbatimPrompts` が有効な場合、`streamInput()` が書き込むすべてのユーザー
+    メッセージに `client_composed: true` を付けます（`stampUserMessage`。元を変更せずコピーします）。
+    `ClaudeSDKClient` も自身の書き込みに同じようにスタンプを付けます
+  - **実行終了の追跡**：CLI の `session_state_changed` フレーム、進行中タスクの台帳、ターン間の上限時間から
+    stdin を閉じてよいタイミングを判断し、SDK が要求した `sdk_host_only` の状態フレームを破棄します
+    （[stdin のライフサイクル](#stdin-のライフサイクルと実行の終了)を参照）
   - MCP サーバーのライフサイクル管理
   - **実用的なエラーへの置き換え**：ストリームを読みながら直近のエラー結果のペイロードを追跡します。
     `is_error=true` の result の後に `ProcessException` が続いた場合、それは汎用の
@@ -532,7 +539,7 @@ QueryHandler
 コンパイルした古いクラスのせいで、この捕捉範囲を広げるまで、すべての SDK MCP 制御リクエストが黙って
 固まっていました。
 
-### stdin のライフサイクルと進行中のタスク
+### stdin のライフサイクルと実行の終了
 
 > **`controlExecutor` はタスクごとにスレッドでなければなりません。** SDK MCP のツール呼び出しは、
 > ツールが答えるまで制御スレッドを占有し、それを終わらせる `notifications/cancelled` は*別の*制御
@@ -540,35 +547,96 @@ QueryHandler
 > 後ろに並び、デッドロックします。テストでは捕まえられません —— 大きさ 2 の固定プールはすべて通過します。
 
 フック、SDK MCP サーバー、`canUseTool` の権限コールバックのいずれかが登録されているとき、制御プロトコルは
-会話の間ずっと stdin を開いておく必要があります。そのため `QueryHandler.streamInput()` は、実行を
-終わらせる `result` フレームを待ってから `transport.endInput()` を呼びます。3 つとも同じように扱われます
-—— CLI が `control_request` を書き、SDK が対応する `control_response` を stdin に書くまでブロックする
-—— ので、3 つとも双方向の必要（`hasBidirectionalNeeds()`）として数えられます。早く閉じるのは無害では
-ありません。stream-json モードの CLI は stdin の EOF で**のみ**終了するため、クローズを単に `close()`
-まで先送りすることもできません —— それでは単発の `query()` が永遠に固まります。
+CLI がコールバックしてくる可能性がある間ずっと stdin を開いておく必要があります。そのため
+`QueryHandler.streamInput()` は、**実行の終了**を待ってから `transport.endInput()` を呼びます。3 つとも
+同じように扱われます —— CLI が `control_request` を書き、SDK が対応する `control_response` を stdin に
+書くまでブロックする —— ので、3 つとも双方向の必要（`hasBidirectionalNeeds()`）として数えられます。
+どれも無い場合、stdin はプロンプトを書き終えた時点ですぐに閉じられます。早く閉じるのは無害ではなく、
+クローズを単に `close()` まで先送りすることもできません。stream-json モードの CLI は stdin の EOF で
+**のみ**終了するため、それでは単発の `query()` が永遠に固まります。
 
 微妙なのは、**`result` フレームが終わらせるのは 1 ターンであって、実行全体ではない**という点です。
-バックグラウンドタスクはそれを越えて動き続け、フックと SDK-MCP の制御レスポンスのために依然として stdin を
-必要とします。最初の result で閉じると、まだ動いているサブエージェントの SDK-MCP ツール呼び出しが
-`"Stream closed"` で失敗し、さらに —— もっと静かに —— その `PreToolUse` フックが届かなくなるので、
-組み込みツールは実行され続け、拒否ゲートのフックはゲートとして働かなくなります。
+バックグラウンドのサブエージェントはそれを越えて動き続け、終わるとその完了が親を起こし、追加のターンが
+走ります。そのターンのフック、権限、SDK MCP のリクエストにも stdin が必要です。早く閉じると、それらの
+リクエストは `"Stream closed"` で失敗し、さらに —— もっと静かに —— `PreToolUse` フックが飛ばされるので、
+組み込みツールはコールバックなしで実行され、拒否ゲートのフックはゲートとして働かなくなりました。
 
-そこで `QueryHandler` は、`system` のタスクライフサイクルフレームから作られる進行中タスクの台帳を持ち、
-台帳が空のときにだけ result を実行終了とみなします：
+`QueryHandler` は、実行が終わったかどうかを 2 つの情報源から判断します。
+
+**1. CLI のセッション状態（主）。** トランスポートは CLI プロセスに
+`CLAUDE_CODE_SDK_READS_SESSION_STATE=1` を設定します（呼び出し側の `options.env` または継承した環境が、
+大文字小文字を問わずすでにその名前を持つ場合を除く）。これに対応した CLI は、`sdk_host_only: true` の
+印が付いた `system` / `session_state_changed` フレームを送ります。バックグラウンドエージェントが生きている
+間、あるいはその完了のためのターンがまだ残っている間は `running`、ホストを待っている間は
+`requires_action` のままで、それ以上ターンが残っていなくなると `idle` を報告します。リーダーは最新の状態を
+追跡し、利用側に届く前に **`sdk_host_only` の印が付いたフレームを破棄します**。印の無いフレーム ——
+呼び出し側が `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` でオプトインしたために送られるもの —— も同じように
+実行終了を決め、そのまま通過します。
+
+**2. タスク台帳（フォールバック、かつガード）。** `QueryHandler` は、`system` のタスクライフサイクル
+フレームから作られる進行中タスクの台帳を持ちます：
 
 ```
 system: task_started (task_type ∈ DEFERRING_TASK_TYPES)  ─►  add task_id
 system: task_notification                                ─►  remove task_id
 system: task_updated (patch.status ∈ TERMINAL_TASK_STATUSES) ─► remove task_id
-
-result frame
-    ├─ ledger empty     ─►  complete firstResultEvent  ─►  endInput()
-    └─ ledger non-empty ─►  keep stdin open, log at FINE
 ```
 
-タスクが完了するたびに親が起こされて追加のターンが走り、それがまた result フレームで終わるので、クローズ
-は結局すぐに起こります —— そして連鎖したバックグラウンドタスクも動きます。台帳は最後の 1 つが決着して
-初めて空になるからです。
+実行終了の規則は、すべて 1 つの `runLock` の下で扱われます：
+
+```
+result frame
+    ├─ state is null (CLI sends none) or "idle", or no bidirectional needs
+    │      └─ ledger empty      ─►  end the run  ─►  endInput()
+    │      └─ ledger non-empty  ─►  keep stdin open (log at FINE)
+    ├─ state is "requires_action" ─►  wait (a request is being answered)
+    └─ state is "running"         ─►  wait, and arm the run-end ceiling
+
+session_state_changed
+    ├─ "idle" after a result  ─►  end the run, unless the ledger is non-empty
+    ├─ "idle" before a result ─►  nothing (the prompt's run has not produced a result yet)
+    ├─ "requires_action"      ─►  reopen the run if it had ended; stop the ceiling
+    └─ "running" (or other)   ─►  reopen the run if it had ended; restart the ceiling if past a result
+```
+
+ホストによっては result の*直前*に `idle` を送るものがあり、その場合は result が実行を終わらせます。
+状態をまったく送らない CLI（古い CLI、および `CLAUDE_CODE_SDK_READS_SESSION_STATE` にまだ対応していない
+Claude Code 2.1.283）では状態が `null` のままなので、台帳が空の最初の result で実行が終わります ——
+0.2.3 より前の挙動です。
+
+**実行終了の上限時間。** CLI 自身のバックグラウンド待機の上限時間は stdin が閉じられてから数え始めるので、
+独自の上限がなければ、終わらない作業が `running` を —— そして stdin を —— 永遠に開いたままにしてしまいます。
+CLI がまだ `running` を報告している状態で result が届くと、`QueryHandler` は `Threads` のスレッド上で
+スリーパーを開始し、それが目覚めるまでに新しいターンが始まらなければ実行を終わらせます。その長さは
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` で、CLI から見えるのと同じ順序 —— まず `options.env`、次に
+プロセスの環境 —— で読み取られます。`0` は無制限を意味し、非負の整数でない値は CLI の既定値である
+600000 ms（10 分）にフォールバックし、`Integer.MAX_VALUE` ms（約 24.8 日）を超える値はそこに切り詰め
+られます。上限時間はターンの**間**の待ち時間だけを数えます：
+
+- メインスレッドの `assistant` または `stream_event` フレーム（`parent_tool_use_id == null`）は、ターンが
+  進行中であることを示します。上限時間は止まり、上限時間がすでに実行を終わらせていた場合でも実行が再開
+  されます。サブエージェント自身のメッセージでは止まり**ません** —— それこそが上限時間で区切る対象の作業です。
+- result で再始動します。result の後に届いた `running` でも同様です。
+- `requires_action` は、その後に続く `running` まで上限時間を止めます。
+- 発火した時点でまだ進行中の追跡対象エージェントは打ち切られません。台帳が空になった時点で上限時間が
+  最初から数え直されます。
+
+各スリーパーは世代番号を持ち、上限時間をクリアまたは再設定すると世代番号が進んでスリーパーに割り込みが
+かかるので、遅れて目覚めたスリーパーは何もしません。
+
+**再開。** 実行を終わらせると `CompletableFuture` が完了します。その後で CLI が取りかかる作業（完了した
+バックグラウンドタスクが CLI を起こす場合など）は新しい future に差し替えるので、まだ待ち始めていない
+待機者 —— プロンプトを書き込み中の `streamInput` —— も、その新しい作業を待ちます。`streamInput` が書く
+各プロンプトは、それぞれ自分の実行を持ちます。書き込む前に実行を再開し、「result を受信済み」をリセット
+するので、複数メッセージのプロンプトは最初のプロンプトではなく*最後の*プロンプトの実行を待ちます。
+stdin が閉じられるか、リーダーが終了すると、その実行は確定して終了したままになり、CLI が終了処理をして
+いる間に届くフレームに対しては上限時間は設定されません。`close()` とリーダーの `finally` ブロックの
+どちらも実行を終わらせるので、待機者が固まることはありません。
+
+この待機には他のタイムアウトはありません。以前の Java 版は `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT`（60 秒）
+でも待機を打ち切っていたため、1 分を超えて動くバックグラウンドエージェントはすべて途中で切られていました。
+その上限は取り除かれ、`CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` は現在 `initialize` のタイムアウトを設定する
+だけです。
 
 `DEFERRING_TASK_TYPES` は `{"local_agent", "local_workflow"}` です。除外は見落としではなく意図的です。
 バックグラウンドシェル（`local_bash`）とモニターは設計上いつまでも動き、teammate は生涯にわたって
@@ -581,10 +649,10 @@ result frame
 バックグラウンドへ移るだけなので、それを使って絞り込むと、まさにこの台帳が守ろうとしているエージェントを
 落としてしまいますし、それを使って広げると、後続のどのフレームも消さない id を招き入れかねません。
 
-これは完全な答えというより緩和策です。台帳が空とは「私たちの知る限り何も動いていない」という意味であって、
-「実行が終わった」とは違います。そのターンの result フレーム*より前*に決着したタスクは、その result の
-時点で台帳を空にします。どんな台帳もこの隙間を埋められません —— CLI からの実行境界のシグナルが必要です
-—— が、タスクが自分を生んだターンより長く生きるという一般的な順序は修正されています。
+既知の制限：セッション状態を報告しない CLI では、複数メッセージのプロンプトイテレータのうち前の
+プロンプトに対する result が、後のプロンプトがすでに CLI 側のキューに入っていても実行を終わらせてしまう
+ため、その後のターンからの制御リクエストが閉じた stdin に当たることがあります。単一メッセージや文字列の
+プロンプトといった、よくある単発の形はすべてカバーされています。
 
 ## 並行処理モデル
 

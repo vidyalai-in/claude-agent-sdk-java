@@ -247,6 +247,21 @@ SessionStoreExecutor.setDefault(Executors.newFixedThreadPool(8));
 SessionStoreExecutor.reset();
 ```
 
+Un ejecutor acotado —incluso de un solo hilo— es seguro. El ejecutor configurado solo ejecuta las
+llamadas de tu propio adaptador; el SDK nunca bloquea uno de sus hilos esperando a otra tarea enviada
+al mismo ejecutor:
+
+- **Réplica de transcripciones**: cada drenaje se ejecuta en un pequeño ejecutor de un hilo por tarea
+  propiedad del SDK (hilos con nombre `session-store-mirror-drain-<n>`) y espera allí al `appendAsync`
+  que envía a tu ejecutor.
+- **Listado respaldado por el store**: `listSessionsFromStore` emite sus llamadas `loadAsync` por
+  sesión desde el hilo que llama, con un máximo de 16 en curso; cuando se alcanza el límite, espera el
+  hilo que llama, no un hilo del ejecutor.
+
+Las versiones anteriores ejecutaban ambos coordinadores *sobre* el ejecutor configurado, así que un
+pool acotado podía provocar un interbloqueo en el listado o descartar en silencio todos los lotes
+replicados tras `sendTimeoutMs`.
+
 También puedes pasar un ejecutor por llamada:
 
 ```java
@@ -512,9 +527,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 | `BATCHED` (por defecto) | Una vez por mensaje `result` O cuando lo pendiente supera 500 entradas / 1 MiB | Casi todas las cargas de producción: mantiene la latencia del adaptador fuera de la ruta caliente |
 | `EAGER` | Drenaje en segundo plano programado tras cada marco encolado | Streaming de transcripciones en vivo hacia clientes, canalizaciones de auditoría en tiempo real, turnos muy grandes en los que no puedes esperar al `result` |
 
-`EAGER` pone a cero los umbrales de pendiente del batcher: cada marco encolado programa un volcado en
-segundo plano mediante el `SessionStoreExecutor` configurado (un hilo con nombre por tarea; virtual en
-Java 21+). Las adiciones siguen serializadas en el orden de encolado; un adaptador lento no detendrá el
+`EAGER` pone a cero los umbrales de pendiente del batcher: cada marco encolado programa un drenaje en
+segundo plano en el ejecutor de drenaje propio del SDK (un hilo `session-store-mirror-drain-<n>` por
+tarea; virtual en Java 21+), que llama al `appendAsync` de tu adaptador en el `SessionStoreExecutor`
+configurado. Las adiciones siguen serializadas en el orden de encolado; un adaptador lento no detendrá el
 bucle de lectura, pero verá marcos agrupados mientras esté ocupado. La opción se ignora cuando
 `sessionStore` no está definido.
 
@@ -753,7 +769,7 @@ configurado) como otra que recibe un `Executor` (control por llamada).
 |---|---|
 | `Executor getDefault()` | Ejecutor por defecto actual |
 | `void setDefault(Executor)` | Lo sustituye; `null` vuelve al integrado |
-| `void reset()` | Vuelve al integrado `Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("session-store-", 0).factory())` |
+| `void reset()` | Vuelve al ejecutor integrado de un hilo por tarea (`session-store-<n>`; hilos virtuales en Java 21+, hilos de plataforma daemon en 17-20) |
 
 ### `SessionStoreConformance`
 

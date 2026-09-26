@@ -218,6 +218,19 @@ var messages = List.of(
 List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 ```
 
+### Prompt de sistema
+
+De forma predeterminada, Claude Code construye el prompt de sistema en la primera solicitud de una sesión, lo registra y lo reutiliza en todas las solicitudes posteriores, incluso después de reanudar la sesión. Por eso, un prompt personalizado modificado, o un texto `append` modificado sobre el preset `claude_code`, no tiene efecto hasta que la sesión se compacta o se inicia una sesión nueva. Para reconstruir el prompt en cada solicitud, por ejemplo mientras iteras sobre su redacción, establece `snapshot` en `false` en un `SystemPromptCustom` o un `SystemPromptPreset`:
+
+```java
+var options = ClaudeAgentOptions.builder()
+    .systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+    // or: .systemPrompt(SystemPromptPreset.claudeCode("Be concise.").withSnapshot(false))
+    .build();
+```
+
+Requiere Claude Code CLI 2.1.257 o posterior. Antes de la 2.1.265, una sesión con un prompt `append` o personalizado solo lo registraba cuando `snapshot` era `true`. Consulta [Modificar los prompts de sistema](https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts#change-the-prompt-of-an-existing-session) para más detalles.
+
 ## ClaudeSDKClient
 
 `ClaudeSDKClient` admite conversaciones bidireccionales e interactivas con Claude Code. A
@@ -298,7 +311,7 @@ try (var client = ClaudeSDK.createClient()) {
     client.connect("Start with default model");
 
     // Switch to a different model mid-conversation
-    client.setModel("claude-sonnet-4-5");
+    client.setModel("claude-sonnet-5");
 
     client.sendMessage("Continue with new model");
 }

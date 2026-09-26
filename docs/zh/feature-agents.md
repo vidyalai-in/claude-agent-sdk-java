@@ -12,6 +12,7 @@
 - [基于文件系统的 agent](#基于文件系统的-agent)
 - [大型 agent 定义](#大型-agent-定义)
 - [观察子 agent 的输出](#观察子-agent-的输出)
+- [后台子 agent 与回调](#后台子-agent-与回调)
 - [示例](#示例)
 
 ## 概览
@@ -255,6 +256,26 @@ CLI。
 `getSubagentMessages()`，请参见[会话历史](./feature-session-history.md)；它们的结果同样带有
 `parentToolUseId`，并为嵌套子 agent 额外提供 `parentAgentId`。
 
+## 后台子 agent 与回调
+
+以 `run_in_background` 启动的子 agent 在父级的轮次结束后仍会继续运行，完成时又会唤醒父级进行一次后续轮次。对于配置了钩子、`canUseTool` 回调或 SDK MCP 服务器的一次性 `ClaudeSDK.query(...)`，这些回调在后续轮次中只有在 stdin 仍然打开时才能工作。因此 SDK 不会在第一个 `result` 处就关闭 stdin：
+
+- 只要还有 `local_agent` 或 `local_workflow` 任务在执行，stdin 就保持打开。
+- 当 CLI 报告会话状态时，stdin 在 result 之后的 `idle` 处关闭，因此由一个*恰好在* result 之前完成的子 agent 所欠下的后续轮次仍然能得到服务。
+- 轮次之间的等待受 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` 限制（默认 10 分钟，`0` 表示不限制）。
+
+SDK 通过 `CLAUDE_CODE_SDK_READS_SESSION_STATE` 请求 CLI 报告会话状态。Claude Code 2.1.283 尚不支持它；使用这样的 CLI 时，stdin 会在第一个没有任务在执行的 result 处关闭，后续轮次中的回调能否运行取决于时机。在 `env()` 中设置 `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` 可以让 CLI 现在就报告状态，代价是 `session_state_changed` 帧也会出现在你的迭代器中：
+
+```java
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .agents(Map.of("worker", worker))
+    .hooks(hooks)
+    .env(Map.of("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"))
+    .build();
+```
+
+`ClaudeSDKClient` 不受影响：它会一直保持 stdin 打开，直到你断开连接。完整规则参见[架构 → stdin 的生命周期](./architecture.md#stdin-的生命周期与一次运行的结束)。
+
 ## 示例
 
 完整可运行的演示请参见示例文件：
@@ -263,6 +284,7 @@ CLI。
 - [`FilesystemAgentsExample.java`](../../examples/src/main/java/examples/FilesystemAgentsExample.java) —— 从 `.claude/agents/` 文件加载 agent
 - [`LargeAgentsExample.java`](../../examples/src/main/java/examples/LargeAgentsExample.java) —— 260KB 以上 agent 负载的压力测试
 - [`ForwardSubagentTextExample.java`](../../examples/src/main/java/examples/ForwardSubagentTextExample.java) —— 同一次运行在关闭与开启子 agent 文本转发时的对比
+- [`BackgroundAgentHooksExample.java`](../../examples/src/main/java/examples/BackgroundAgentHooksExample.java) —— 在后台子 agent 完成所唤醒的后续轮次中处理的 `PreToolUse` 钩子
 
 ## 另见
 

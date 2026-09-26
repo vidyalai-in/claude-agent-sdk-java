@@ -106,7 +106,8 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
   - 훅: `hooks()`
   - MCP: `mcpServers()`
   - 에이전트: `agents()` (stdin의 initialize 요청으로 전송, 크기 제한 없음)
-  - 고급: `sandbox()`, `outputFormat()`, `checkpointFiles()`
+  - 시스템 프롬프트: `systemPrompt()` — 문자열, `SystemPromptPreset`, `SystemPromptCustom` 또는 `SystemPromptFile`
+  - 고급: `sandbox()`, `outputFormat()`, `enableFileCheckpointing()`, `forwardSubagentText()`, `verbatimPrompts()`
 
 **설계 패턴**: Builder + 불변 객체
 
@@ -119,7 +120,13 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
   - 훅 콜백
   - 도구 권한 콜백
   - 메시지 스트리밍
-  - 초기화 핸드셰이크(훅, 에이전트 정의, excludeDynamicSections 포함)
+  - 초기화 핸드셰이크(훅, 에이전트 정의, `excludeDynamicSections`, `systemPromptSnapshot`, skills 허용 목록, `forwardSubagentText` 포함)
+  - **프롬프트 표시**: `verbatimPrompts`가 켜져 있으면 `streamInput()`이 쓰는 모든 사용자 메시지에
+    `client_composed: true`가 붙습니다(`stampUserMessage`, 원본을 변경하지 않고 복사함). `ClaudeSDKClient`도
+    자신이 쓰는 메시지에 같은 방식으로 표시를 붙입니다
+  - **실행 종료 추적**: CLI의 `session_state_changed` 프레임, 진행 중 작업 장부, 턴 사이 상한 시간을 바탕으로
+    stdin을 닫을 수 있는 시점을 판단하고, SDK가 요청한 `sdk_host_only` 상태 프레임은 걸러 냅니다
+    ([stdin 수명 주기](#stdin-수명-주기와-실행의-끝) 참고)
   - MCP 서버 수명 주기 관리
   - **실질적인 오류로 교체**: 스트림을 읽으면서 가장 최근 오류 결과의 페이로드를 추적합니다.
     `is_error=true`인 result 뒤에 `ProcessException`이 오면, 일반적인
@@ -523,42 +530,98 @@ QueryHandler
 이는 이론적인 이야기가 아닙니다. "unresolved compilation problem"이라는 `Error`를 품은, IDE가 컴파일한
 낡은 클래스 하나 때문에, 이 잡는 범위를 넓히기 전까지 모든 SDK MCP 제어 요청이 조용히 멈춰 있었습니다.
 
-### stdin 수명 주기와 진행 중인 작업
+### stdin 수명 주기와 실행의 끝
 
 > **`controlExecutor`는 작업마다 스레드여야 합니다.** SDK MCP 도구 호출은 도구가 답할 때까지 제어
 > 스레드를 붙잡고, 그것을 끝내는 `notifications/cancelled`는 *별개의* 제어 요청으로 도착합니다. 어떤
 > 제한된 풀에서든 그 취소는 자신이 취소해야 할 바로 그 호출 뒤에 줄을 서게 되어 교착에 빠집니다. 어떤
 > 테스트도 잡아내지 못합니다 — 크기 2짜리 고정 풀은 모든 테스트를 통과합니다.
 
-훅, SDK MCP 서버, `canUseTool` 권한 콜백이 등록되어 있으면 제어 프로토콜은 대화 내내 stdin이 열려 있어야
-하므로, `QueryHandler.streamInput()`은 실행을 끝내는 `result` 프레임을 기다린 뒤에야
-`transport.endInput()`을 호출합니다. 셋 다 같은 방식으로 처리됩니다 — CLI가 `control_request`를 쓰고 SDK가
-짝이 되는 `control_response`를 stdin에 쓸 때까지 막힙니다 — 그래서 셋 다 양방향 필요
-(`hasBidirectionalNeeds()`)로 셉니다. 너무 일찍 닫는 것은 무해하지 않습니다: stream-json 모드의 CLI는
-stdin EOF에서**만** 종료하므로, 닫기를 그냥 `close()`까지 미룰 수도 없습니다 — 그러면 일회성 `query()`가
-영원히 멈춥니다.
+훅, SDK MCP 서버, `canUseTool` 권한 콜백이 등록되어 있으면 제어 프로토콜은 CLI가 다시 호출할 가능성이
+남아 있는 동안 내내 stdin이 열려 있어야 하므로, `QueryHandler.streamInput()`은 **실행이 끝날 때까지**
+기다린 뒤에야 `transport.endInput()`을 호출합니다. 셋 다 같은 방식으로 처리됩니다 — CLI가
+`control_request`를 쓰고 SDK가 짝이 되는 `control_response`를 stdin에 쓸 때까지 막힙니다 — 그래서 셋 다
+양방향 필요(`hasBidirectionalNeeds()`)로 셉니다. 셋 중 아무것도 없으면 프롬프트를 쓰자마자 stdin을
+닫습니다. 너무 일찍 닫는 것은 무해하지 않고, 닫기를 그냥 `close()`까지 미룰 수도 없습니다:
+stream-json 모드의 CLI는 stdin EOF에서**만** 종료하므로, 그러면 일회성 `query()`가 영원히 멈춥니다.
 
-미묘한 점은 **`result` 프레임이 끝내는 것은 한 턴이지 실행 전체가 아니라는 것**입니다. 백그라운드 작업은
-그 뒤로도 계속 돌고, 훅과 SDK-MCP 제어 응답을 위해 여전히 stdin이 필요합니다. 첫 result에서 닫으면 아직
-돌고 있는 서브에이전트의 SDK-MCP 도구 호출이 `"Stream closed"`로 실패하고, 더 조용하게는 그
-`PreToolUse` 훅이 전달되지 않아 내장 도구가 계속 실행되고 거부 관문 훅이 관문 노릇을 멈춥니다.
+미묘한 점은 **`result` 프레임이 끝내는 것은 한 턴이지 실행 전체가 아니라는 것**입니다. 백그라운드
+서브에이전트는 그 뒤로도 계속 돌고, 끝나면 그 완료가 부모를 깨워 후속 턴을 돌게 합니다. 그 턴의 훅, 권한,
+SDK MCP 요청에도 stdin이 필요합니다. 너무 일찍 닫으면 그 요청들이 `"Stream closed"`로 실패했고, 더
+조용하게는 `PreToolUse` 훅을 건너뛰어 내장 도구가 콜백 없이 실행되고 거부 관문 훅이 관문 노릇을 멈췄습니다.
 
-그래서 `QueryHandler`는 `system` 작업 수명 주기 프레임으로 채워지는 진행 중 작업 장부를 두고, 장부가 비어
-있을 때만 result를 실행 종료로 취급합니다:
+`QueryHandler`는 두 가지 출처로 실행이 끝났는지를 판단합니다.
+
+**1. CLI의 세션 상태(주 신호).** 전송 계층은 CLI 프로세스에 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`을
+설정합니다(호출자의 `options.env`나 상속된 환경에 대소문자와 무관하게 이미 그 이름이 있으면 설정하지
+않습니다). 이를 따르는 CLI는 `sdk_host_only: true`가 표시된 `system` / `session_state_changed` 프레임을
+보냅니다: 백그라운드 에이전트가 살아 있거나 그 완료에 대해 아직 턴이 남아 있는 동안에는 `running`,
+호스트를 기다리는 동안에는 `requires_action`을 유지하고, 더 이상 남은 턴이 없으면 `idle`을 보고합니다.
+읽기 쪽은 최신 상태를 추적하고, **`sdk_host_only`가 표시된 프레임은 소비자에게 닿기 전에 걸러 냅니다**.
+표시가 없는 프레임 — 호출자가 `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`로 옵트인해서 보내지는 것 — 도
+같은 방식으로 실행 종료를 이끌며, 그대로 전달됩니다.
+
+**2. 작업 장부(대체 수단이자 안전장치).** `QueryHandler`는 `system` 작업 수명 주기 프레임으로 채워지는
+진행 중 작업 장부를 둡니다:
 
 ```
 system: task_started (task_type ∈ DEFERRING_TASK_TYPES)  ─►  add task_id
 system: task_notification                                ─►  remove task_id
 system: task_updated (patch.status ∈ TERMINAL_TASK_STATUSES) ─► remove task_id
-
-result frame
-    ├─ ledger empty     ─►  complete firstResultEvent  ─►  endInput()
-    └─ ledger non-empty ─►  keep stdin open, log at FINE
 ```
 
-작업이 끝날 때마다 부모가 깨어나 후속 턴을 돌고 그것이 또 다른 result 프레임으로 끝나므로 닫기는 결국
-곧바로 일어납니다 — 그리고 연쇄된 백그라운드 작업도 동작합니다. 장부는 마지막 하나가 마무리된 뒤에야
-비기 때문입니다.
+실행 종료 규칙은 모두 하나의 `runLock` 아래에서 적용됩니다:
+
+```
+result frame
+    ├─ state is null (CLI sends none) or "idle", or no bidirectional needs
+    │      └─ ledger empty      ─►  end the run  ─►  endInput()
+    │      └─ ledger non-empty  ─►  keep stdin open (log at FINE)
+    ├─ state is "requires_action" ─►  wait (a request is being answered)
+    └─ state is "running"         ─►  wait, and arm the run-end ceiling
+
+session_state_changed
+    ├─ "idle" after a result  ─►  end the run, unless the ledger is non-empty
+    ├─ "idle" before a result ─►  nothing (the prompt's run has not produced a result yet)
+    ├─ "requires_action"      ─►  reopen the run if it had ended; stop the ceiling
+    └─ "running" (or other)   ─►  reopen the run if it had ended; restart the ceiling if past a result
+```
+
+어떤 호스트는 result *직전에* `idle`을 보내는데, 이때는 result가 실행을 끝냅니다. 상태를 전혀 보내지 않는
+CLI(오래된 CLI, 그리고 아직 `CLAUDE_CODE_SDK_READS_SESSION_STATE`를 따르지 않는 Claude Code 2.1.283)에서는
+상태가 `null`로 남으므로, 장부가 빈 상태의 첫 result가 실행을 끝냅니다 — 0.2.3 이전의 동작입니다.
+
+**실행 종료 상한 시간.** CLI 자체의 백그라운드 대기 상한은 stdin이 닫힌 뒤에야 시간을 세기 시작하므로,
+SDK 쪽에 자체 한도가 없으면 끝나지 않는 작업이 `running` 상태를 — 그리고 stdin을 — 영원히 붙잡아 둘
+것입니다. CLI가 여전히 `running`을 보고하는 상태에서 result가 오면, `QueryHandler`는 `Threads`에서 얻은
+스레드로 슬리퍼를 시작합니다. 슬리퍼가 깨어나기 전에 새 턴이 시작되지 않으면 실행을 끝냅니다. 지속 시간은
+CLI가 보게 될 방식 그대로 — 먼저 `options.env`, 다음으로 프로세스 환경 — 읽은
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`입니다. `0`은 제한 없음을 뜻하고, 음이 아닌 정수가 아닌 값은 CLI
+기본값인 600000 ms(10분)로 대체되며, `Integer.MAX_VALUE` ms(약 24.8일)를 넘는 값은 그 값으로 잘립니다.
+상한 시간은 턴 **사이의** 대기만 셉니다:
+
+- 메인 스레드의 `assistant` 또는 `stream_event` 프레임(`parent_tool_use_id == null`)은 턴이 진행 중임을
+  뜻합니다: 상한 타이머가 멈추고, 상한이 이미 실행을 끝냈더라도 실행이 다시 열립니다. 서브에이전트 자신의
+  메시지는 타이머를 멈추지 **않습니다** — 그것이 바로 상한이 제한하는 작업이기 때문입니다.
+- result가 오면 타이머가 다시 시작되고, result 이후에 도착한 `running`도 마찬가지입니다.
+- `requires_action`은 뒤따르는 `running`이 올 때까지 타이머를 멈춥니다.
+- 타이머가 발동할 때 아직 진행 중인 추적 대상 에이전트는 잘리지 않습니다. 장부가 비면 상한 시간이 처음부터
+  다시 시작됩니다.
+
+각 슬리퍼는 세대 번호를 지니며, 상한을 해제하거나 다시 걸면 그 번호가 올라가고 슬리퍼가 인터럽트되므로,
+늦게 깨어난 슬리퍼는 물러납니다.
+
+**다시 열기.** 실행을 끝내면 `CompletableFuture`가 완료됩니다. 그 뒤에 CLI가 맡는 작업(끝난 백그라운드
+작업이 CLI를 깨우는 경우)은 새 future로 교체되므로, 아직 대기를 시작하지 않은 대기자 — 여전히 프롬프트를
+쓰고 있는 `streamInput` — 도 새 작업을 기다립니다. `streamInput`이 쓰는 각 프롬프트는 저마다 하나의 실행을
+가집니다: 쓰기 전에 실행을 다시 열고 "result 수신" 상태를 초기화하므로, 여러 메시지로 된 프롬프트는 첫
+프롬프트가 아니라 *마지막* 프롬프트의 실행을 기다립니다. stdin이 닫히거나 읽기 쪽이 종료되면 실행은
+최종 상태가 되어 끝난 채로 남고, CLI가 마무리되는 동안 도착하는 프레임에 대해서는 상한 타이머를 걸지
+않습니다. `close()`와 읽기 쪽의 `finally` 블록이 모두 실행을 끝내므로 대기자가 멈출 일은 없습니다.
+
+이 대기에는 다른 타임아웃이 없습니다. 예전에는 Java가 `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT`(60초)으로도
+대기를 제한해 1분 넘게 도는 백그라운드 에이전트를 잘라 냈습니다. 그 제한은 사라졌고, 이제
+`CLAUDE_CODE_STREAM_CLOSE_TIMEOUT`은 `initialize` 타임아웃만 설정합니다.
 
 `DEFERRING_TASK_TYPES`는 `{"local_agent", "local_workflow"}`입니다. 제외는 실수가 아니라 의도입니다.
 백그라운드 셸(`local_bash`)과 모니터는 설계상 무기한 돌고, teammate는 평생 `running`으로 남으므로 어느
@@ -571,10 +634,10 @@ result frame
 그래서 그것으로 좁히면 이 장부가 지키려는 바로 그 에이전트를 놓치고, 그것으로 넓히면 이후 어떤 프레임도
 지우지 않는 id를 들일 수 있습니다.
 
-이는 완전한 해답이라기보다 완화책입니다. 장부가 비었다는 것은 "우리가 아는 한 아무것도 돌고 있지 않다"는
-뜻이지 "실행이 끝났다"와는 다릅니다. 자기 턴의 result 프레임보다 *먼저* 마무리된 작업은 그 result 시점에
-장부를 비워 둡니다. 어떤 장부도 그 틈을 메울 수 없습니다 — CLI로부터 실행 경계 신호가 필요합니다 —
-하지만 작업이 자기를 만든 턴보다 오래 사는 흔한 순서는 고쳐졌습니다.
+알려진 한계: 세션 상태를 보고하지 않는 CLI에서는, 여러 메시지로 된 프롬프트 이터레이터의 앞선 프롬프트에
+대한 result가, 뒤의 프롬프트가 이미 CLI 쪽에 대기 중이더라도 실행을 끝냅니다. 그래서 그 뒤 턴의 제어
+요청이 닫힌 stdin을 만날 수 있습니다. 단일 메시지 프롬프트와 문자열 프롬프트 — 흔한 일회성 형태 — 는
+완전히 처리됩니다.
 
 ## 동시성 모델
 

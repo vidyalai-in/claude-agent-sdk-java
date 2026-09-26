@@ -19,7 +19,7 @@ complexas de múltiplos turnos.
 - ⚡ **Threads virtuais**: o trabalho em segundo plano roda em threads virtuais do Project Loom no Java 21+, e em threads de plataforma daemon no 17-20
 - 🔧 **Arquitetura flexível**: suporte tanto a consultas sem estado quanto a conversas com estado
 - 🛠️ **Ferramentas personalizadas**: crie suas próprias ferramentas usando MCP (Model Context Protocol)
-- 🔌 **Sistema de plugins**: arquitetura extensível para funcionalidades próprias
+- 🔌 **Plugins**: carregue plugins do Claude Code (comandos, agentes, skills, hooks) a partir de diretórios locais
 - 🎨 **Padrão builder**: API fluente para configuração
 
 ## Índice da documentação
@@ -30,6 +30,7 @@ complexas de múltiplos turnos.
   - Componentes centrais (camada de API, configuração, protocolo, transporte)
   - Padrões de design (interfaces seladas, builder, fachada, threads virtuais)
   - Diagramas de fluxo de dados e modelo de concorrência
+  - Ciclo de vida do stdin: quando uma execução termina (estado da sessão, registro de tarefas, teto entre turnos)
   - Hierarquia do sistema de tipos e dependências
 
 ### Recursos principais
@@ -51,9 +52,11 @@ complexas de múltiplos turnos.
 - **[Opções de configuração](./feature-configuration-options.md)** — guia completo do builder ClaudeAgentOptions
   - Todas as 30+ opções de configuração
   - Configuração de ferramentas
+  - Formas do prompt de sistema e `snapshot`
   - Configurações de permissão
   - Configuração de modelo
-  - Variáveis de ambiente
+  - Variáveis de ambiente, e as que o próprio SDK define
+  - `verbatimPrompts` — entregar prompts sem expansão de `@path` nem comandos de barra
   - Hooks e callbacks
   - Exemplos completos para padrões comuns
 
@@ -157,9 +160,9 @@ complexas de múltiplos turnos.
   - Exemplo de transporte personalizado
   - Recusa de scripts batch no Windows e a habilitação explícita para instalações npm com `claude.cmd`
 
-- **[Sistema de plugins](./feature-plugin-system.md)** — criando e usando plugins
-  - SdkPluginConfig
-  - Casos de uso e exemplos
+- **[Sistema de plugins](./feature-plugin-system.md)** — carregando plugins do Claude Code
+  - `SdkPluginConfig.local(path)` → `--plugin-dir`
+  - Estrutura de um plugin e como verificar que ele foi carregado
 
 ### Referência da API
 - **[ClaudeSDK](./api-claude-sdk.md)** — fachada estática para consultas simples
@@ -285,13 +288,15 @@ try (var client = ClaudeSDK.createClient(options)) {
 
 ## Exemplos
 
-O SDK inclui mais de 15 exemplos abrangentes, cobrindo:
+O SDK inclui mais de 30 exemplos executáveis, cobrindo:
 - Consultas e conversas básicas
 - Ferramentas MCP personalizadas
 - Callbacks de permissão
-- Sistema de hooks
+- Sistema de hooks, incluindo hooks atendidos no turno de continuação de um subagente em segundo plano (`BackgroundAgentHooksExample`)
 - Eventos de streaming
 - Tratamento de erros
+- Prompts de sistema, incluindo `snapshot` (`SystemPromptExample`)
+- Entrega de prompts literalmente (`VerbatimPromptsExample`)
 - Recursos avançados (checkpoints, sandbox, formato de saída)
 - E muito mais...
 
@@ -310,11 +315,12 @@ Veja o diretório `examples/` no repositório.
 ### ✅ Concluído — toda a documentação principal
 - README principal com início rápido e visão geral
 - Visão geral da arquitetura (abrangente, com diagramas; subsistema SessionStore;
-  tratamento de falhas em requisições de controle)
+  tratamento de falhas em requisições de controle; ciclo de vida do stdin e detecção do fim da execução)
 - Todos os guias de recursos:
   - Consultas simples
   - Conversas interativas
-  - Opções de configuração (incluindo `sessionStore` e `loadTimeoutMs`)
+  - Opções de configuração (incluindo `sessionStore`, `loadTimeoutMs`,
+    `verbatimPrompts` e o `snapshot` do prompt de sistema)
   - Tipos de mensagem (mensagens de tarefa, blocos de ferramenta do servidor, MirrorErrorMessage)
   - Servidores MCP (com ToolAnnotations, títulos de ferramenta, tipos de status, validação de
     entrada, semântica de falhas, cancelamento e handlers personalizados)
@@ -326,7 +332,8 @@ Veja o diretório `examples/` no repositório.
   - Camada de transporte (com `--session-mirror`, `--thinking-display`, remoção de `--debug-to-stderr`)
   - Sistema de plugins
   - Histórico de sessões (listSessions / getSessionMessages)
-  - Session Store (espelhar transcrições para S3/Postgres/Redis/back-ends próprios)
+  - Session Store (espelhar transcrições para S3/Postgres/Redis/back-ends próprios; executores
+    limitados)
 - Referência completa da API (5 documentos):
   - ClaudeSDK (incluindo os métodos de histórico de sessões)
   - ClaudeSDKClient

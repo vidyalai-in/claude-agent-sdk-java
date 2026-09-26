@@ -66,6 +66,44 @@ Executa uma consulta por streaming com várias mensagens.
 
 **Lança**: o mesmo que acima, incluindo `QueryFailedException`.
 
+Cada mensagem do stream tem direito a uma execução própria: com hooks, um callback
+`canUseTool` ou servidores MCP do SDK configurados, o stdin permanece aberto até que a execução
+da *última* mensagem tenha terminado (veja [Quando a consulta retorna](#quando-a-consulta-retorna)).
+Com `verbatimPrompts(true)`, cada mensagem é escrita com `client_composed: true`, em uma cópia;
+seus maps não são modificados.
+
+### query(..., Transport transport)
+
+```java
+public static List<Message> query(String prompt, ClaudeAgentOptions options, Transport transport)
+public static List<Message> query(Iterator<Map<String, Object>> messageStream,
+                                  ClaudeAgentOptions options, Transport transport)
+```
+
+O mesmo, mas sobre um [`Transport`](./feature-transport-layer.md#transporte-próprio)
+personalizado em vez de um subprocesso do CLI (`null` seleciona o padrão). O SDK chama o
+`connect()` dele, entrega o prompt por `write()` e envia hooks, agentes e as demais
+configurações da requisição `initialize` pelo protocolo de controle. As opções de linha de
+comando (model, cwd, modo de permissão, ferramentas, `env`, …) não são aplicadas a um
+transporte personalizado, e a retomada de sessão a partir de um store é ignorada.
+
+### Quando a consulta retorna
+
+`query(...)` retorna assim que a saída do CLI termina, o que acontece depois que o SDK fecha o
+stdin do CLI. Sem hooks, `canUseTool` ou servidores MCP do SDK, o stdin é fechado assim que o
+prompt é escrito. Com qualquer um deles, o CLI ainda pode fazer chamadas de volta depois de um
+`result` — por exemplo, no turno de continuação que um subagente em segundo plano concluído
+desperta —, então o SDK mantém o stdin aberto até que a execução termine:
+
+- em `idle`, quando o CLI informa o estado da sessão;
+- caso contrário, no primeiro `result` sem nenhuma tarefa em segundo plano em andamento;
+- ou, enquanto o CLI continuar informando `running`, depois que
+  `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (padrão de 10 minutos, `0` = sem limite) se passar
+  sem um novo turno.
+
+Veja [Arquitetura → Ciclo de vida do stdin](./architecture.md#ciclo-de-vida-do-stdin-e-o-fim-de-uma-execução)
+e [Agentes → Subagentes em segundo plano e callbacks](./feature-agents.md#subagentes-em-segundo-plano-e-callbacks).
+
 ### Resultados de erro e mensagens parciais
 
 O CLI reporta `error_max_turns` e `error_max_budget_usd` emitindo um turno *completo* — mensagens do

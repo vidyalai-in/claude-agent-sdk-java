@@ -236,6 +236,20 @@ SessionStoreExecutor.setDefault(Executors.newFixedThreadPool(8));
 SessionStoreExecutor.reset();
 ```
 
+제한된 실행기 — 스레드가 하나뿐이더라도 — 도 안전합니다. 설정된 실행기는 오직 여러분 어댑터 자신의
+호출만 실행합니다. SDK는 같은 실행기에 제출한 다른 작업을 기다리느라 그 실행기의 스레드를 막는 일이
+결코 없습니다:
+
+- **트랜스크립트 미러링**: 각 배출은 SDK가 소유한 작은 작업마다 스레드 실행기(스레드 이름
+  `session-store-mirror-drain-<n>`)에서 실행되며, 여러분의 실행기에 제출한 `appendAsync`를 거기서
+  기다립니다.
+- **저장소 기반 목록 조회**: `listSessionsFromStore`는 세션별 `loadAsync` 호출을 호출 스레드에서
+  발행하며, 동시에 진행 중인 호출은 최대 16개입니다. 한도에 도달하면 실행기 스레드가 아니라 호출
+  스레드가 기다립니다.
+
+이전 버전은 두 조정자를 모두 설정된 실행기 *위에서* 실행했기 때문에, 제한된 풀에서는 목록 조회가 교착에
+빠지거나 `sendTimeoutMs` 이후 미러링된 모든 배치를 조용히 버릴 수 있었습니다.
+
 호출마다 실행기를 넘길 수도 있습니다:
 
 ```java
@@ -487,8 +501,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 | `BATCHED`(기본) | `result` 메시지마다 한 번, 또는 대기가 500개 / 1 MiB를 넘을 때 | 거의 모든 운영 워크로드 — 어댑터 지연을 스트리밍의 뜨거운 경로에서 떼어 놓습니다 |
 | `EAGER` | 프레임을 큐에 넣을 때마다 백그라운드 배출을 예약 | 클라이언트로의 실시간 트랜스크립트 스트리밍, 실시간 감사 파이프라인, `result`까지 기다릴 수 없는 아주 큰 턴 |
 
-`EAGER`는 배처의 대기 임계값을 0으로 만듭니다 — 큐에 넣는 모든 프레임이 설정된 `SessionStoreExecutor`를
-통해 백그라운드 플러시를 예약합니다(작업마다 이름 붙은 스레드 하나, Java 21+에서는 가상 스레드). 추가는
+`EAGER`는 배처의 대기 임계값을 0으로 만듭니다 — 큐에 넣는 모든 프레임이 SDK 자체의 배출 실행기(작업마다
+`session-store-mirror-drain-<n>` 스레드 하나, Java 21+에서는 가상 스레드)에서 백그라운드 배출을 예약하고,
+그 배출이 설정된 `SessionStoreExecutor` 위에서 어댑터의 `appendAsync`를 호출합니다. 추가는
 여전히 큐 순서대로 직렬화됩니다. 느린 어댑터가 읽기 루프를 막지는 않지만, 바쁜 동안에는 프레임이 합쳐져
 보입니다. `sessionStore`가 설정되지 않으면 이 옵션은 무시됩니다.
 
@@ -719,7 +734,7 @@ SessionSummaryEntry folded = SessionSummary.foldSessionSummary(
 |---|---|
 | `Executor getDefault()` | 현재 기본 실행기 |
 | `void setDefault(Executor)` | 덮어쓰기. `null`이면 내장으로 초기화 |
-| `void reset()` | 내장 `Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("session-store-", 0).factory())`로 초기화 |
+| `void reset()` | 내장된 작업마다 스레드 하나 실행기(`session-store-<n>`, Java 21+에서는 가상 스레드, 17~20에서는 데몬 플랫폼 스레드)로 초기화 |
 
 ### `SessionStoreConformance`
 

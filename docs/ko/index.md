@@ -18,7 +18,7 @@ Claude Agent SDK for Java는 Claude AI 기능을 Java 애플리케이션에 통�
 - ⚡ **가상 스레드**: 백그라운드 작업이 Java 21+에서는 Project Loom 가상 스레드에서, 17~20에서는 데몬 플랫폼 스레드에서 실행됩니다
 - 🔧 **유연한 아키텍처**: 무상태 질의와 상태 있는 대화를 모두 지원
 - 🛠️ **사용자 정의 도구**: MCP(Model Context Protocol)로 나만의 도구 만들기
-- 🔌 **플러그인 시스템**: 사용자 기능을 위한 확장 가능한 아키텍처
+- 🔌 **플러그인**: 로컬 디렉터리에서 Claude Code 플러그인(명령, 에이전트, 스킬, 훅) 로드
 - 🎨 **빌더 패턴**: 구성을 위한 유창한 API
 
 ## 문서 색인
@@ -29,6 +29,7 @@ Claude Agent SDK for Java는 Claude AI 기능을 Java 애플리케이션에 통�
   - 핵심 구성 요소 (API 계층, 구성, 프로토콜, 전송 계층)
   - 설계 패턴 (sealed 인터페이스, 빌더, 파사드, 가상 스레드)
   - 데이터 흐름 다이어그램과 동시성 모델
+  - stdin 수명 주기: 실행이 끝나는 시점 (세션 상태, 작업 장부, 턴 사이 상한 시간)
   - 타입 시스템 계층 구조와 의존성
 
 ### 핵심 기능
@@ -50,9 +51,11 @@ Claude Agent SDK for Java는 Claude AI 기능을 Java 애플리케이션에 통�
 - **[구성 옵션](./feature-configuration-options.md)** — ClaudeAgentOptions 빌더 완전 가이드
   - 30가지가 넘는 모든 구성 옵션
   - 도구 구성
+  - 시스템 프롬프트 형식과 `snapshot`
   - 권한 설정
   - 모델 구성
-  - 환경 변수
+  - 환경 변수, 그리고 SDK가 직접 설정하는 환경 변수
+  - `verbatimPrompts` — `@path` 확장이나 슬래시 명령 없이 프롬프트 전달
   - 훅과 콜백
   - 자주 쓰는 패턴의 전체 예제
 
@@ -156,9 +159,9 @@ Claude Agent SDK for Java는 Claude AI 기능을 Java 애플리케이션에 통�
   - 사용자 정의 전송 예제
   - Windows 배치 스크립트 거부와 npm `claude.cmd` 배포를 위한 명시적 옵트인
 
-- **[플러그인 시스템](./feature-plugin-system.md)** — 플러그인 만들기와 사용하기
-  - SdkPluginConfig
-  - 사용 사례와 예제
+- **[플러그인 시스템](./feature-plugin-system.md)** — Claude Code 플러그인 로드하기
+  - `SdkPluginConfig.local(path)` → `--plugin-dir`
+  - 플러그인 레이아웃과 플러그인 로드 여부 확인
 
 ### API 레퍼런스
 - **[ClaudeSDK](./api-claude-sdk.md)** — 간단한 질의를 위한 정적 파사드
@@ -283,13 +286,15 @@ try (var client = ClaudeSDK.createClient(options)) {
 
 ## 예제
 
-이 SDK에는 다음을 다루는 15개 이상의 충실한 예제가 들어 있습니다:
+이 SDK에는 다음을 다루는 30개 이상의 실행 가능한 예제가 들어 있습니다:
 - 기본 질의와 대화
 - 사용자 정의 MCP 도구
 - 권한 콜백
-- 훅 시스템
+- 백그라운드 서브에이전트의 후속 턴에서 처리되는 훅을 포함한 훅 시스템 (`BackgroundAgentHooksExample`)
 - 스트리밍 이벤트
 - 오류 처리
+- `snapshot`을 포함한 시스템 프롬프트 (`SystemPromptExample`)
+- 프롬프트를 있는 그대로 전달하기 (`VerbatimPromptsExample`)
 - 고급 기능 (체크포인트, 샌드박스, 출력 형식)
 - 그 외 다수
 
@@ -307,11 +312,11 @@ try (var client = ClaudeSDK.createClient(options)) {
 
 ### ✅ 완료 — 모든 핵심 문서
 - 빠른 시작과 개요를 담은 메인 README
-- 아키텍처 개요 (다이어그램을 포함한 포괄적 내용, SessionStore 하위 시스템, 제어 요청 실패 처리)
+- 아키텍처 개요 (다이어그램을 포함한 포괄적 내용, SessionStore 하위 시스템, 제어 요청 실패 처리, stdin 수명 주기와 실행 종료 감지)
 - 모든 기능 가이드:
   - 간단한 질의
   - 대화형 세션
-  - 구성 옵션 (`sessionStore`와 `loadTimeoutMs` 포함)
+  - 구성 옵션 (`sessionStore`, `loadTimeoutMs`, `verbatimPrompts`, 시스템 프롬프트 `snapshot` 포함)
   - 메시지 타입 (작업 메시지, 서버 도구 블록, MirrorErrorMessage)
   - MCP 서버 (ToolAnnotations, 도구 제목, 상태 타입, 입력 검증, 실패 의미론, 취소, 사용자 정의 핸들러 포함)
   - 에이전트 정의
@@ -322,7 +327,7 @@ try (var client = ClaudeSDK.createClient(options)) {
   - 전송 계층 (`--session-mirror`, `--thinking-display` 포함, `--debug-to-stderr` 제거)
   - 플러그인 시스템
   - 세션 히스토리 (listSessions / getSessionMessages)
-  - Session Store (트랜스크립트를 S3/Postgres/Redis/사용자 백엔드로 미러링)
+  - Session Store (트랜스크립트를 S3/Postgres/Redis/사용자 백엔드로 미러링, 제한된 실행기)
 - 완전한 API 레퍼런스 (문서 5종):
   - ClaudeSDK (세션 히스토리 메서드 포함)
   - ClaudeSDKClient

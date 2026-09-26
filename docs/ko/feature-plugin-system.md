@@ -1,99 +1,93 @@
 # 플러그인 시스템
 
-SDK 기능을 사용자가 확장할 수 있는 아키텍처입니다.
+Claude Code 플러그인 — 디렉터리 하나에 묶인 사용자 정의 슬래시 명령, 에이전트, 스킬, 훅 — 을 SDK 세션에
+로드합니다.
 
 > **번역 안내**: 공식 문서는 영어판뿐입니다. 이 번역은 [영어 원문](../feature-plugin-system.md)보다 뒤처져 있을 수 있으며, 내용이 어긋날 경우 영어판이 기준입니다. 코드 블록은 영어 원문과 완전히 동일하게 유지되며 번역하지 않습니다.
 
 ## 개요
 
-플러그인 시스템을 사용하면 사용자 정의 로직으로 SDK 동작을 확장할 수 있습니다. 플러그인은
-SDK 작업을 가로채고 수정할 수 있습니다.
+플러그인은 Claude Code CLI가 시작할 때 로드하는 디렉터리입니다. SDK는 플러그인 코드를 직접 실행하지
+않습니다: 각 플러그인의 디렉터리를 `--plugin-dir`로 CLI에 넘기고, 플러그인이 무엇을 제공하는지는 CLI가
+찾아냅니다.
 
 ## SdkPluginConfig
 
+`SdkPluginConfig`는 `ClaudeAgentOptions` 안에 중첩된 레코드입니다:
+
 ```java
-public record SdkPluginConfig(
-    String name,
-    Map<String, Object> config
-)
+public record SdkPluginConfig(String type, String path) {
+    public static SdkPluginConfig local(String path);  // type = "local"
+}
 ```
+
+`"local"` 타입만 지원됩니다. 전송 계층은 `local` 플러그인마다 CLI 명령에 `--plugin-dir <path>`를
+추가합니다. 다른 `type`을 가진 구성은 오류 없이 건너뛰므로, 구성은 항상 `local(...)`로 만드세요.
 
 ## 플러그인 구성
 
 ```java
+import in.vidyalai.claude.sdk.ClaudeAgentOptions;
+import in.vidyalai.claude.sdk.ClaudeAgentOptions.SdkPluginConfig;
+
 var options = ClaudeAgentOptions.builder()
     .plugins(List.of(
-        new SdkPluginConfig(
-            "my-plugin",
-            Map.of(
-                "setting1", "value1",
-                "setting2", 123
-            )
-        )
-    ))
+        SdkPluginConfig.local("/path/to/my-plugin"),
+        SdkPluginConfig.local("/path/to/another-plugin")))
     .build();
 ```
 
-## 사용 사례
+플러그인은 목록 순서대로, 플러그인마다 `--plugin-dir` 하나씩 전달됩니다.
 
-### 로깅 플러그인
+## 플러그인 레이아웃
 
-모든 SDK 작업을 추적합니다:
+저장소의 데모 플러그인은 CLI가 기대하는 최소한의 레이아웃을 보여 줍니다:
 
-```java
-new SdkPluginConfig("logger", Map.of(
-    "level", "DEBUG",
-    "output", "/var/log/claude-sdk.log"
-))
+```
+examples/src/main/java/examples/plugins/demo-plugin/
+├── .claude-plugin/
+│   └── plugin.json       # Manifest: name, description, version, author
+└── commands/
+    └── greet.md          # A custom /greet slash command
 ```
 
-### 메트릭 플러그인
+`plugin.json`:
 
-성능 메트릭을 수집합니다:
-
-```java
-new SdkPluginConfig("metrics", Map.of(
-    "endpoint", "http://metrics-server/api",
-    "interval", 60
-))
+```json
+{
+  "name": "demo-plugin",
+  "description": "A demo plugin showing how to extend Claude Code with custom commands",
+  "version": "1.0.0",
+  "author": {
+    "name": "Claude Code Team"
+  }
+}
 ```
 
-### 캐시 플러그인
+플러그인은 에이전트, 스킬, 훅도 제공할 수 있습니다. 전체 디렉터리 레이아웃은 Claude Code 플러그인 문서를
+참고하세요.
 
-응답을 캐시합니다:
+## 플러그인 로드 여부 확인
 
-```java
-new SdkPluginConfig("cache", Map.of(
-    "ttl", 3600,
-    "maxSize", 1000
-))
-```
-
-## 예제
+CLI는 로드된 플러그인을 `init` 시스템 메시지의 `plugins` 필드에 `name`과 `path`를 가진 Map의 목록으로
+보고합니다:
 
 ```java
-public class PluginsExample {
-    public static void main(String[] args) {
-        var options = ClaudeAgentOptions.builder()
-            .plugins(List.of(
-                new SdkPluginConfig("logger", Map.of(
-                    "level", "INFO",
-                    "format", "json"
-                )),
-                new SdkPluginConfig("metrics", Map.of(
-                    "enabled", true
-                ))
-            ))
-            .build();
-
-        List<Message> messages = ClaudeSDK.query(
-            "What is Java?",
-            options
-        );
+for (Message msg : ClaudeSDK.query("Hello!", options)) {
+    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
+        @SuppressWarnings("unchecked")
+        List<Object> plugins = (List<Object>) system.get("plugins");
+        if (plugins != null) {
+            for (Object p : plugins) {
+                if (p instanceof Map<?, ?> plugin) {
+                    System.out.println(plugin.get("name") + " (" + plugin.get("path") + ")");
+                }
+            }
+        }
     }
 }
 ```
 
 ## 관련 항목
-- [구성 옵션](./feature-configuration-options.md#고급-기능) — plugins 옵션
+- [구성 옵션](./feature-configuration-options.md#plugins) — plugins 옵션
 - [Plugins 예제](../../examples/src/main/java/examples/PluginsExample.java)

@@ -269,6 +269,13 @@ public class HooksExample {
 }
 ```
 
+## 백그라운드 서브에이전트가 끝난 뒤의 훅
+
+일회성 `ClaudeSDK.query(...)`에서 백그라운드 서브에이전트의 완료가 깨운 턴의 훅은, CLI가 그 훅을 호출할 때
+stdin이 아직 열려 있어야만 실행됩니다. SDK는 첫 result에서가 아니라 실행이 끝날 때까지 stdin을 열어 둡니다.
+규칙과 CLI 버전 관련 주의 사항은 [에이전트 → 백그라운드 서브에이전트와 콜백](./feature-agents.md#백그라운드-서브에이전트와-콜백)을,
+실행 가능한 데모는 `BackgroundAgentHooksExample`을 참고하세요.
+
 ## 관련 항목
 - [구성 옵션](./feature-configuration-options.md#훅)
 - [Hooks 예제](../../examples/src/main/java/examples/Hooks.java)

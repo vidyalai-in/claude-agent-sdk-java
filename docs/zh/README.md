@@ -216,6 +216,19 @@ var messages = List.of(
 List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 ```
 
+### 系统提示词
+
+默认情况下，Claude Code 会在会话的第一次请求时构建系统提示词并将其记录下来，之后的每次请求（包括恢复会话之后）都复用它。因此，修改后的自定义提示词，或 `claude_code` 预设上修改后的 `append` 文本，在会话被压缩或开启新会话之前都不会生效。如果希望每次请求都重新构建提示词（例如在反复调整措辞时），请在 `SystemPromptCustom` 或 `SystemPromptPreset` 上将 `snapshot` 设为 `false`：
+
+```java
+var options = ClaudeAgentOptions.builder()
+    .systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+    // or: .systemPrompt(SystemPromptPreset.claudeCode("Be concise.").withSnapshot(false))
+    .build();
+```
+
+需要 Claude Code CLI 2.1.257 或更高版本。在 2.1.265 之前，带有 `append` 或自定义提示词的会话只有在 `snapshot` 为 `true` 时才会记录它。详情请参阅 [修改系统提示词](https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts#change-the-prompt-of-an-existing-session)。
+
 ## ClaudeSDKClient
 
 `ClaudeSDKClient` 支持与 Claude Code 进行双向的交互式会话。与 `query()` 不同，它支持
@@ -295,7 +308,7 @@ try (var client = ClaudeSDK.createClient()) {
     client.connect("Start with default model");
 
     // Switch to a different model mid-conversation
-    client.setModel("claude-sonnet-4-5");
+    client.setModel("claude-sonnet-5");
 
     client.sendMessage("Continue with new model");
 }

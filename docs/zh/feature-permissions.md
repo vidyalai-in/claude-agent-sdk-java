@@ -16,12 +16,12 @@
 
 ### 可用模式
 
-- **PROMPT**（默认）—— 每次权限请求都询问用户
-- **ACCEPT_ALL** —— 自动接受所有权限请求
+- **DEFAULT**（CLI 的默认值）—— 标准权限行为；需要批准的工具会经过 `canUseTool` 或 `permissionPromptToolName`
 - **ACCEPT_EDITS** —— 自动接受文件编辑，其他情况询问
+- **PLAN** —— 规划模式；不执行任何工具
 - **BYPASS_PERMISSIONS** —— 完全跳过权限检查
-- **DONT_ASK** —— 允许所有工具且不询问
-- **AUTO** —— 自动确定合适的权限模式
+- **DONT_ASK** —— 不询问；拒绝所有未被 allow 规则预先批准的操作
+- **AUTO** —— 由模型分类器批准或拒绝每次工具调用
 
 ## 自定义权限回调
 

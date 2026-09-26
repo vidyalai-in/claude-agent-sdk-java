@@ -12,6 +12,7 @@
 - [파일시스템 기반 에이전트](#파일시스템-기반-에이전트)
 - [대용량 에이전트 정의](#대용량-에이전트-정의)
 - [서브에이전트 출력 관찰하기](#서브에이전트-출력-관찰하기)
+- [백그라운드 서브에이전트와 콜백](#백그라운드-서브에이전트와-콜백)
 - [예제](#예제)
 
 ## 개요
@@ -258,6 +259,35 @@ CLI에는 영향이 없습니다.
 `getSubagentMessages()`에 대해서는 [세션 히스토리](./feature-session-history.md)를 참고하세요. 그
 결과에도 동일한 `parentToolUseId`가 담기며, 중첩된 서브에이전트에는 `parentAgentId`도 함께 옵니다.
 
+## 백그라운드 서브에이전트와 콜백
+
+`run_in_background`로 실행한 서브에이전트는 부모의 턴이 끝난 뒤에도 계속 돌고, 끝나면 그 완료가 부모를
+깨워 후속 턴을 돌게 합니다. 훅, `canUseTool` 콜백, SDK MCP 서버가 있는 일회성 `ClaudeSDK.query(...)`에서는
+후속 턴의 그 콜백들이 stdin이 아직 열려 있을 때만 동작합니다. 그래서 SDK는 첫 `result`에서 stdin을 닫지
+않습니다:
+
+- `local_agent` 또는 `local_workflow` 작업이 아직 진행 중이면 stdin을 열어 둡니다.
+- CLI가 세션 상태를 보고하면 result 이후 `idle`에서 stdin을 닫으므로, result *직전에* 끝난
+  서브에이전트가 요구하는 후속 턴도 여전히 처리됩니다.
+- 턴 사이의 대기는 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`(기본 10분, `0`이면 제한 없음)로 제한됩니다.
+
+SDK는 `CLAUDE_CODE_SDK_READS_SESSION_STATE`로 CLI에 세션 상태를 요청합니다. Claude Code 2.1.283은 아직
+이를 따르지 않습니다. 그런 CLI에서는 진행 중인 작업이 없는 첫 result에서 stdin이 닫히며, 후속 턴의 콜백이
+실행되는지는 타이밍에 달려 있습니다. `env()`에 `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`을 설정하면 지금도
+CLI가 상태를 보고하게 할 수 있지만, 그 대가로 `session_state_changed` 프레임도 여러분의 이터레이터에
+도달합니다:
+
+```java
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .agents(Map.of("worker", worker))
+    .hooks(hooks)
+    .env(Map.of("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"))
+    .build();
+```
+
+`ClaudeSDKClient`는 영향을 받지 않습니다: 연결을 끊을 때까지 stdin을 열어 둡니다. 전체 규칙은
+[아키텍처 → stdin 수명 주기](./architecture.md#stdin-수명-주기와-실행의-끝)에 있습니다.
+
 ## 예제
 
 실행 가능한 완전한 데모는 예제 파일을 참고하세요:
@@ -266,6 +296,7 @@ CLI에는 영향이 없습니다.
 - [`FilesystemAgentsExample.java`](../../examples/src/main/java/examples/FilesystemAgentsExample.java) — `.claude/agents/` 파일에서 에이전트 불러오기
 - [`LargeAgentsExample.java`](../../examples/src/main/java/examples/LargeAgentsExample.java) — 260KB 이상 에이전트 페이로드 스트레스 테스트
 - [`ForwardSubagentTextExample.java`](../../examples/src/main/java/examples/ForwardSubagentTextExample.java) — 서브에이전트 텍스트 전달을 끈 경우와 켠 경우의 같은 실행
+- [`BackgroundAgentHooksExample.java`](../../examples/src/main/java/examples/BackgroundAgentHooksExample.java) — 백그라운드 서브에이전트의 완료가 깨운 후속 턴에서 처리되는 `PreToolUse` 훅
 
 ## 관련 항목
 

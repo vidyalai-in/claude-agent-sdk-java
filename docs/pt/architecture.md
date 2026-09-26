@@ -107,7 +107,8 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
   - Hooks: `hooks()`
   - MCP: `mcpServers()`
   - Agentes: `agents()` (enviados pela requisição initialize via stdin, sem limite de tamanho)
-  - Avançado: `sandbox()`, `outputFormat()`, `checkpointFiles()`
+  - Prompt de sistema: `systemPrompt()` — string, `SystemPromptPreset`, `SystemPromptCustom` ou `SystemPromptFile`
+  - Avançado: `sandbox()`, `outputFormat()`, `enableFileCheckpointing()`, `forwardSubagentText()`, `verbatimPrompts()`
 
 **Padrão de design**: Builder + objeto imutável
 
@@ -120,7 +121,9 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
   - Callbacks de hook
   - Callbacks de permissão de ferramentas
   - Streaming de mensagens
-  - Handshake de inicialização (inclui hooks, definições de agente e excludeDynamicSections)
+  - Handshake de inicialização (inclui hooks, definições de agente, `excludeDynamicSections`, `systemPromptSnapshot`, a lista de skills permitidas e `forwardSubagentText`)
+  - **Marcação de prompts**: com `verbatimPrompts`, toda mensagem de usuário que o `streamInput()` escreve recebe `client_composed: true` (`stampUserMessage`, que copia em vez de modificar); o `ClaudeSDKClient` marca as próprias escritas da mesma forma
+  - **Acompanhamento do fim da execução**: decide quando o stdin pode ser fechado a partir dos quadros `session_state_changed` do CLI, do livro-razão de tarefas em voo e de um teto entre turnos, e descarta os quadros de estado `sdk_host_only` que o SDK solicitou (veja [Ciclo de vida do stdin](#ciclo-de-vida-do-stdin-e-o-fim-de-uma-execução))
   - Gerenciamento do ciclo de vida dos servidores MCP
   - **Substituição por um erro acionável**: acompanha a carga útil do resultado de erro mais recente
     enquanto lê o fluxo; quando um `ProcessException` vem depois de um resultado com `is_error=true`,
@@ -542,7 +545,7 @@ Isso não é teórico. Uma classe antiga compilada pela IDE, carregando um `Erro
 compilation problem", fazia toda requisição de controle MCP do SDK travar em silêncio até que essa
 captura fosse ampliada.
 
-### Ciclo de vida do stdin e tarefas em voo
+### Ciclo de vida do stdin e o fim de uma execução
 
 > **O `controlExecutor` precisa continuar sendo uma thread por tarefa.** Uma chamada de ferramenta MCP
 > do SDK estaciona sua thread de controle até a ferramenta responder, e o `notifications/cancelled`
@@ -551,37 +554,102 @@ captura fosse ampliada.
 > Nenhum teste pegaria isso — um pool fixo de dois passa em tudo.
 
 Quando há hooks, servidores MCP do SDK ou um callback de permissão `canUseTool` registrados, o
-protocolo de controle precisa do stdin aberto pela conversa inteira, então o
-`QueryHandler.streamInput()` espera por um quadro `result` que encerre a execução antes de chamar
+protocolo de controle precisa do stdin aberto enquanto o CLI ainda puder fazer chamadas de volta,
+então o `QueryHandler.streamInput()` espera **o fim da execução** antes de chamar
 `transport.endInput()`. Os três são atendidos do mesmo jeito — o CLI escreve uma `control_request` e
 bloqueia até o SDK escrever a `control_response` correspondente no stdin — então os três contam como
-necessidades bidirecionais (`hasBidirectionalNeeds()`). Fechar cedo demais não é inofensivo: o CLI em
-modo stream-json sai **somente** com EOF no stdin, então o fechamento também não pode simplesmente ser
-adiado para `close()` — isso travaria um `query()` de uso único para sempre.
+necessidades bidirecionais (`hasBidirectionalNeeds()`). Sem nenhum deles, o stdin é fechado assim que
+os prompts são escritos. Fechar cedo demais não é inofensivo, e o fechamento também não pode
+simplesmente ser adiado para `close()`: o CLI em modo stream-json sai **somente** com EOF no stdin,
+então isso travaria um `query()` de uso único para sempre.
 
-A sutileza é que **um quadro `result` encerra um turno, não a execução**. Uma tarefa em segundo plano
-continua além dele e ainda precisa do stdin para as respostas de controle de hooks e de MCP do SDK.
-Fechar no primeiro resultado fazia as chamadas de ferramenta MCP do SDK de um subagente ainda em
-execução falharem com `"Stream closed"` e — de modo mais silencioso — seus hooks `PreToolUse` nunca
-eram entregues, então ferramentas embutidas continuavam executando e hooks de bloqueio deixavam de
-bloquear.
+A sutileza é que **um quadro `result` encerra um turno, não a execução**. Um subagente em segundo plano
+continua rodando além dele e, quando termina, sua conclusão acorda o pai para um turno de
+continuação. As requisições de hook, de permissão e de MCP do SDK desse turno também precisam do
+stdin. Fechar cedo demais fazia essas requisições falharem com `"Stream closed"` e — de modo mais
+silencioso — pulava hooks `PreToolUse`, então ferramentas embutidas rodavam sem nenhum callback e hooks
+de bloqueio deixavam de bloquear.
 
-Por isso o `QueryHandler` mantém um livro-razão de tarefas em voo, alimentado por quadros `system` de
-ciclo de vida de tarefa, e só trata um resultado como fim de execução quando o livro está vazio:
+O `QueryHandler` decide quando a execução acabou a partir de duas fontes.
+
+**1. O estado da sessão informado pelo CLI (principal).** O transporte define
+`CLAUDE_CODE_SDK_READS_SESSION_STATE=1` no processo do CLI (a menos que o `options.env` de quem chama
+ou o ambiente herdado já a nomeie, com qualquer combinação de maiúsculas e minúsculas). Um CLI que a
+respeita envia quadros `system` / `session_state_changed` marcados com `sdk_host_only: true`: ele
+permanece `running` enquanto um agente em segundo plano estiver vivo ou sua conclusão ainda tiver
+direito a um turno, `requires_action` enquanto espera pelo host, e informa `idle` quando nenhum turno
+adicional é devido. O leitor acompanha o estado mais recente e **descarta os quadros marcados com
+`sdk_host_only`** antes que cheguem ao consumidor. Quadros não marcados — enviados porque quem chama
+optou por recebê-los com `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` — determinam o fim da execução da
+mesma forma e são repassados.
+
+**2. O livro-razão de tarefas (alternativa, e uma salvaguarda).** O `QueryHandler` mantém um
+livro-razão de tarefas em voo, alimentado por quadros `system` de ciclo de vida de tarefa:
 
 ```
 system: task_started (task_type ∈ DEFERRING_TASK_TYPES)  ─►  add task_id
 system: task_notification                                ─►  remove task_id
 system: task_updated (patch.status ∈ TERMINAL_TASK_STATUSES) ─► remove task_id
-
-result frame
-    ├─ ledger empty     ─►  complete firstResultEvent  ─►  endInput()
-    └─ ledger non-empty ─►  keep stdin open, log at FINE
 ```
 
-Cada conclusão de tarefa acorda o pai para um turno de acompanhamento que termina em outro quadro de
-resultado, então o fechamento ainda acontece rápido — e tarefas em segundo plano encadeadas funcionam,
-porque o livro só esvazia depois que a última se resolve.
+As regras de fim de execução, todas sob um único `runLock`:
+
+```
+result frame
+    ├─ state is null (CLI sends none) or "idle", or no bidirectional needs
+    │      └─ ledger empty      ─►  end the run  ─►  endInput()
+    │      └─ ledger non-empty  ─►  keep stdin open (log at FINE)
+    ├─ state is "requires_action" ─►  wait (a request is being answered)
+    └─ state is "running"         ─►  wait, and arm the run-end ceiling
+
+session_state_changed
+    ├─ "idle" after a result  ─►  end the run, unless the ledger is non-empty
+    ├─ "idle" before a result ─►  nothing (the prompt's run has not produced a result yet)
+    ├─ "requires_action"      ─►  reopen the run if it had ended; stop the ceiling
+    └─ "running" (or other)   ─►  reopen the run if it had ended; restart the ceiling if past a result
+```
+
+Alguns hosts enviam `idle` logo *antes* do resultado; nesse caso, é o resultado que encerra a
+execução. Um CLI que não envia estado algum (CLIs mais antigos, e o Claude Code 2.1.283, que ainda não
+respeita `CLAUDE_CODE_SDK_READS_SESSION_STATE`) deixa o estado como `null`, de modo que o primeiro
+resultado com o livro vazio encerra a execução — o comportamento anterior à 0.2.3.
+
+**O teto de fim de execução.** O teto de espera em segundo plano do próprio CLI só começa a contar
+depois que o stdin é fechado, então, sem um limite próprio, um trabalho que nunca termina manteria
+`running` — e o stdin — aberto para sempre. Depois de um resultado com o CLI ainda informando
+`running`, o `QueryHandler` inicia um temporizador em uma thread obtida de `Threads`; se nenhum novo
+turno começar antes que ele desperte, ele encerra a execução. A duração é
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`, lida da forma como o CLI a verá — primeiro `options.env`,
+depois o ambiente do processo —, em que `0` significa sem limite, qualquer valor que não seja um
+inteiro não negativo recai no padrão do CLI de 600000 ms (10 minutos), e valores acima de
+`Integer.MAX_VALUE` ms (~24,8 dias) são limitados a esse valor. O teto conta apenas a espera **entre**
+turnos:
+
+- Um quadro `assistant` ou `stream_event` da thread principal (`parent_tool_use_id == null`) indica um
+  turno em andamento: o teto para, e a execução é reaberta mesmo que o teto já a tenha encerrado. As
+  mensagens do próprio subagente **não** o param — elas são justamente o trabalho que ele limita.
+- Um resultado o reinicia; o mesmo acontece com um `running` que chega depois de um resultado.
+- `requires_action` o para até o `running` seguinte.
+- Um agente rastreado que ainda esteja em voo quando o teto dispara não é interrompido; o teto
+  recomeça quando o livro esvazia.
+
+Cada temporizador carrega um número de geração, e limpar ou rearmar o teto incrementa esse número e
+interrompe o temporizador, de modo que um temporizador que desperte atrasado desiste.
+
+**Reabertura.** Encerrar a execução completa um `CompletableFuture`; um trabalho que o CLI assuma
+depois disso (uma tarefa em segundo plano concluída que o desperta) coloca um novo no lugar, de modo
+que quem ainda não começou a esperar — o `streamInput`, ainda escrevendo prompts — também espera pelo
+novo trabalho. Cada prompt que o `streamInput` escreve tem direito a uma execução própria: antes de
+escrevê-lo, a execução é reaberta e o "resultado recebido" é redefinido, então um prompt com várias
+mensagens espera pela execução do seu *último* prompt, e não do primeiro. Depois que o stdin é
+fechado, ou que o leitor termina, a execução é definitiva e permanece encerrada, e nenhum teto é
+armado para quadros que chegam enquanto o CLI se encerra. Tanto `close()` quanto o bloco `finally` do
+leitor encerram a execução, então quem espera nunca pode ficar travado.
+
+Não há outro tempo limite para a espera. Antes, o Java também a limitava em
+`CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` (60 s), o que interrompia qualquer agente em segundo plano que
+rodasse por mais de um minuto; esse limite foi removido, e `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` agora só
+define o tempo limite do `initialize`.
 
 `DEFERRING_TASK_TYPES` é `{"local_agent", "local_workflow"}`. As exclusões são deliberadas, não
 descuidos: shells em segundo plano (`local_bash`) e monitores rodam indefinidamente por projeto, e
@@ -596,11 +664,11 @@ segundo plano, sem um segundo `task_started` — então estreitar com base nela 
 agente que este livro existe para proteger, e ampliar a partir dela poderia admitir um id que nenhum
 quadro posterior limpa.
 
-Isso é uma mitigação, não uma resposta completa: um livro vazio significa "nada que conheçamos está
-rodando", o que não é o mesmo que "a execução acabou". Uma tarefa que se resolve *antes* do quadro de
-resultado do seu turno deixa o livro vazio naquele resultado. Nenhum livro fecha essa lacuna — seria
-preciso um sinal de fronteira de execução vindo do CLI —, mas a ordem comum, em que a tarefa sobrevive
-ao turno que a criou, está corrigida.
+Limitação conhecida: com um CLI que não informa o estado da sessão, o resultado de um prompt
+anterior de um iterador de prompts com várias mensagens ainda encerra a execução mesmo quando um
+prompt posterior já está enfileirado no lado do CLI, então requisições de controle desse turno
+posterior podem encontrar o stdin fechado. Prompts de mensagem única e em string, os formatos comuns
+de uso único, estão totalmente cobertos.
 
 ## Modelo de concorrência
 

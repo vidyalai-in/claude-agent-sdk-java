@@ -245,6 +245,21 @@ SessionStoreExecutor.setDefault(Executors.newFixedThreadPool(8));
 SessionStoreExecutor.reset();
 ```
 
+Um executor limitado — mesmo de uma única thread — é seguro. O executor configurado só executa as
+chamadas do seu próprio adaptador; o SDK nunca bloqueia uma de suas threads esperando por outra
+tarefa submetida ao mesmo executor:
+
+- **Espelhamento de transcrições**: cada drenagem roda em um pequeno executor próprio do SDK, de
+  uma thread por tarefa (threads chamadas `session-store-mirror-drain-<n>`), e espera ali pelo
+  `appendAsync` que ela submete ao seu executor.
+- **Listagem a partir do store**: `listSessionsFromStore` emite suas chamadas `loadAsync` por
+  sessão a partir da thread chamadora, com no máximo 16 em andamento; quando o limite é atingido,
+  quem espera é a thread chamadora, e não uma thread do executor.
+
+Versões anteriores executavam os dois coordenadores *no* executor configurado, então um pool
+limitado podia travar a listagem ou descartar silenciosamente todos os lotes espelhados depois de
+`sendTimeoutMs`.
+
 Também é possível passar um executor por chamada:
 
 ```java
@@ -507,9 +522,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 | `BATCHED` (padrão) | Uma vez por mensagem `result` OU quando o pendente passa de 500 entradas / 1 MiB | Quase todas as cargas de produção — mantém a latência do adaptador fora do caminho quente |
 | `EAGER` | Drenagem em segundo plano agendada após cada quadro enfileirado | Streaming ao vivo de transcrições para clientes, pipelines de auditoria em tempo real, turnos muito grandes em que não dá para esperar o `result` |
 
-`EAGER` zera os limiares de pendência do batcher — cada quadro enfileirado agenda uma gravação em
-segundo plano via o `SessionStoreExecutor` configurado (uma thread nomeada por tarefa; virtual no
-Java 21+). As anexações continuam serializadas na ordem de enfileiramento; um adaptador lento não
+`EAGER` zera os limiares de pendência do batcher — cada quadro enfileirado agenda uma drenagem em
+segundo plano no executor de drenagem próprio do SDK (uma thread `session-store-mirror-drain-<n>`
+por tarefa; virtual no Java 21+), que chama o `appendAsync` do seu adaptador no
+`SessionStoreExecutor` configurado. As anexações continuam serializadas na ordem de enfileiramento; um adaptador lento não
 trava o laço de leitura, mas verá quadros agrupados enquanto estiver ocupado. A opção é ignorada
 quando `sessionStore` não está definido.
 
@@ -748,7 +764,7 @@ quanto uma que recebe um `Executor` (controle por chamada).
 |---|---|
 | `Executor getDefault()` | Executor padrão atual |
 | `void setDefault(Executor)` | Substitui; `null` volta ao embutido |
-| `void reset()` | Volta ao embutido `Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("session-store-", 0).factory())` |
+| `void reset()` | Volta ao executor embutido de uma thread por tarefa (`session-store-<n>`; threads virtuais no Java 21+, threads de plataforma daemon no 17-20) |
 
 ### `SessionStoreConformance`
 

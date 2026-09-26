@@ -106,7 +106,8 @@ SDK 采用分层架构，各层职责清晰分离：
   - 钩子：`hooks()`
   - MCP：`mcpServers()`
   - Agent：`agents()`（通过 stdin 的 initialize 请求发送，无大小限制）
-  - 高级：`sandbox()`、`outputFormat()`、`checkpointFiles()`
+  - 系统提示词：`systemPrompt()` —— 字符串、`SystemPromptPreset`、`SystemPromptCustom` 或 `SystemPromptFile`
+  - 高级：`sandbox()`、`outputFormat()`、`enableFileCheckpointing()`、`forwardSubagentText()`、`verbatimPrompts()`
 
 **设计模式**：Builder + 不可变对象
 
@@ -119,7 +120,9 @@ SDK 采用分层架构，各层职责清晰分离：
   - 钩子回调
   - 工具权限回调
   - 消息流式传输
-  - 初始化握手（包含钩子、agent 定义与 excludeDynamicSections）
+  - 初始化握手（包含钩子、agent 定义、`excludeDynamicSections`、`systemPromptSnapshot`、技能白名单与 `forwardSubagentText`）
+  - **提示词标记**：启用 `verbatimPrompts` 时，`streamInput()` 写出的每条用户消息都会带上 `client_composed: true`（由 `stampUserMessage` 完成，它复制而不修改原对象）；`ClaudeSDKClient` 也以同样方式标记自己写出的消息
+  - **运行结束跟踪**：依据 CLI 的 `session_state_changed` 帧、进行中任务台账以及轮次间上限来决定 stdin 何时可以关闭，并丢弃 SDK 请求的 `sdk_host_only` 状态帧（参见 [stdin 的生命周期](#stdin-的生命周期与一次运行的结束)）
   - MCP 服务器的生命周期管理
   - **可操作的错误替换**：在读取流的过程中跟踪最近一次错误结果的负载；当 `ProcessException` 跟在一个
     `is_error=true` 的 result 之后时，它会被替换为携带该负载的 `ResultException`，其消息为
@@ -511,39 +514,59 @@ QueryHandler
 这并非纸上谈兵。一个陈旧的、由 IDE 编译出的、携带"unresolved compilation problem" `Error` 的类，曾让
 每一个 SDK MCP 控制请求都无声地挂起，直到这里的捕获范围被放宽。
 
-### stdin 的生命周期与进行中的任务
+### stdin 的生命周期与一次运行的结束
 
 > **`controlExecutor` 必须保持"每任务一线程"。** SDK MCP 工具调用会驻留其控制线程直到工具作答，而终止
 > 它的 `notifications/cancelled` 是作为*另一个*控制请求到来的。在任何有界池下，那个取消都会排在它本
 > 想取消的那次调用后面，从而死锁。没有测试能抓到它 —— 一个大小为二的固定池能通过所有测试。
 
-当注册了钩子、SDK MCP 服务器或 `canUseTool` 权限回调时，控制协议需要在整个会话期间保持 stdin 打开，
-因此 `QueryHandler.streamInput()` 会等待一个能结束运行的 `result` 帧，然后才调用
-`transport.endInput()`。这三者的服务方式相同 —— CLI 写出一个 `control_request` 并阻塞，直到 SDK 把
-匹配的 `control_response` 写入 stdin —— 因此三者都算作双向需求（`hasBidirectionalNeeds()`）。过早关闭
-并非无害：处于 stream-json 模式的 CLI **只**在 stdin EOF 时退出，所以也不能简单地把关闭推迟到
-`close()` —— 那会让一次性的 `query()` 永远挂住。
+当注册了钩子、SDK MCP 服务器或 `canUseTool` 权限回调时，只要 CLI 仍可能发起回调，控制协议就需要保持 stdin 打开，因此 `QueryHandler.streamInput()` 会等到**运行结束**之后才调用 `transport.endInput()`。这三者的服务方式相同 —— CLI 写出一个 `control_request` 并阻塞，直到 SDK 把匹配的 `control_response` 写入 stdin —— 因此三者都算作双向需求（`hasBidirectionalNeeds()`）。三者都没有时，提示词一写完 stdin 就会关闭。过早关闭并非无害，而且也不能简单地把关闭推迟到 `close()`：处于 stream-json 模式的 CLI **只**在 stdin EOF 时退出，那样会让一次性的 `query()` 永远挂住。
 
-微妙之处在于：**一个 `result` 帧结束的是一轮，而不是整个运行**。后台任务会在它之后继续运行，并且仍然
-需要 stdin 来传递钩子与 SDK-MCP 的控制响应。在第一个 result 处就关闭，会让仍在运行的子 agent 的
-SDK-MCP 工具调用以 `"Stream closed"` 失败，而且 —— 更隐蔽地 —— 它的 `PreToolUse` 钩子从未被投递，于是
-内置工具照常执行，拒绝型的门控钩子也就不再门控。
+微妙之处在于：**一个 `result` 帧结束的是一轮，而不是整个运行**。后台子 agent 会在它之后继续运行，完成时又会唤醒父级进行一次后续轮次。那一轮中的钩子、权限与 SDK MCP 请求同样需要 stdin。过早关闭会让这些请求以 `"Stream closed"` 失败，而且 —— 更隐蔽地 —— 会跳过 `PreToolUse` 钩子，于是内置工具在没有任何回调的情况下执行，拒绝型的门控钩子也就不再门控。
 
-因此 `QueryHandler` 维护了一份进行中任务的台账，由 `system` 任务生命周期帧填充，并且只有当台账为空时
-才把某个 result 视为运行结束：
+`QueryHandler` 依据两个来源判断运行何时结束。
+
+**1. CLI 的会话状态（主要来源）。** 传输层会在 CLI 进程上设置 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`（除非调用方的 `options.env` 或继承的环境中已经出现该变量，不区分大小写）。支持它的 CLI 会发送标记为 `sdk_host_only: true` 的 `system` / `session_state_changed` 帧：当有后台 agent 仍然存活、或其完成仍欠着一轮时，状态保持 `running`；在等待宿主时为 `requires_action`；不再欠任何轮次时报告 `idle`。读取器会跟踪最新状态，并在帧到达消费者之前**丢弃标记为 `sdk_host_only` 的帧**。未标记的帧（因调用方通过 `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` 选择接收而发送）会以同样的方式驱动运行结束，并被透传给消费者。
+
+**2. 任务台账（后备来源，也是一道保护）。** `QueryHandler` 维护了一份进行中任务的台账，由 `system` 任务生命周期帧填充：
 
 ```
 system: task_started (task_type ∈ DEFERRING_TASK_TYPES)  ─►  add task_id
 system: task_notification                                ─►  remove task_id
 system: task_updated (patch.status ∈ TERMINAL_TASK_STATUSES) ─► remove task_id
-
-result frame
-    ├─ ledger empty     ─►  complete firstResultEvent  ─►  endInput()
-    └─ ledger non-empty ─►  keep stdin open, log at FINE
 ```
 
-每个任务完成都会唤醒父级进行一次后续轮次，而它又以另一个 result 帧结束，因此关闭仍会及时发生 ——
-并且链式的后台任务也能正常工作，因为台账只有在最后一个任务结清之后才会清空。
+运行结束的规则全部在同一个 `runLock` 下执行：
+
+```
+result frame
+    ├─ state is null (CLI sends none) or "idle", or no bidirectional needs
+    │      └─ ledger empty      ─►  end the run  ─►  endInput()
+    │      └─ ledger non-empty  ─►  keep stdin open (log at FINE)
+    ├─ state is "requires_action" ─►  wait (a request is being answered)
+    └─ state is "running"         ─►  wait, and arm the run-end ceiling
+
+session_state_changed
+    ├─ "idle" after a result  ─►  end the run, unless the ledger is non-empty
+    ├─ "idle" before a result ─►  nothing (the prompt's run has not produced a result yet)
+    ├─ "requires_action"      ─►  reopen the run if it had ended; stop the ceiling
+    └─ "running" (or other)   ─►  reopen the run if it had ended; restart the ceiling if past a result
+```
+
+有些宿主会在 result *之前*就发送 `idle`；此时由随后的 result 结束运行。完全不发送状态的 CLI（较旧的 CLI，以及尚未支持 `CLAUDE_CODE_SDK_READS_SESSION_STATE` 的 Claude Code 2.1.283）会让状态保持 `null`，于是第一个台账为空的 result 就会结束运行 —— 即 0.2.3 之前的行为。
+
+**运行结束上限。** CLI 自己的后台等待上限只有在 stdin 关闭之后才开始计时，所以如果 SDK 自身没有上限，永远不结束的工作就会让 `running`（以及 stdin）永远保持打开。在一个 result 之后、CLI 仍报告 `running` 时，`QueryHandler` 会在一个来自 `Threads` 的线程上启动一个休眠器；如果它醒来之前没有新的轮次开始，它就结束运行。时长取自 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`，读取方式与 CLI 看到它的方式相同 —— 先看 `options.env`，再看进程环境 —— 其中 `0` 表示不限制，任何不是非负整数的值都回退到 CLI 的默认值 600000 ms（10 分钟），超过 `Integer.MAX_VALUE` ms（约 24.8 天）的值会被截断到该上限。该上限只计算轮次**之间**的等待：
+
+- 主线程的 `assistant` 或 `stream_event` 帧（`parent_tool_use_id == null`）表示一轮正在进行：上限计时停止，并且即使上限已经结束了运行，运行也会重新打开。子 agent 自己的消息**不会**让它停止 —— 它们正是这个上限要约束的工作。
+- 一个 result 会让它重新开始计时；在 result 之后到达的 `running` 也会。
+- `requires_action` 会让它停止，直到随后的 `running` 到来。
+- 上限触发时仍在执行的受跟踪 agent 不会被切断；台账清空后，上限会重新开始计时。
+
+每个休眠器都带有一个代号（generation number），清除或重新设置上限时都会递增该代号并中断休眠器，因此迟到醒来的休眠器会自行退出。
+
+**重新打开。** 结束运行会完成一个 `CompletableFuture`；CLI 在此之后接手的工作（例如已完成的后台任务唤醒它）会换上一个新的 future，因此尚未开始等待的等待方 —— 仍在写提示词的 `streamInput` —— 也会等待这项新工作。`streamInput` 写出的每条提示词都各自对应一次运行：写出之前，运行会被重新打开，"已收到 result"也会被重置，因此多消息提示词等待的是其*最后*一条提示词的运行，而不是第一条的。一旦 stdin 已关闭或读取器已退出，运行就是最终状态、保持结束，并且对于 CLI 收尾期间到达的帧不会再设置上限。`close()` 与读取器的 `finally` 块都会结束运行，因此等待方永远不会挂住。
+
+这个等待没有其他超时。Java 以前还会用 `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT`（60 秒）给它封顶，这会切断任何运行超过一分钟的后台 agent；这个封顶已经移除，`CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` 现在只用于设置 `initialize` 的超时。
 
 `DEFERRING_TASK_TYPES` 是 `{"local_agent", "local_workflow"}`。这些排除是刻意为之而非疏漏：后台 shell
 （`local_bash`）与监视器在设计上会无限期运行，而 teammate 在其整个生命周期内都保持 `running`，因此它们
@@ -554,10 +577,7 @@ result frame
 注册的，之后才转为后台，并且不会再有第二次 `task_started` —— 因此依据它来收窄，恰恰会漏掉这份台账本
 想保护的那个 agent；而依据它来扩大，则可能引入一个后续任何帧都不会清除的 id。
 
-这是一种缓解手段，而不是完整的答案：台账为空意味着"就我们所知没有东西在运行"，这与"运行已经结束"并
-不相同。若某个任务在其所在轮次的 result 帧*之前*结清，那么在那个 result 处台账就是空的。没有哪种台账
-能弥合这一缝隙 —— 那需要来自 CLI 的运行边界信号 —— 但常见的顺序（任务的存活时间超过派生它的那一轮）
-已经得到修复。
+已知限制：对于不报告会话状态的 CLI，多消息提示词迭代器中较早一条提示词的 result 仍会结束运行，即使较晚的提示词已经在 CLI 端排队，因此那个较晚轮次中的控制请求可能会发现 stdin 已关闭。单消息提示词和字符串提示词这两种常见的一次性形态完全不受影响。
 
 ## 并发模型
 

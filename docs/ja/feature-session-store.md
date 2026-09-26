@@ -241,6 +241,21 @@ SessionStoreExecutor.setDefault(Executors.newFixedThreadPool(8));
 SessionStoreExecutor.reset();
 ```
 
+上限付きのエグゼキュータ —— スレッドが 1 本だけのものでも —— は安全です。設定されたエグゼキュータが
+実行するのはアダプタ自身の呼び出しだけで、SDK が同じエグゼキュータに投入した別のタスクを待つために
+そのスレッドの 1 本をブロックすることは決してありません：
+
+- **トランスクリプトのミラーリング**：各排出は SDK が所有する小さなタスクごとスレッドのエグゼキュータ
+  （スレッド名 `session-store-mirror-drain-<n>`）上で実行され、あなたのエグゼキュータに投入した
+  `appendAsync` をそこで待ちます。
+- **ストアを使う一覧取得**：`listSessionsFromStore` は、セッションごとの `loadAsync` 呼び出しを呼び出し元
+  スレッドから発行し、同時に進行するのは最大 16 件です。上限に達したときに待つのは呼び出し元スレッドで
+  あって、エグゼキュータのスレッドではありません。
+
+以前のバージョンではこの 2 つの調整処理を設定されたエグゼキュータ*上で*実行していたため、上限付きの
+プールでは一覧取得がデッドロックしたり、`sendTimeoutMs` の後にミラーされたバッチがすべて黙って
+破棄されたりすることがありました。
+
 呼び出しごとにエグゼキュータを渡すこともできます：
 
 ```java
@@ -499,9 +514,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 | `BATCHED`（既定） | `result` メッセージごとに 1 回、または保留が 500 エントリ / 1 MiB を超えたとき | ほぼすべての本番ワークロード —— アダプタのレイテンシをストリーミングのホットパスから外せます |
 | `EAGER` | フレームをキューに入れるたびにバックグラウンドの排出をスケジュール | クライアントへのライブなトランスクリプト配信、リアルタイムの監査パイプライン、`result` まで待てない非常に大きなターン |
 
-`EAGER` はバッチャーの保留しきい値をゼロにします —— フレームをキューに入れるたびに、設定された
-`SessionStoreExecutor` 経由でバックグラウンドのフラッシュがスケジュールされます（タスクごとに名前付きの
-スレッド 1 本。Java 21+ では仮想スレッド）。追記はキューの順序どおり直列のままです。遅いアダプタが読み取り
+`EAGER` はバッチャーの保留しきい値をゼロにします —— フレームをキューに入れるたびに、SDK 自身の排出用
+エグゼキュータ上でバックグラウンドの排出がスケジュールされ（タスクごとに `session-store-mirror-drain-<n>`
+スレッド 1 本。Java 21+ では仮想スレッド）、それが設定された `SessionStoreExecutor` 上であなたのアダプタの
+`appendAsync` を呼び出します。追記はキューの順序どおり直列のままです。遅いアダプタが読み取り
 ループを止めることはありませんが、忙しい間はフレームがまとめられて見えます。`sessionStore` が未設定の
 場合、このオプションは無視されます。
 
@@ -737,7 +753,7 @@ SessionSummaryEntry folded = SessionSummary.foldSessionSummary(
 |---|---|
 | `Executor getDefault()` | 現在の既定エグゼキュータ |
 | `void setDefault(Executor)` | 上書き。`null` で組み込みに戻る |
-| `void reset()` | 組み込みの `Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("session-store-", 0).factory())` に戻す |
+| `void reset()` | 組み込みのタスクごとにスレッド 1 本のエグゼキュータ（`session-store-<n>`。Java 21+ では仮想スレッド、17-20 ではデーモンのプラットフォームスレッド）に戻す |
 
 ### `SessionStoreConformance`
 

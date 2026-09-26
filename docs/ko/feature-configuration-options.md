@@ -27,7 +27,7 @@
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .maxTurns(10)
     .permissionMode(PermissionMode.BYPASS_PERMISSIONS)
     .build();
@@ -42,7 +42,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ClaudeAgentOptions.Builder builder = ClaudeAgentOptions.builder();
 
 // Configure
-builder.model("claude-sonnet-4-5")
+builder.model("claude-sonnet-5")
        .maxTurns(10);
 
 // Build immutable instance
@@ -149,9 +149,40 @@ Claude의 동작을 안내하는 사용자 정의 시스템 프롬프트를 설�
 // Use Claude Code preset with exclude_dynamic_sections for cross-user caching
 .systemPrompt(SystemPromptPreset.claudeCode("Custom instructions", true))
 
+// Custom prompt in the form that can also set snapshot (see below)
+.systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+
 // Use prompt from file
 .systemPrompt(new SystemPromptFile("/path/to/prompt.md"))
 ```
+
+| 형식 | CLI에 전달되는 방식 |
+|------|--------------------|
+| `String` | `--system-prompt <text>` |
+| `SystemPromptCustom` | `--system-prompt <prompt>`, 그리고 `initialize` 요청의 `snapshot` |
+| `SystemPromptPreset` | `append`가 설정되면 `--append-system-prompt <append>`, `initialize` 요청의 `excludeDynamicSections`와 `snapshot` |
+| `SystemPromptFile` | `--system-prompt-file <path>` |
+| 설정 안 함(`null`) | `--system-prompt ""` (시스템 프롬프트 없음) |
+
+#### 스냅샷
+
+기본적으로 Claude Code는 세션의 첫 요청에서 시스템 프롬프트를 구성해 기록해 두고, 세션을
+재개한 뒤를 포함해 이후의 모든 요청에서 이를 재사용합니다. 따라서 사용자 정의 프롬프트를
+바꾸거나 프리셋의 `append` 텍스트를 바꾸더라도, 세션이 압축(compact)되거나 새 세션을 시작하기
+전까지는 효과가 없습니다. 예를 들어 프롬프트 문구를 반복해서 다듬는 중이라서 매 요청마다
+프롬프트를 다시 구성하고 싶다면 `snapshot`을 `false`로 설정하세요:
+
+```java
+.systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+.systemPrompt(SystemPromptPreset.claudeCode("Be concise.").withSnapshot(false))
+```
+
+`snapshot`은 `initialize` 제어 요청에 `systemPromptSnapshot`으로 실려 전달됩니다.
+`false`를 포함해 설정되어 있으면 항상 전송되고, `null`이면 생략되어 CLI의 기본값이 적용됩니다:
+기본값은 `true`이지만, bare 모드(`--bare`)에서는 `false`처럼 동작합니다. 프리셋과 사용자 정의
+형식만 이 값을 가질 수 있습니다. Claude Code CLI 2.1.257 이상이 필요하며, 2.1.265 이전에는
+`append` 또는 사용자 정의 프롬프트를 쓰는 세션이 `snapshot`이 `true`일 때만 프롬프트를
+기록했습니다.
 
 ## MCP 서버
 
@@ -180,16 +211,20 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
     "external", externalServer
 ))
 
-// From file path
-.mcpServers(Path.of("~/.claude/mcp_servers.json"))
+// From file path (passed as-is to --mcp-config; Java does not expand "~")
+.mcpServers(Path.of(System.getProperty("user.home"), ".claude", "mcp_servers.json"))
 
-// From JSON string
-.mcpServers("""
-    {
+// From an inline JSON string (also passed as-is to --mcp-config)
+.mcpServersJson("""
+    {"mcpServers": {
         "server1": {"type": "stdio", "command": "node", "args": ["server.js"]}
-    }
+    }}
     """)
 ```
+
+Map은 `--mcp-config`에 도달하기 전에 `{"mcpServers": {...}}` 형태로 직렬화됩니다. 경로나
+JSON 문자열은 손대지 않고 그대로 전달되므로, JSON 문자열도 같은 최상위 `mcpServers` 키를
+사용해야 합니다.
 
 ## 권한 설정
 
@@ -202,12 +237,12 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
 ```
 
 **모드**:
-- `PROMPT`(기본값) — 권한마다 묻습니다
-- `ACCEPT_ALL` — 모든 권한을 자동 승인
+- `DEFAULT`(CLI의 기본값) — 표준 권한 동작
 - `ACCEPT_EDITS` — 파일 편집은 자동 승인, 나머지는 확인
+- `PLAN` — 계획 모드. 도구를 실행하지 않음
 - `BYPASS_PERMISSIONS` — 권한 검사를 완전히 건너뜀
-- `DONT_ASK` — 묻지 않고 모든 도구 허용
-- `AUTO` — 적절한 권한 모드를 자동으로 결정
+- `DONT_ASK` — 묻지 않음. 허용 규칙으로 미리 승인되지 않은 것은 모두 거부
+- `AUTO` — 모델 분류기가 도구 호출마다 승인 또는 거부
 
 ### permissionPromptToolName()
 
@@ -413,9 +448,11 @@ String wire = level.getValue(); // "xhigh"
 
 ### maxThinkingTokens()
 
-**더 이상 권장하지 않음**: 대신 `thinking()`을 사용하세요.
+**더 이상 권장하지 않음**: 대신 `thinking()`을 사용하세요. adaptive, 토큰 예산을 지정한 활성화,
+비활성화 중에서 고를 수 있습니다.
 
-사고 블록의 최대 토큰 수입니다.
+사고 블록의 최대 토큰 수입니다. 최신 모델에서는 이 값이 켜기/끄기로만 취급됩니다(0 = 비활성화,
+그 밖의 값 = adaptive).
 
 ```java
 .maxThinkingTokens(10000)  // Deprecated - use thinking() instead
@@ -438,7 +475,7 @@ String wire = level.getValue(); // "xhigh"
 AI 모델을 설정합니다.
 
 ```java
-.model("claude-sonnet-4-5")
+.model("claude-sonnet-5")
 ```
 
 **사용 가능한 모델**:
@@ -511,11 +548,18 @@ Claude Code CLI의 사용자 지정 경로입니다.
 
 ### settings()
 
-설정 JSON 파일의 경로입니다.
+추가 설정 JSON 파일의 경로, 또는 인라인 JSON 문자열입니다.
 
 ```java
 .settings("/path/to/settings.json")
+.settings("{\"permissions\": {\"allow\": [\"Read\"]}}")
 ```
+
+`sandbox()`가 없으면 값은 `--settings`에 그대로 전달됩니다. `sandbox()`도 설정되어 있으면 두 값이
+하나의 JSON 문자열로 병합됩니다: `{`로 시작하고 `}`로 끝나는 값은 JSON으로 파싱되고, 그 밖의 값은
+파일 경로로 읽힙니다(파일이 없거나 읽을 수 없으면 로그를 남기고 샌드박스 설정만 전달합니다). 이 설정은
+CLI의 "플래그 설정(flag settings)" 계층으로 로드되며, 사용자가 제어하는 설정 중 우선순위가 가장
+높습니다.
 
 ### addDirs()
 
@@ -542,16 +586,39 @@ CLI 프로세스의 환경 변수를 설정합니다.
 ))
 ```
 
+이 Map은 부모 프로세스의 환경 위에 병합됩니다: 여기 지정한 항목이 상속된 값을 재정의하고,
+상속된 집합에서 `CLAUDECODE`는 제거됩니다. 전송 계층은 다음 변수도 설정합니다:
+
+| 변수 | 설정 시점 | 여기서 재정의 가능 |
+|----------|------|------------------|
+| `CLAUDE_CODE_ENTRYPOINT=sdk-java` | 항상 | 예 |
+| `CLAUDE_AGENT_SDK_VERSION` | 항상 | 아니요 |
+| `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` | 이 Map이나 상속된 환경에 (대소문자와 무관하게) 이미 이름이 있지 않은 경우 | 예 |
+| `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` | `enableFileCheckpointing(true)` | — |
+| `PWD` | `cwd(...)`가 설정된 경우 | — |
+| `TRACEPARENT` / `TRACESTATE` | OpenTelemetry 스팬이 활성화된 경우([트레이스 컨텍스트](./feature-trace-context.md) 참고) | 예 |
+
+여기서 설정하는 두 변수는 일회성 질의가 훅과 SDK MCP 호출을 위해 stdin을 얼마나 오래 열어 두는지를
+조정합니다([아키텍처 → stdin 수명 주기](./architecture.md#stdin-수명-주기와-실행의-끝) 참고):
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`는 턴 사이의 대기 시간 상한을 정하고(기본값 `600000`,
+`0`이면 제한 없음), `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`은 CLI의 `session_state_changed`
+프레임을 받도록 옵트인합니다. User-Agent 헤더에서 애플리케이션을 식별하려면
+`CLAUDE_AGENT_SDK_CLIENT_APP`(예: `"my-app/1.0.0"`)을 설정하세요.
+
 ### extraArgs()
 
 임의의 CLI 플래그를 전달합니다.
 
 ```java
 .extraArgs(Map.of(
-    "--verbose", "",
-    "--config", "custom.json"
+    "replay-user-messages", "",   // flag with no value: --replay-user-messages
+    "debug", "api"                // flag with a value: --debug api
 ))
 ```
+
+키는 앞의 `--`를 **뺀** 플래그 이름이며, `--`는 전송 계층이 붙입니다. 값이 `null`이거나 비어
+있으면 값 없는 플래그로 내보냅니다. `-`로 시작하는 값은 별도의 플래그로 파싱되지 않도록
+`--flag=value` 형태로 보내고, 그 밖의 값은 두 개의 토큰으로 보냅니다.
 
 ## 콜백
 
@@ -640,7 +707,36 @@ CLI의 stderr 출력을 받습니다. CLI가 내보내는 stderr 한 줄마다 �
 .includePartialMessages(true)
 ```
 
-콘텐츠가 생성되는 동안 델타가 담긴 `StreamEvent` 메시지를 받습니다.
+콘텐츠가 생성되는 동안 델타가 담긴 `StreamEvent` 메시지를 API 스트림 이벤트마다 하나씩 받습니다.
+
+### verbatimPrompts()
+
+모든 프롬프트를 작성된 그대로 Claude에 전달합니다.
+
+```java
+.verbatimPrompts(true)
+```
+
+Claude Code는 보통 프롬프트 텍스트 안의 `@/absolute/path`를 그 파일의 내용으로 확장하며, 이는 작업
+디렉터리 바깥이라도 도구 호출 없이 일어납니다. 또한 맨 앞의 `/command`는 슬래시 명령으로
+디스패치합니다. 사용자가 직접 입력한 텍스트에는 알맞은 동작이지만, 애플리케이션이 다른 곳(이전 턴,
+도구 결과, 서드파티 콘텐츠)에서 조립한 텍스트에는 맞지 않습니다. 이 옵션을 켜면 SDK가 쓰는 모든
+사용자 메시지에 `client_composed: true` 표시가 붙고, Claude Code는 이를 주어진 그대로 전달합니다.
+`ClaudeSDK.query`의 문자열 프롬프트와 스트리밍 프롬프트, 그리고 `ClaudeSDKClient.connect(String)`,
+`query(String)`, `query(Iterator)`가 모두 해당됩니다.
+
+- 표시는 사본에 붙습니다. 여러분의 메시지 Map은 절대 수정되지 않습니다.
+- 옵션이 켜져 있는 동안에는 스트리밍 메시지의 `client_composed` 값을 모두 덮어씁니다. 턴 단위로
+  제어하려면 옵션을 끈 채로 개별 스트리밍 메시지에 `"client_composed": true`를 넣으세요. SDK는
+  이를 손대지 않고 그대로 전달합니다.
+- 현재 Claude Code 버전에서는 verbatim 턴이 턴 시작 시의 첨부 단계도 건너뜁니다:
+  `@server:resource` MCP 멘션은 확장되지 않고, 보통 함께 첨부되는 컨텍스트(중첩된 `CLAUDE.md`와
+  규칙 파일, 스킬 및 도구 목록, 그 밖의 턴별 알림) 없이 프롬프트가 전송됩니다. 그 컨텍스트의 대부분은
+  대신 턴의 첫 도구 호출 이후에 도착합니다.
+- Claude Code 2.1.248 이상이 필요합니다. 더 오래된 버전은 이 필드를 무시하며, 전송 계층은 연결 시점에
+  그런 버전을 감지하면 `WARNING`을 기록합니다.
+
+`examples/VerbatimPromptsExample.java`를 참고하세요.
 
 ### forwardSubagentText()
 
@@ -724,6 +820,12 @@ CLI의 stderr 출력을 받습니다. CLI가 내보내는 stderr 한 줄마다 �
 
 bash 명령의 샌드박싱을 설정합니다.
 
+활성화하면 명령이 파일 시스템과 네트워크 접근이 제한된 샌드박스 환경에서 실행됩니다. 도구 수준의
+파일 시스템 및 네트워크 제한은 여전히 권한 규칙으로 설정합니다(파일 시스템은 `Read`/`Edit`, 네트워크는
+`WebFetch`). 아래의 `network` 설정은 샌드박스 안에서 실행되는 bash 명령에 대한 샌드박스 자체의 네트워크
+격리를 구성합니다. 샌드박스를 설정하면 `settings()`가 전달되는 방식도 달라집니다.
+[settings()](#settings)를 참고하세요.
+
 ```java
 // Minimal: just enable sandboxing.
 .sandbox(new SandboxSettings(true))
@@ -769,13 +871,15 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 ### plugins()
 
-사용자 정의 플러그인을 추가합니다.
+로컬 디렉터리에서 Claude Code 플러그인을 로드합니다.
 
 ```java
 .plugins(List.of(
-    new SdkPluginConfig("my-plugin", config)
+    ClaudeAgentOptions.SdkPluginConfig.local("/path/to/my-plugin")
 ))
 ```
+
+각 `local` 플러그인은 `--plugin-dir <path>`가 됩니다. [플러그인 시스템](./feature-plugin-system.md)을 참고하세요.
 
 ### outputFormat()
 
@@ -795,15 +899,18 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ))
 ```
 
-### checkpointFiles()
+### enableFileCheckpointing()
 
 되돌리기를 위한 파일 체크포인트를 켭니다.
 
 ```java
-.checkpointFiles(true)
+.enableFileCheckpointing(true)
+.extraArgs(Map.of("replay-user-messages", ""))  // so UserMessage carries a uuid
 ```
 
-이래야 `ClaudeSDKClient.rewindFiles()`를 쓸 수 있습니다.
+CLI 프로세스에 `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true`를 설정하고
+`ClaudeSDKClient.rewindFiles(userMessageId)`를 쓸 수 있게 합니다. 되돌릴 대상인 `uuid`는 사용자
+메시지 재생(replay)을 통해 얻습니다. `sessionStore()`와 함께 쓸 수 없습니다.
 
 ## 전체 예제
 
@@ -811,7 +918,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 ```java
 var options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .cwd(Path.of("/path/to/codebase"))
     .allowedTools(List.of("Read", "Grep", "Glob"))
     .disallowedTools(List.of("Write", "Edit", "Bash"))
@@ -828,7 +935,7 @@ var options = ClaudeAgentOptions.builder()
 var calcServer = ClaudeSDK.createSdkMcpServer("calc", new Calculator());
 
 var options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .cwd(Path.of("/project"))
     .allowedTools(List.of(
         "Read", "Write", "Edit", "Grep", "Glob",
@@ -837,7 +944,7 @@ var options = ClaudeAgentOptions.builder()
     .mcpServers(Map.of("calc", calcServer))
     .permissionMode(PermissionMode.ACCEPT_EDITS)
     .maxTurns(50)
-    .checkpointFiles(true)
+    .enableFileCheckpointing(true)
     .systemPrompt("""
         You are a development assistant.
         - Write clean, tested code
@@ -899,7 +1006,7 @@ var options = ClaudeAgentOptions.builder()
 ```java
 // First session
 var options1 = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .build();
 
 try (var client = ClaudeSDK.createClient(options1)) {
@@ -910,7 +1017,7 @@ try (var client = ClaudeSDK.createClient(options1)) {
 
 // Resume later with context
 var options2 = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .resume("previous-session-id")
     .build();
 
@@ -966,7 +1073,7 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 ```java
 // ✅ Good: Match model to task
 .model("claude-haiku-4-5")  // Simple tasks
-.model("claude-sonnet-4-5") // Balanced
+.model("claude-sonnet-5") // Balanced
 .model("claude-opus-4-6")   // Complex reasoning
 
 // ❌ Bad: Always using most expensive
@@ -1009,10 +1116,11 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 
 ```java
 // ✅ Good: Enable for safety
-.checkpointFiles(true)
+.enableFileCheckpointing(true)
+.extraArgs(Map.of("replay-user-messages", ""))
 
-// Allows rewinding if mistakes
-client.rewindFiles(checkpointId);
+// Allows rewinding if mistakes: pass the uuid of a replayed UserMessage
+client.rewindFiles(userMessageUuid);
 ```
 
 ### 7. 민감한 데이터를 조심해서 다루세요

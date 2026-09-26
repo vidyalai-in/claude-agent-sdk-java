@@ -43,6 +43,15 @@ Transport transport = new SubprocessCLITransport(options);
 - 猶予期間を設けた穏当なシャットダウン（stdin の EOF 後、SIGTERM を送る前に、サブプロセスが
   セッションファイルをフラッシュするのを待ちます）
 - 既定で `CLAUDE_CODE_ENTRYPOINT=sdk-java` を設定（`ClaudeAgentOptions.env()` で上書き可能）
+- 呼び出し側の `env()` または継承した環境が（大文字小文字を問わず）すでにその名前を持つ場合を除き、
+  `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` を設定します。これにより CLI は `sdk_host_only` の印が付いた
+  `session_state_changed` フレームを報告し、`QueryHandler` はそれを読んで stdin を閉じてよいタイミングを
+  判断し、利用側に届く前に破棄します。[アーキテクチャ → stdin のライフサイクル](./architecture.md#stdin-のライフサイクルと実行の終了)
+  を参照してください。トランスポートが設定する変数の完全な一覧は
+  [設定オプション → env()](./feature-configuration-options.md#env) にあります。
+- CLI が 2.0.0 より古い場合と、`verbatimPrompts` が有効なのに CLI が `client_composed` を無視する
+  2.1.248 より古いバージョンの場合に、接続時に警告（ログの `WARNING`）を出します。バージョンの確認は
+  `<cli> -v` を実行して行い、`CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` が設定されている場合はスキップされます。
 
 ### CLI フラグの転送
 
@@ -54,6 +63,8 @@ Transport transport = new SubprocessCLITransport(options);
 | `sessionStore(...)` | `--session-mirror` | `sessionStore != null` のときに追加されます。CLI に stdout へ `transcript_mirror` フレームを出すよう指示し、SDK がそれを取り出して設定済みの `SessionStore` へ転送します。 |
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display` が転送されるのは `Adaptive` と `Enabled` の設定のときだけです（しかも `display != null` のときのみ）。`Disabled` は決して出しません。 |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | `display` が設定されている場合、両方のフラグが一緒に出ます。 |
+| `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | 普通の文字列と同じです。`snapshot` は代わりに `initialize` リクエストで送られます。 |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | `local` プラグインごとに 1 つ。それ以外の種類はスキップされます。 |
 
 **stderr のパイプ**：stderr がパイプされるのは `options.stderrCallback() != null` のときだけです。
 従来の `--debug-to-stderr` 追加引数の検出は 0.1.13 で削除されました（当該 CLI フラグの非推奨化への
@@ -312,7 +323,7 @@ ClaudeAgentOptions.builder().skills(List.of("x),Bash(*")).build();
 
 拒否の完全な表、受理される名前の一覧、そして Python SDK との 2 つの意図的な差異（単独サロゲートか
 任意のサロゲートか、ノーブレークスペースの除去）については、
-[Skills → 名前の検証](./feature-skills.md#名前の検証01122)を参照してください。
+[Skills → 名前の検証](./feature-skills.md#名前の検証0122)を参照してください。
 
 ## 独自のトランスポート
 
@@ -403,6 +414,13 @@ public class RemoteTransport implements Transport {
 ```
 
 ## 独自トランスポートの使用
+
+独自トランスポートを使う場合、SDK はその `connect()` を呼び、プロンプトを `write()` で届け、フック、
+エージェント、その他の `initialize` リクエストの設定（`systemPromptSnapshot` を含む）を制御プロトコル
+経由で送ります。`SubprocessCLITransport` が CLI フラグや環境変数に変換するもの —— モデル、cwd、権限
+モード、ツール、`env` など —— は**一切適用されず**、ストアを使うセッションのレジュームも行われません。
+`verbatimPrompts` は引き続き適用されます。SDK は `write()` を呼ぶ前にプロンプトにスタンプを付けるから
+です。
 
 ```java
 // Create custom transport

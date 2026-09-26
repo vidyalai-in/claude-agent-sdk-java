@@ -16,7 +16,7 @@ Claude Agent SDK for Java 是一个将 Claude AI 能力集成到 Java 应用中�
 - ⚡ **虚拟线程**：在 Java 21+ 上后台任务运行于 Project Loom 虚拟线程，在 17-20 上则运行于守护平台线程
 - 🔧 **灵活的架构**：同时支持无状态查询与有状态会话
 - 🛠️ **自定义工具**：使用 MCP（Model Context Protocol）创建自定义工具
-- 🔌 **插件系统**：面向自定义功能的可扩展架构
+- 🔌 **插件**：从本地目录加载 Claude Code 插件（命令、agent、技能、钩子）
 - 🎨 **Builder 模式**：流畅的配置 API
 
 ## 文档索引
@@ -27,6 +27,7 @@ Claude Agent SDK for Java 是一个将 Claude AI 能力集成到 Java 应用中�
   - 核心组件（API 层、配置、协议、传输层）
   - 设计模式（密封接口、builder、facade、虚拟线程）
   - 数据流图与并发模型
+  - Stdin 生命周期：一次运行何时结束（会话状态、任务台账、轮次间上限）
   - 类型系统层次结构与依赖关系
 
 ### 核心功能
@@ -48,9 +49,11 @@ Claude Agent SDK for Java 是一个将 Claude AI 能力集成到 Java 应用中�
 - **[配置选项](./feature-configuration-options.md)** —— ClaudeAgentOptions builder 完全指南
   - 全部 30 多个配置选项
   - 工具配置
+  - 系统提示词的各种形式与 `snapshot`
   - 权限设置
   - 模型配置
-  - 环境变量
+  - 环境变量，以及 SDK 自行设置的环境变量
+  - `verbatimPrompts` —— 原样投递提示词，不做 `@path` 展开，也不解析斜杠命令
   - 钩子与回调
   - 常见模式的完整示例
 
@@ -154,9 +157,9 @@ Claude Agent SDK for Java 是一个将 Claude AI 能力集成到 Java 应用中�
   - 自定义传输示例
   - Windows 批处理脚本的拒绝策略，以及针对 npm `claude.cmd` 部署的显式选择开关
 
-- **[插件系统](./feature-plugin-system.md)** —— 创建和使用插件
-  - SdkPluginConfig
-  - 用例与示例
+- **[插件系统](./feature-plugin-system.md)** —— 加载 Claude Code 插件
+  - `SdkPluginConfig.local(path)` → `--plugin-dir`
+  - 插件目录结构，以及如何验证插件已加载
 
 ### API 参考
 - **[ClaudeSDK](./api-claude-sdk.md)** —— 用于简单查询的静态 facade
@@ -281,13 +284,15 @@ try (var client = ClaudeSDK.createClient(options)) {
 
 ## 示例
 
-本 SDK 包含 15 个以上的完整示例，涵盖：
+本 SDK 包含 30 多个可运行的示例，涵盖：
 - 基础查询与会话
 - 自定义 MCP 工具
 - 权限回调
-- 钩子系统
+- 钩子系统，包括在后台子 agent 的后续轮次中处理的钩子（`BackgroundAgentHooksExample`）
 - 流式事件
 - 错误处理
+- 系统提示词，包括 `snapshot`（`SystemPromptExample`）
+- 原样投递提示词（`VerbatimPromptsExample`）
 - 高级功能（检查点、沙箱、输出格式）
 - 以及更多……
 
@@ -305,11 +310,11 @@ try (var client = ClaudeSDK.createClient(options)) {
 
 ### ✅ 已完成 —— 全部核心文档
 - 含快速上手与概览的主 README
-- 架构概览（内容完整，配有图示；SessionStore 子系统；控制请求失败处理）
+- 架构概览（内容完整，配有图示；SessionStore 子系统；控制请求失败处理；stdin 生命周期与运行结束检测）
 - 全部功能指南：
   - 简单查询
   - 交互式会话
-  - 配置选项（包括 `sessionStore` 与 `loadTimeoutMs`）
+  - 配置选项（包括 `sessionStore`、`loadTimeoutMs`、`verbatimPrompts` 与系统提示词 `snapshot`）
   - 消息类型（任务消息、服务端工具块、MirrorErrorMessage）
   - MCP 服务器（含 ToolAnnotations、工具标题、状态类型、输入校验、失败语义、取消与自定义处理器）
   - Agent 定义
@@ -320,7 +325,7 @@ try (var client = ClaudeSDK.createClient(options)) {
   - 传输层（含 `--session-mirror`、`--thinking-display`，移除 `--debug-to-stderr`）
   - 插件系统
   - 会话历史（listSessions / getSessionMessages）
-  - Session Store（将会话记录镜像到 S3/Postgres/Redis/自定义后端）
+  - Session Store（将会话记录镜像到 S3/Postgres/Redis/自定义后端；有界执行器）
 - 完整的 API 参考（5 篇文档）：
   - ClaudeSDK（包含会话历史方法）
   - ClaudeSDKClient

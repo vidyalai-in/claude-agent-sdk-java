@@ -17,7 +17,10 @@ public class ClaudeSDKClient implements AutoCloseable
 ```java
 public ClaudeSDKClient()
 public ClaudeSDKClient(ClaudeAgentOptions options)
+public ClaudeSDKClient(ClaudeAgentOptions options, Transport transport)
 ```
+
+传入非 null 的 `transport` 时，客户端会使用它，而不是启动 CLI 子进程。SDK 会调用它的 `connect()`，通过 `write()` 写出提示词，并经由控制协议发送钩子、agent 以及其他 initialize 请求中的设置。CLI 标志类选项（model、cwd、权限模式、tools，以及子进程传输层会转换成标志的其余选项）不会应用到自定义传输层上，基于存储的会话恢复也会被跳过。
 
 ## 连接方法
 
@@ -88,6 +91,8 @@ public void query(String prompt)
 
 发送一条消息。提示词写出后即返回 —— 请用
 [`receiveResponse()`](#receiveresponse) 或 [`receiveMessages()`](#receivemessages) 读取回复。
+
+在选项上设置 `verbatimPrompts(true)` 后，该客户端写出的每条提示词（来自 `connect(String)`、`sendMessage` 以及两种 `query` 形式）都会被标记为 `client_composed: true`，因此 Claude Code 会原样投递（不做 `@path` 展开，也不分派斜杠命令）。流式消息的标记加在副本上。
 
 等价于 `query(prompt, "default")`。
 
@@ -180,7 +185,7 @@ public void setModel(String model)
 
 更换 AI 模型。
 
-**参数**：`model` —— 模型名称（例如 "claude-opus-4-6"）
+**参数**：`model` —— 模型名称或别名（例如 `"claude-sonnet-5"`、`"haiku"`），传入 `null` 表示使用默认模型。CLI 会通过 API 校验完整的模型 ID，因此已退役的 ID 会失败；别名则会映射到当前的模型。
 
 ### setPermissionMode(PermissionMode mode)
 
@@ -198,19 +203,49 @@ public void setPermissionMode(PermissionMode mode)
 public void rewindFiles(String userMessageId)
 ```
 
-把文件回退到某条用户消息时的状态（需要启用检查点）。
+把被跟踪的文件回退到某条用户消息时的状态。
 
-**参数**：`userMessageId` —— 回退到的目标消息 ID
+需要 `enableFileCheckpointing(true)` 来跟踪文件变更，并需要 `extraArgs(Map.of("replay-user-messages", ""))`，以便流中的 `UserMessage` 对象携带用于回退的 `uuid`。
+
+**参数**：`userMessageId` —— 回退到的目标用户消息的 UUID
 
 ### getMcpStatus()
 
 ```java
-public Map<String, Object> getMcpStatus()
+public McpStatusResponse getMcpStatus()
 ```
 
 获取 MCP 服务器的连接状态。
 
-**返回**：`Map<String, Object>` —— 状态信息
+**返回**：`McpStatusResponse` —— 其 `mcpServers()` 为每个服务器列出一个 `McpServerStatus`
+
+### reconnectMcpServer(String serverName)
+
+```java
+public void reconnectMcpServer(String serverName)
+```
+
+重试连接一个连接失败或已断开的 MCP 服务器。
+
+### toggleMcpServer(String serverName, boolean enabled)
+
+```java
+public void toggleMcpServer(String serverName, boolean enabled)
+```
+
+启用或禁用一个 MCP 服务器。禁用会断开它，并把它的工具从可用集合中移除；启用会重新连接它，并让这些工具重新可用。
+
+### stopTask(String taskId)
+
+```java
+public void stopTask(String taskId)
+```
+
+停止一个正在运行的后台任务。
+
+**参数**：`taskId` —— 来自 `TaskStartedMessage` 的任务 ID
+
+该方法返回后，CLI 会以一条状态为终态（被停止的任务为 `"killed"`）的 `TaskUpdatedMessage` 报告任务结束。随后可能还会有一条状态为 `"stopped"` 的 `TaskNotificationMessage`，但它有时会被抑制，所以应把这两种消息中任意一条的终态视为任务结束（参见 `TaskUpdatedMessage.TERMINAL_TASK_STATUSES`）。
 
 ### getContextUsage()
 
@@ -239,9 +274,9 @@ public ContextUsageResponse getContextUsage()
 public Map<String, Object> getServerInfo()
 ```
 
-获取服务端初始化信息。
+获取服务端初始化信息：可用命令、输出样式以及服务端能力。
 
-**返回**：`Map<String, Object>` —— 服务端信息
+**返回**：`Map<String, Object>` —— 来自 `initialize` 响应的信息（仅当 CLI 未返回任何信息时为 `null`）
 
 ## 线程安全
 

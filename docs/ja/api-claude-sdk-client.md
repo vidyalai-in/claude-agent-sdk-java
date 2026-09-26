@@ -17,7 +17,14 @@ Claude とのステートフルで対話的な会話のためのクライアン�
 ```java
 public ClaudeSDKClient()
 public ClaudeSDKClient(ClaudeAgentOptions options)
+public ClaudeSDKClient(ClaudeAgentOptions options, Transport transport)
 ```
+
+null でない `transport` を渡すと、クライアントは CLI のサブプロセスを起動する代わりにそれを使います。
+SDK はその `connect()` を呼び、プロンプトを `write()` で書き込み、フック、エージェント、その他の
+initialize リクエストの設定を制御プロトコル経由で送ります。CLI フラグとなるオプション（モデル、cwd、
+権限モード、ツール、その他サブプロセストランスポートがフラグに変換するもの）は独自トランスポートには
+適用されず、ストアを使うセッションのレジュームも行われません。
 
 ## 接続メソッド
 
@@ -89,6 +96,11 @@ public void query(String prompt)
 メッセージを送信します。プロンプトが書き出された時点で戻ります —— 応答は
 [`receiveResponse()`](#receiveresponse) または [`receiveMessages()`](#receivemessages) で
 読み取ってください。
+
+オプションで `verbatimPrompts(true)` を指定すると、このクライアントが書き込むすべてのプロンプト ——
+`connect(String)`、`sendMessage`、両方の `query` 形式からのもの —— に `client_composed: true` が付き、
+Claude Code はそれを書かれたとおりに届けます（`@path` の展開もスラッシュコマンドのディスパッチも
+行いません）。ストリーミングされたメッセージには、コピーに対してスタンプが付けられます。
 
 `query(prompt, "default")` と同等です。
 
@@ -186,7 +198,7 @@ public void setModel(String model)
 
 AI モデルを変更します。
 
-**引数**：`model` —— モデル名（例："claude-opus-4-6"）
+**引数**：`model` —— モデル名またはエイリアス（例：`"claude-sonnet-5"`、`"haiku"`）。既定のモデルにするには `null`。CLI は完全なモデル ID を API に照合するため、廃止された ID は失敗します。エイリアスは現行のモデルに対応付けられます。
 
 ### setPermissionMode(PermissionMode mode)
 
@@ -204,19 +216,55 @@ public void setPermissionMode(PermissionMode mode)
 public void rewindFiles(String userMessageId)
 ```
 
-ファイルを指定したユーザーメッセージ時点の状態に巻き戻します（チェックポイントが必要）。
+追跡対象のファイルを、指定したユーザーメッセージ時点の状態に巻き戻します。
 
-**引数**：`userMessageId` —— 巻き戻し先のメッセージ ID
+ファイルの変更を追跡するための `enableFileCheckpointing(true)` と、ストリーム中の `UserMessage`
+オブジェクトが巻き戻し先の `uuid` を持つようにするための
+`extraArgs(Map.of("replay-user-messages", ""))` が必要です。
+
+**引数**：`userMessageId` —— 巻き戻し先のユーザーメッセージの UUID
 
 ### getMcpStatus()
 
 ```java
-public Map<String, Object> getMcpStatus()
+public McpStatusResponse getMcpStatus()
 ```
 
 MCP サーバーの接続状態を取得します。
 
-**戻り値**：`Map<String, Object>` —— 状態の情報
+**戻り値**：`McpStatusResponse` —— その `mcpServers()` はサーバーごとに 1 つの `McpServerStatus` を列挙します
+
+### reconnectMcpServer(String serverName)
+
+```java
+public void reconnectMcpServer(String serverName)
+```
+
+接続に失敗した、または切断された MCP サーバーへの接続を再試行します。
+
+### toggleMcpServer(String serverName, boolean enabled)
+
+```java
+public void toggleMcpServer(String serverName, boolean enabled)
+```
+
+MCP サーバーを有効化または無効化します。無効化するとサーバーは切断され、そのツールは利用可能な
+ツールの集合から取り除かれます。有効化すると再接続され、ツールが再び利用可能になります。
+
+### stopTask(String taskId)
+
+```java
+public void stopTask(String taskId)
+```
+
+実行中のバックグラウンドタスクを停止します。
+
+**引数**：`taskId` —— `TaskStartedMessage` から得たタスク ID
+
+このメソッドが戻った後、CLI はタスクの終了を、終端ステータス（停止したタスクでは `"killed"`）を持つ
+`TaskUpdatedMessage` として報告します。ステータスが `"stopped"` の `TaskNotificationMessage` が続く
+こともありますが、抑制される場合もあるため、どちらのメッセージであれ終端ステータスを終了とみなして
+ください（`TaskUpdatedMessage.TERMINAL_TASK_STATUSES` を参照）。
 
 ### getContextUsage()
 
@@ -245,9 +293,10 @@ MCP ツール・メモリファイル・エージェントの詳細な内訳が�
 public Map<String, Object> getServerInfo()
 ```
 
-サーバーの初期化情報を取得します。
+サーバーの初期化情報を取得します：利用可能なコマンド、出力スタイル、サーバーの機能。
 
-**戻り値**：`Map<String, Object>` —— サーバーの情報
+**戻り値**：`Map<String, Object>` —— `initialize` レスポンスからの情報（CLI が何も返さなかった場合に
+限り `null`）
 
 ## スレッド安全性
 

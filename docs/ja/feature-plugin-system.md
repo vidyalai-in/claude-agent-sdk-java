@@ -1,99 +1,94 @@
 # プラグインシステム
 
-SDK の機能を独自に拡張するためのアーキテクチャです。
+Claude Code プラグイン —— ディレクトリにまとめられたカスタムスラッシュコマンド、エージェント、スキル、
+フック —— を SDK のセッションに読み込みます。
 
 > **この翻訳について**：正式なドキュメントは英語版のみです。この翻訳は[英語の原文](../feature-plugin-system.md)より古い場合があります。内容が食い違う場合は英語版が正となります。コードブロックは英語の原文と完全に同一で、翻訳していません。
 
 ## 概要
 
-プラグインシステムを使うと、独自のロジックで SDK の挙動を拡張できます。プラグインは SDK の
-操作を傍受して変更できます。
+プラグインとは、Claude Code CLI が起動時に読み込むディレクトリです。SDK 自身はプラグインのコードを
+実行しません。各プラグインのディレクトリを `--plugin-dir` で CLI に渡し、プラグインが何を提供するかは
+CLI が検出します。
 
 ## SdkPluginConfig
 
+`SdkPluginConfig` は `ClaudeAgentOptions` の中に入れ子になったレコードです：
+
 ```java
-public record SdkPluginConfig(
-    String name,
-    Map<String, Object> config
-)
+public record SdkPluginConfig(String type, String path) {
+    public static SdkPluginConfig local(String path);  // type = "local"
+}
 ```
+
+サポートされているのは `"local"` タイプだけです。トランスポートは `local` プラグインごとに CLI コマンドへ
+`--plugin-dir <path>` を追加します。それ以外の `type` を持つ設定はエラーなしでスキップされるので、設定は
+常に `local(...)` で作成してください。
 
 ## プラグインの設定
 
 ```java
+import in.vidyalai.claude.sdk.ClaudeAgentOptions;
+import in.vidyalai.claude.sdk.ClaudeAgentOptions.SdkPluginConfig;
+
 var options = ClaudeAgentOptions.builder()
     .plugins(List.of(
-        new SdkPluginConfig(
-            "my-plugin",
-            Map.of(
-                "setting1", "value1",
-                "setting2", 123
-            )
-        )
-    ))
+        SdkPluginConfig.local("/path/to/my-plugin"),
+        SdkPluginConfig.local("/path/to/another-plugin")))
     .build();
 ```
 
-## ユースケース
+プラグインはリストの順序で、プラグインごとに 1 つの `--plugin-dir` として渡されます。
 
-### ロギングプラグイン
+## プラグインの構成
 
-すべての SDK 操作を追跡します：
+リポジトリのデモプラグインが、CLI が期待する最小限の構成を示しています：
 
-```java
-new SdkPluginConfig("logger", Map.of(
-    "level", "DEBUG",
-    "output", "/var/log/claude-sdk.log"
-))
+```
+examples/src/main/java/examples/plugins/demo-plugin/
+├── .claude-plugin/
+│   └── plugin.json       # Manifest: name, description, version, author
+└── commands/
+    └── greet.md          # A custom /greet slash command
 ```
 
-### メトリクスプラグイン
+`plugin.json`：
 
-パフォーマンスのメトリクスを収集します：
-
-```java
-new SdkPluginConfig("metrics", Map.of(
-    "endpoint", "http://metrics-server/api",
-    "interval", 60
-))
+```json
+{
+  "name": "demo-plugin",
+  "description": "A demo plugin showing how to extend Claude Code with custom commands",
+  "version": "1.0.0",
+  "author": {
+    "name": "Claude Code Team"
+  }
+}
 ```
 
-### キャッシュプラグイン
+プラグインはエージェント、スキル、フックも提供できます。ディレクトリ構成の全体については Claude Code の
+プラグインのドキュメントを参照してください。
 
-応答をキャッシュします：
+## プラグインが読み込まれたことの確認
 
-```java
-new SdkPluginConfig("cache", Map.of(
-    "ttl", 3600,
-    "maxSize", 1000
-))
-```
-
-## サンプル
+CLI は、読み込んだプラグインを `init` システムメッセージの `plugins` フィールドで報告します。これは
+`name` と `path` を持つ Map のリストです：
 
 ```java
-public class PluginsExample {
-    public static void main(String[] args) {
-        var options = ClaudeAgentOptions.builder()
-            .plugins(List.of(
-                new SdkPluginConfig("logger", Map.of(
-                    "level", "INFO",
-                    "format", "json"
-                )),
-                new SdkPluginConfig("metrics", Map.of(
-                    "enabled", true
-                ))
-            ))
-            .build();
-
-        List<Message> messages = ClaudeSDK.query(
-            "What is Java?",
-            options
-        );
+for (Message msg : ClaudeSDK.query("Hello!", options)) {
+    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
+        @SuppressWarnings("unchecked")
+        List<Object> plugins = (List<Object>) system.get("plugins");
+        if (plugins != null) {
+            for (Object p : plugins) {
+                if (p instanceof Map<?, ?> plugin) {
+                    System.out.println(plugin.get("name") + " (" + plugin.get("path") + ")");
+                }
+            }
+        }
     }
 }
 ```
 
 ## 関連項目
-- [設定オプション](./feature-configuration-options.md#高度な機能) —— plugins オプション
+- [設定オプション](./feature-configuration-options.md#plugins) —— plugins オプション
 - [Plugins のサンプル](../../examples/src/main/java/examples/PluginsExample.java)

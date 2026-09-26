@@ -17,7 +17,15 @@ Client para conversas com estado e interativas com o Claude.
 ```java
 public ClaudeSDKClient()
 public ClaudeSDKClient(ClaudeAgentOptions options)
+public ClaudeSDKClient(ClaudeAgentOptions options, Transport transport)
 ```
+
+Com um `transport` não nulo, o client o utiliza em vez de iniciar o subprocesso do CLI. O SDK
+chama o `connect()` dele, escreve os prompts por meio de `write()` e envia hooks, agentes e as
+demais configurações da requisição initialize pelo protocolo de controle. As opções que viram
+flags do CLI (model, cwd, modo de permissão, ferramentas e as demais que o transporte de
+subprocesso converte em flags) não são aplicadas a um transporte personalizado, e a retomada de
+sessão a partir de um store é ignorada.
 
 ## Métodos de conexão
 
@@ -88,6 +96,12 @@ public void query(String prompt)
 
 Envia uma mensagem. Retorna assim que o prompt é escrito — leia a resposta com
 [`receiveResponse()`](#receiveresponse) ou [`receiveMessages()`](#receivemessages).
+
+Com `verbatimPrompts(true)` nas opções, todo prompt que este client escreve — de
+`connect(String)`, `sendMessage` e das duas formas de `query` — é marcado com
+`client_composed: true`, para que o Claude Code o entregue como foi escrito (sem expansão de
+`@path` nem despacho de comandos de barra). As mensagens enviadas por streaming são marcadas em
+uma cópia.
 
 Equivalente a `query(prompt, "default")`.
 
@@ -185,7 +199,7 @@ public void setModel(String model)
 
 Troca o modelo de IA.
 
-**Parâmetros**: `model` — nome do modelo (por exemplo, "claude-opus-4-6")
+**Parâmetros**: `model` — nome ou alias do modelo (por exemplo, `"claude-sonnet-5"`, `"haiku"`), ou `null` para o padrão. O CLI valida IDs completos de modelo junto à API, então um ID descontinuado falha; um alias é mapeado para um modelo atual.
 
 ### setPermissionMode(PermissionMode mode)
 
@@ -203,19 +217,56 @@ Muda o modo de permissão.
 public void rewindFiles(String userMessageId)
 ```
 
-Restaura os arquivos ao estado de uma mensagem de usuário (requer checkpoints).
+Restaura os arquivos rastreados ao estado em que estavam em uma mensagem de usuário.
 
-**Parâmetros**: `userMessageId` — ID da mensagem para a qual voltar
+Requer `enableFileCheckpointing(true)` para rastrear as alterações de arquivos, e
+`extraArgs(Map.of("replay-user-messages", ""))` para que os objetos `UserMessage` do fluxo
+carreguem o `uuid` para o qual reverter.
+
+**Parâmetros**: `userMessageId` — UUID da mensagem de usuário para a qual voltar
 
 ### getMcpStatus()
 
 ```java
-public Map<String, Object> getMcpStatus()
+public McpStatusResponse getMcpStatus()
 ```
 
 Obtém o status de conexão dos servidores MCP.
 
-**Retorna**: `Map<String, Object>` — informações de status
+**Retorna**: `McpStatusResponse` — seu `mcpServers()` lista um `McpServerStatus` por servidor
+
+### reconnectMcpServer(String serverName)
+
+```java
+public void reconnectMcpServer(String serverName)
+```
+
+Tenta novamente conectar a um servidor MCP que falhou ao conectar ou foi desconectado.
+
+### toggleMcpServer(String serverName, boolean enabled)
+
+```java
+public void toggleMcpServer(String serverName, boolean enabled)
+```
+
+Habilita ou desabilita um servidor MCP. Desabilitar o desconecta e remove suas ferramentas do
+conjunto disponível; habilitar o reconecta e torna as ferramentas disponíveis novamente.
+
+### stopTask(String taskId)
+
+```java
+public void stopTask(String taskId)
+```
+
+Interrompe uma tarefa em segundo plano em execução.
+
+**Parâmetros**: `taskId` — o ID da tarefa vindo de um `TaskStartedMessage`
+
+Depois que este método retorna, o CLI informa o fim da tarefa como um `TaskUpdatedMessage`
+cujo status é terminal (`"killed"` para uma tarefa interrompida). Um `TaskNotificationMessage`
+com status `"stopped"` pode vir em seguida, mas às vezes é suprimido, então trate um status
+terminal em qualquer uma das duas mensagens como o fim (veja
+`TaskUpdatedMessage.TERMINAL_TASK_STATUSES`).
 
 ### getContextUsage()
 
@@ -244,9 +295,11 @@ categoria, uso total e detalhamentos de ferramentas MCP, arquivos de memória e 
 public Map<String, Object> getServerInfo()
 ```
 
-Obtém as informações de inicialização do servidor.
+Obtém as informações de inicialização do servidor: comandos disponíveis, estilos de saída e
+capacidades do servidor.
 
-**Retorna**: `Map<String, Object>` — informações do servidor
+**Retorna**: `Map<String, Object>` — as informações da resposta de `initialize`
+(`null` somente se o CLI não tiver retornado nenhuma)
 
 ## Segurança entre threads
 

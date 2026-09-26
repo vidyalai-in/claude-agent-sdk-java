@@ -27,7 +27,7 @@
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .maxTurns(10)
     .permissionMode(PermissionMode.BYPASS_PERMISSIONS)
     .build();
@@ -42,7 +42,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ClaudeAgentOptions.Builder builder = ClaudeAgentOptions.builder();
 
 // Configure
-builder.model("claude-sonnet-4-5")
+builder.model("claude-sonnet-5")
        .maxTurns(10);
 
 // Build immutable instance
@@ -149,9 +149,31 @@ ClaudeAgentOptions modified = options.toBuilder()
 // Use Claude Code preset with exclude_dynamic_sections for cross-user caching
 .systemPrompt(SystemPromptPreset.claudeCode("Custom instructions", true))
 
+// Custom prompt in the form that can also set snapshot (see below)
+.systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+
 // Use prompt from file
 .systemPrompt(new SystemPromptFile("/path/to/prompt.md"))
 ```
+
+| 形式 | 发送给 CLI 的方式 |
+|------|--------------------|
+| `String` | `--system-prompt <text>` |
+| `SystemPromptCustom` | `--system-prompt <prompt>`，外加 `initialize` 请求上的 `snapshot` |
+| `SystemPromptPreset` | 设置了 `append` 时为 `--append-system-prompt <append>`；`excludeDynamicSections` 与 `snapshot` 放在 `initialize` 请求上 |
+| `SystemPromptFile` | `--system-prompt-file <path>` |
+| 未设置（`null`） | `--system-prompt ""`（不使用系统提示词） |
+
+#### 快照（snapshot）
+
+默认情况下，Claude Code 会在会话的第一次请求时构建系统提示词并将其记录下来，之后的每次请求（包括恢复会话之后）都复用它。因此，修改后的自定义提示词，或预设上修改后的 `append` 文本，在会话被压缩或开启新会话之前都不会生效。如果希望每次请求都重新构建提示词（例如在反复调整措辞时），请将 `snapshot` 设为 `false`：
+
+```java
+.systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+.systemPrompt(SystemPromptPreset.claudeCode("Be concise.").withSnapshot(false))
+```
+
+`snapshot` 通过 `initialize` 控制请求以 `systemPromptSnapshot` 的形式发送。只要设置了就会发送（包括 `false`），为 `null` 时则省略，此时采用 CLI 的默认值：`true`；但在 bare 模式（`--bare`）下其行为相当于 `false`。只有预设形式和自定义形式才携带该字段。需要 Claude Code CLI 2.1.257 或更高版本；在 2.1.265 之前，带有 `append` 或自定义提示词的会话只有在 `snapshot` 为 `true` 时才会记录它。
 
 ## MCP 服务器
 
@@ -180,16 +202,18 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
     "external", externalServer
 ))
 
-// From file path
-.mcpServers(Path.of("~/.claude/mcp_servers.json"))
+// From file path (passed as-is to --mcp-config; Java does not expand "~")
+.mcpServers(Path.of(System.getProperty("user.home"), ".claude", "mcp_servers.json"))
 
-// From JSON string
-.mcpServers("""
-    {
+// From an inline JSON string (also passed as-is to --mcp-config)
+.mcpServersJson("""
+    {"mcpServers": {
         "server1": {"type": "stdio", "command": "node", "args": ["server.js"]}
-    }
+    }}
     """)
 ```
+
+map 在传给 `--mcp-config` 之前会被序列化为 `{"mcpServers": {...}}`；路径或 JSON 字符串则原样传递，因此 JSON 字符串必须使用同样的顶层 `mcpServers` 键。
 
 ## 权限设置
 
@@ -202,12 +226,12 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
 ```
 
 **模式**：
-- `PROMPT`（默认）—— 每个权限都询问
-- `ACCEPT_ALL` —— 自动接受所有权限
+- `DEFAULT`（CLI 的默认值）—— 标准权限行为
 - `ACCEPT_EDITS` —— 自动接受文件编辑，其他情况询问
+- `PLAN` —— 规划模式；不执行任何工具
 - `BYPASS_PERMISSIONS` —— 完全跳过权限检查
-- `DONT_ASK` —— 不询问即允许所有工具
-- `AUTO` —— 自动判断合适的权限模式
+- `DONT_ASK` —— 不询问；拒绝所有未被 allow 规则预先批准的操作
+- `AUTO` —— 由模型分类器批准或拒绝每次工具调用
 
 ### permissionPromptToolName()
 
@@ -412,9 +436,9 @@ String wire = level.getValue(); // "xhigh"
 
 ### maxThinkingTokens()
 
-**已弃用**：请改用 `thinking()`。
+**已弃用**：请改用 `thinking()`：可设为自适应、带 token 预算的启用，或禁用。
 
-思考块的最大 token 数。
+思考块的最大 token 数。在较新的模型上，该值只被视为开/关（0 = 禁用，其他任何值 = 自适应）。
 
 ```java
 .maxThinkingTokens(10000)  // Deprecated - use thinking() instead
@@ -437,7 +461,7 @@ String wire = level.getValue(); // "xhigh"
 设置 AI 模型。
 
 ```java
-.model("claude-sonnet-4-5")
+.model("claude-sonnet-5")
 ```
 
 **可用模型**：
@@ -510,11 +534,14 @@ Claude Code CLI 的自定义路径。
 
 ### settings()
 
-设置 JSON 文件的路径。
+额外设置 JSON 文件的路径，或内联 JSON 字符串。
 
 ```java
 .settings("/path/to/settings.json")
+.settings("{\"permissions\": {\"allow\": [\"Read\"]}}")
 ```
+
+未设置 `sandbox()` 时，该值会原样传给 `--settings`。同时设置了 `sandbox()` 时，两者会合并为一个 JSON 字符串：以 `{` 开头并以 `}` 结尾的值按 JSON 解析，其他值按文件路径读取（文件不存在或无法读取时会记录日志，并且只传递沙箱设置）。这些设置会加载到 CLI 的"标志设置"（flag settings）层，它在用户可控的设置中优先级最高。
 
 ### addDirs()
 
@@ -541,16 +568,31 @@ Claude Code CLI 的自定义路径。
 ))
 ```
 
+该 map 会合并到父进程的环境之上：这里的条目覆盖继承来的值，并且会从继承的变量集中去掉 `CLAUDECODE`。传输层还会设置：
+
+| 变量 | 何时设置 | 能否在此覆盖 |
+|----------|------|------------------|
+| `CLAUDE_CODE_ENTRYPOINT=sdk-java` | 始终 | 能 |
+| `CLAUDE_AGENT_SDK_VERSION` | 始终 | 不能 |
+| `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` | 除非此 map 或继承的环境中已经出现该变量（不区分大小写） | 能 |
+| `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` | `enableFileCheckpointing(true)` | — |
+| `PWD` | 设置了 `cwd(...)` | — |
+| `TRACEPARENT` / `TRACESTATE` | 存在活动的 OpenTelemetry span（参见 [Trace Context](./feature-trace-context.md)） | 能 |
+
+这里有两个变量用于调节一次性查询为钩子和 SDK MCP 调用保持 stdin 打开的时长（参见[架构 → stdin 的生命周期](./architecture.md#stdin-的生命周期与一次运行的结束)）：`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` 限定轮次之间的等待时间（默认 `600000`，`0` 表示不限制），`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` 则让你选择接收 CLI 的 `session_state_changed` 帧。设置 `CLAUDE_AGENT_SDK_CLIENT_APP`（例如 `"my-app/1.0.0"`）可以在 User-Agent 头中标识你的应用。
+
 ### extraArgs()
 
 传入任意 CLI 标志。
 
 ```java
 .extraArgs(Map.of(
-    "--verbose", "",
-    "--config", "custom.json"
+    "replay-user-messages", "",   // flag with no value: --replay-user-messages
+    "debug", "api"                // flag with a value: --debug api
 ))
 ```
+
+键是**不带**前导 `--` 的标志名；传输层会自动加上。值为 `null` 或空白时输出一个不带值的标志。以 `-` 开头的值会以 `--flag=value` 形式发送，以免被解析成另一个独立的标志；其他值则作为两个 token 发送。
 
 ## 回调
 
@@ -639,7 +681,24 @@ BiFunction<String, Object, ToolPermissionContext, CompletableFuture<PermissionRe
 .includePartialMessages(true)
 ```
 
-在内容生成过程中接收带增量的 `StreamEvent` 消息。
+在内容生成过程中接收带增量的 `StreamEvent` 消息，每个 API 流事件对应一条。
+
+### verbatimPrompts()
+
+把每条提示词原样投递给 Claude。
+
+```java
+.verbatimPrompts(true)
+```
+
+Claude Code 通常会把提示词文本中的 `@/absolute/path` 展开为该文件的内容（即使文件位于工作目录之外，也无需工具调用），并把开头的 `/command` 当作斜杠命令分派。这适合用户亲手输入的文本，却不适合你的应用从别处拼装而来的文本（之前的轮次、工具结果、第三方内容）。开启此选项后，SDK 写出的每条用户消息都会被标记为 `client_composed: true`，Claude Code 会原封不动地投递它。适用范围包括 `ClaudeSDK.query` 的字符串提示词和流式提示词，以及 `ClaudeSDKClient.connect(String)`、`query(String)` 和 `query(Iterator)`。
+
+- 标记加在副本上；你的消息 map 永远不会被修改。
+- 选项开启期间，它会覆盖流式消息上已有的任何 `client_composed` 值。如需按轮次控制，请保持该选项关闭，并在单条流式消息上放置 `"client_composed": true`；SDK 会原样透传。
+- 在当前的 Claude Code 版本上，原样投递的轮次还会跳过轮次开始时的附件处理：`@server:resource` 形式的 MCP 提及不会被展开，提示词发送时也不会附带通常随之附加的上下文（嵌套的 `CLAUDE.md` 与规则文件、技能与工具列表、其他每轮提醒）。这些上下文大多会改为在该轮第一次工具调用之后到达。
+- 需要 Claude Code 2.1.248 或更高版本。旧版本会忽略该字段，传输层在连接时检测到旧版本会记录一条 `WARNING`。
+
+参见 `examples/VerbatimPromptsExample.java`。
 
 ### forwardSubagentText()
 
@@ -722,6 +781,8 @@ BiFunction<String, Object, ToolPermissionContext, CompletableFuture<PermissionRe
 
 配置 bash 命令的沙箱。
 
+启用后，命令会在限制文件系统与网络访问的沙箱环境中执行。工具层面的文件系统和网络限制仍通过权限规则配置（文件系统用 `Read`/`Edit`，网络用 `WebFetch`）；下文的 `network` 设置配置的是沙箱自身针对沙箱化 bash 命令的网络隔离。设置沙箱还会改变 `settings()` 的传递方式；参见 [settings()](#settings)。
+
 ```java
 // Minimal: just enable sandboxing.
 .sandbox(new SandboxSettings(true))
@@ -767,13 +828,15 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 ### plugins()
 
-添加自定义插件。
+从本地目录加载 Claude Code 插件。
 
 ```java
 .plugins(List.of(
-    new SdkPluginConfig("my-plugin", config)
+    ClaudeAgentOptions.SdkPluginConfig.local("/path/to/my-plugin")
 ))
 ```
+
+每个 `local` 插件都会变成 `--plugin-dir <path>`。参见[插件系统](./feature-plugin-system.md)。
 
 ### outputFormat()
 
@@ -793,15 +856,16 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ))
 ```
 
-### checkpointFiles()
+### enableFileCheckpointing()
 
 启用文件检查点以支持回退。
 
 ```java
-.checkpointFiles(true)
+.enableFileCheckpointing(true)
+.extraArgs(Map.of("replay-user-messages", ""))  // so UserMessage carries a uuid
 ```
 
-启用后才能使用 `ClaudeSDKClient.rewindFiles()`。
+会在 CLI 进程上设置 `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true`，并允许使用 `ClaudeSDKClient.rewindFiles(userMessageId)`。回放用户消息才能拿到用于回退的 `uuid`。不能与 `sessionStore()` 同时使用。
 
 ## 完整示例
 
@@ -809,7 +873,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 ```java
 var options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .cwd(Path.of("/path/to/codebase"))
     .allowedTools(List.of("Read", "Grep", "Glob"))
     .disallowedTools(List.of("Write", "Edit", "Bash"))
@@ -826,7 +890,7 @@ var options = ClaudeAgentOptions.builder()
 var calcServer = ClaudeSDK.createSdkMcpServer("calc", new Calculator());
 
 var options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .cwd(Path.of("/project"))
     .allowedTools(List.of(
         "Read", "Write", "Edit", "Grep", "Glob",
@@ -835,7 +899,7 @@ var options = ClaudeAgentOptions.builder()
     .mcpServers(Map.of("calc", calcServer))
     .permissionMode(PermissionMode.ACCEPT_EDITS)
     .maxTurns(50)
-    .checkpointFiles(true)
+    .enableFileCheckpointing(true)
     .systemPrompt("""
         You are a development assistant.
         - Write clean, tested code
@@ -897,7 +961,7 @@ var options = ClaudeAgentOptions.builder()
 ```java
 // First session
 var options1 = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .build();
 
 try (var client = ClaudeSDK.createClient(options1)) {
@@ -908,7 +972,7 @@ try (var client = ClaudeSDK.createClient(options1)) {
 
 // Resume later with context
 var options2 = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .resume("previous-session-id")
     .build();
 
@@ -964,7 +1028,7 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 ```java
 // ✅ Good: Match model to task
 .model("claude-haiku-4-5")  // Simple tasks
-.model("claude-sonnet-4-5") // Balanced
+.model("claude-sonnet-5") // Balanced
 .model("claude-opus-4-6")   // Complex reasoning
 
 // ❌ Bad: Always using most expensive
@@ -1007,10 +1071,11 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 
 ```java
 // ✅ Good: Enable for safety
-.checkpointFiles(true)
+.enableFileCheckpointing(true)
+.extraArgs(Map.of("replay-user-messages", ""))
 
-// Allows rewinding if mistakes
-client.rewindFiles(checkpointId);
+// Allows rewinding if mistakes: pass the uuid of a replayed UserMessage
+client.rewindFiles(userMessageUuid);
 ```
 
 ### 7. 谨慎处理敏感数据

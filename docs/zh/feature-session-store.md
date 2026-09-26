@@ -231,6 +231,13 @@ SessionStoreExecutor.setDefault(Executors.newFixedThreadPool(8));
 SessionStoreExecutor.reset();
 ```
 
+使用有界执行器（哪怕只有一个线程）也是安全的。所配置的执行器只会运行你的适配器自己的调用；SDK 绝不会让自己的某个线程阻塞等待提交到同一执行器上的另一个任务：
+
+- **会话记录镜像**：每次排空都运行在一个由 SDK 自有的、每任务一线程的小型执行器上（线程名为 `session-store-mirror-drain-<n>`），并在那里等待它提交到你的执行器上的 `appendAsync`。
+- **基于存储的列举**：`listSessionsFromStore` 从调用线程发起每个会话的 `loadAsync` 调用，同时进行的最多 16 个；达到上限时，等待的是调用线程，而不是执行器线程。
+
+早期版本把这两个协调者都运行在所配置的执行器*之上*，因此有界池可能在列举时死锁，或者在 `sendTimeoutMs` 之后悄无声息地丢弃每一批镜像数据。
+
 你也可以逐次调用时传入执行器：
 
 ```java
@@ -473,8 +480,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 | `BATCHED`（默认） | 每条 `result` 消息刷写一次，或待处理量超过 500 条 / 1 MiB 时 | 几乎所有生产工作负载 —— 把适配器延迟挡在流式热路径之外 |
 | `EAGER` | 每入队一帧就调度一次后台排空 | 向客户端实时流式传输会话记录、实时审计管道、无法等到 `result` 的超大轮次 |
 
-`EAGER` 会把批处理器的待处理阈值清零 —— 每入队一帧都会通过所配置的 `SessionStoreExecutor` 调度一次后台
-刷写（每个任务一个具名线程；在 Java 21+ 上是虚拟线程）。追加仍按入队顺序串行进行；慢速适配器不会拖住
+`EAGER` 会把批处理器的待处理阈值清零 —— 每入队一帧都会在 SDK 自有的排空执行器上调度一次后台排空（每个任务一个 `session-store-mirror-drain-<n>` 线程；在 Java 21+ 上是虚拟线程），由它在所配置的 `SessionStoreExecutor` 上调用你的适配器的 `appendAsync`。追加仍按入队顺序串行进行；慢速适配器不会拖住
 读取循环，但在它忙碌期间会看到帧被合并。未设置 `sessionStore` 时该选项会被忽略。
 
 ## 把本地会话导入存储
@@ -688,7 +694,7 @@ SessionSummaryEntry folded = SessionSummary.foldSessionSummary(
 |---|---|
 | `Executor getDefault()` | 当前的默认执行器 |
 | `void setDefault(Executor)` | 覆盖；传 `null` 则重置为内置实现 |
-| `void reset()` | 重置为内置的 `Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("session-store-", 0).factory())` |
+| `void reset()` | 重置为内置的每任务一线程执行器（`session-store-<n>`；在 Java 21+ 上是虚拟线程，在 17-20 上是守护平台线程） |
 
 ### `SessionStoreConformance`
 

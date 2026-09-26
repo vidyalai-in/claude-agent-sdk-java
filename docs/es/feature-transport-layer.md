@@ -42,6 +42,8 @@ Transport transport = new SubprocessCLITransport(options);
 - Limpieza automática
 - Apagado ordenado con periodo de gracia (espera a que el subproceso vuelque el archivo de sesión tras el EOF del stdin antes de enviar SIGTERM)
 - Establece `CLAUDE_CODE_ENTRYPOINT=sdk-java` por defecto (se puede sobrescribir con `ClaudeAgentOptions.env()`)
+- Establece `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` salvo que el `env()` del llamante o el entorno heredado ya la nombren (con cualquier combinación de mayúsculas y minúsculas), de modo que el CLI informa con marcos `session_state_changed` marcados con `sdk_host_only`; `QueryHandler` los lee para decidir cuándo puede cerrarse el stdin y los descarta antes de que lleguen al consumidor. Consulta [Arquitectura → Ciclo de vida del stdin](./architecture.md#ciclo-de-vida-del-stdin-y-el-final-de-una-ejecución). La lista completa de variables que establece el transporte está en [Opciones de configuración → env()](./feature-configuration-options.md#env).
+- Avisa al conectar (registro `WARNING`) cuando el CLI es anterior a la 2.0.0, y cuando `verbatimPrompts` está activo pero el CLI es anterior a la 2.1.248, que ignora `client_composed`. La comprobación de versión ejecuta `<cli> -v` y se omite cuando `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` está definida.
 
 ### Reenvío de flags del CLI
 
@@ -53,6 +55,8 @@ destacadas relacionadas con las opciones recientes:
 | `sessionStore(...)` | `--session-mirror` | Se añade cuando `sessionStore != null`. Indica al CLI que emita marcos `transcript_mirror` por stdout, que el SDK separa y reenvía al `SessionStore` configurado. |
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display` solo se reenvía para configuraciones `Adaptive` y `Enabled` (y únicamente cuando `display != null`); `Disabled` nunca la emite. |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | Ambas flags salen juntas cuando `display` está definido. |
+| `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | Igual que una cadena simple; `snapshot` viaja en la petición `initialize`. |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | Una por cada plugin `local`; los demás tipos se omiten. |
 
 **Redirección de stderr**: el stderr solo se redirige cuando `options.stderrCallback() != null`. La
 antigua detección del argumento extra `--debug-to-stderr` se eliminó en 0.1.13 (preparando la
@@ -415,6 +419,13 @@ public class RemoteTransport implements Transport {
 ```
 
 ## Usar un transporte propio
+
+Con un transporte propio, el SDK llama a su `connect()`, entrega los prompts mediante `write()` y envía
+los hooks, los agentes y los demás ajustes de la petición `initialize` (incluido `systemPromptSnapshot`)
+a través del protocolo de control. Todo lo que `SubprocessCLITransport` convierte en flags del CLI o
+variables de entorno —modelo, cwd, modo de permisos, herramientas, `env`, etc.— **no** se aplica, y se
+omite la reanudación de sesión respaldada por un store. `verbatimPrompts` sigue aplicándose, ya que el
+SDK marca los prompts antes de llamar a `write()`.
 
 ```java
 // Create custom transport

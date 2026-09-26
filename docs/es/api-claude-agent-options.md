@@ -37,10 +37,17 @@ options.toBuilder()
 - `disallowedTools(List<String>)`: lista de bloqueadas
 
 ### Prompt de sistema
-- `systemPrompt(Object)`: String, `SystemPromptPreset` o `SystemPromptFile`
+- `systemPrompt(String)`: prompt de sistema personalizado (`--system-prompt`)
+- `systemPrompt(SystemPromptPreset)`: preset de Claude Code, opcionalmente con `append`, `excludeDynamicSections` y `snapshot`
+- `systemPrompt(SystemPromptCustom)`: prompt personalizado que además puede fijar `snapshot`; `SystemPromptCustom.of(prompt, snapshot)`
+- `systemPrompt(SystemPromptFile)`: prompt cargado desde un archivo (`--system-prompt-file`)
+
+`snapshot` (solo en las formas preset y personalizada) controla si la sesión conserva el prompt que registró en su primera solicitud (`true`) o lo reconstruye en cada solicitud (`false`); se envía en la petición `initialize` como `systemPromptSnapshot` y se omite cuando es `null`. Requiere Claude Code 2.1.257+. Consulta [Opciones de configuración → Snapshot](./feature-configuration-options.md#snapshot).
 
 ### Servidores MCP
-- `mcpServers(Object)`: Map, Path o String
+- `mcpServers(Map<String, McpServerConfig>)`: configuraciones de servidor, serializadas como `{"mcpServers": {...}}` para `--mcp-config`
+- `mcpServers(Path)` / `mcpServersPath(Path)`: archivo de configuración MCP, pasado tal cual a `--mcp-config`
+- `mcpServersJson(String)`: JSON de configuración MCP en línea, pasado tal cual a `--mcp-config`
 - `strictMcpConfig(boolean)`: cuando es `true`, el CLI ignora el `.mcp.json` del proyecto, los ajustes de usuario/globales y los servidores MCP aportados por plugins; solo se cargan los servidores pasados con `mcpServers(...)`. Corresponde a `--strict-mcp-config`.
 
 ### Permisos
@@ -65,7 +72,7 @@ options.toBuilder()
 - `thinking(ThinkingConfig)`: configuración del razonamiento extendido
 - `effort(String)`: nivel de profundidad del razonamiento (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`). `"xhigh"` es propio de Opus 4.7 y recae en `"high"` en los demás modelos.
 - `effort(EffortLevel)`: igual que el anterior, pero con seguridad de tipos usando el enum [`EffortLevel`](feature-configuration-options.md#enum-effortlevel) (`LOW`, `MEDIUM`, `HIGH`, `XHIGH`, `MAX`). Pasa `null` para limpiarlo.
-- `maxThinkingTokens(Integer)`: **OBSOLETO**. Usa `thinking()`
+- `maxThinkingTokens(Integer)`: **OBSOLETO**. Usa `thinking()`. En los modelos más recientes el valor se trata como encendido/apagado (0 = desactivado, cualquier otro = adaptativo)
 - `maxMsgQSize(Integer)`: tamaño máximo de la cola de mensajes
 
 ### Modelo
@@ -77,10 +84,10 @@ options.toBuilder()
 - `cwd(Path)`: directorio de trabajo
 - `cliPath(Path)`: ruta personalizada del CLI (una ruta `.bat`/`.cmd` de Windows se rechaza; véase más abajo)
 - `allowUnsafeWindowsBatchCli(boolean)`: renuncia al rechazo de scripts batch en Windows; además exige `-Djdk.lang.Process.allowAmbiguousCommands=false` y rechaza los metacaracteres de cmd.exe en todos los argumentos (por defecto `false`)
-- `settings(String)`: ruta del archivo de ajustes
+- `settings(String)`: ruta del archivo de ajustes o cadena JSON en línea; se pasa tal cual a `--settings`, o se fusiona con `sandbox` en una única cadena JSON cuando hay un sandbox definido
 - `addDirs(List<Path>)`: directorios de contexto adicionales
-- `env(Map<String, String>)`: variables de entorno
-- `extraArgs(Map<String, String>)`: flags adicionales del CLI
+- `env(Map<String, String>)`: variables de entorno, fusionadas sobre el entorno heredado. El SDK también establece `CLAUDE_CODE_ENTRYPOINT` (sobrescribible), `CLAUDE_AGENT_SDK_VERSION` y `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` salvo que ya estén nombradas; consulta [env()](./feature-configuration-options.md#env)
+- `extraArgs(Map<String, String>)`: flags adicionales del CLI; claves sin el `--` inicial, valor en blanco para un flag sin valor
 
 ### Callbacks
 - `stderrCallback(Consumer<String>)`: callback de stderr
@@ -91,16 +98,17 @@ options.toBuilder()
 
 ### Avanzado
 - `user(String)`: identidad del usuario
-- `includePartialMessages(boolean)`: habilita el streaming
+- `includePartialMessages(boolean)`: emite un `StreamEvent` por cada evento del stream de la API (`--include-partial-messages`)
+- `verbatimPrompts(boolean)`: marca como `client_composed` todos los mensajes de usuario que envía el SDK, para que Claude Code los entregue tal como están escritos: sin expansión de `@path` ni despacho de comandos slash. Mientras está activo, sobrescribe cualquier valor por mensaje. Requiere Claude Code 2.1.248+ (el SDK avisa con CLI más antiguos). Consulta [verbatimPrompts()](./feature-configuration-options.md#verbatimprompts)
 - `forwardSubagentText(boolean)`: cuando es `true`, los bloques de texto y de razonamiento de los subagentes se reenvían al flujo de mensajes junto con los bloques `tool_use` / `tool_result`, que siempre se reenvían. Se envía en la petición de control `initialize` (sin flag de CLI). Consulta [Agentes → Observar la salida de un subagente](./feature-agents.md#observar-la-salida-de-un-subagente).
 - `agents(Map<String, AgentDefinition>)`: agentes personalizados
 - `settingSources(List<SettingSource>)`: fuentes de configuración (una lista vacía desactiva todas las fuentes con `--setting-sources=`; omitirlo mantiene los valores por defecto del CLI)
 - `skills(List<String>)`: lista de skills permitidas (inyecta automáticamente `Skill(name)` en `allowedTools` y fija `settingSources` en user/project). Los nombres deben ser exactos: los comodines, los delimitadores de reglas y los espacios alrededor lanzan `IllegalArgumentException` en `connect()`
 - `skillsAll()`: habilita todas las skills detectadas (inyecta automáticamente la herramienta `Skill` sin argumentos)
-- `sandbox(SandboxSettings)`: configuración del sandbox
-- `plugins(List<SdkPluginConfig>)`: configuración de plugins
+- `sandbox(SandboxSettings)`: configuración del sandbox para comandos bash; su clave `network` configura el aislamiento de red propio del sandbox (las restricciones a nivel de herramienta siguen en las reglas de permisos)
+- `plugins(List<SdkPluginConfig>)`: directorios de plugins locales, `SdkPluginConfig.local(path)` → `--plugin-dir`
 - `outputFormat(Map<String, Object>)`: formato de salida
-- `checkpointFiles(boolean)`: habilita los checkpoints
+- `enableFileCheckpointing(boolean)`: habilita los checkpoints de archivos para `rewindFiles()`; incompatible con `sessionStore`
 
 ## Véase también
 - [Guía de opciones de configuración](./feature-configuration-options.md)

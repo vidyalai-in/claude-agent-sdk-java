@@ -17,12 +17,12 @@ permissão são tratados.
 
 ### Modos disponíveis
 
-- **PROMPT** (padrão) — pergunta ao usuário a cada permissão
-- **ACCEPT_ALL** — aceita automaticamente todas as permissões
+- **DEFAULT** (o padrão do CLI) — comportamento de permissão padrão; ferramentas que precisam de aprovação passam por `canUseTool` ou `permissionPromptToolName`
 - **ACCEPT_EDITS** — aceita automaticamente edições de arquivo e pergunta nos demais casos
+- **PLAN** — modo de planejamento; nenhuma ferramenta é executada
 - **BYPASS_PERMISSIONS** — pula completamente as verificações de permissão
-- **DONT_ASK** — permite todas as ferramentas sem perguntar
-- **AUTO** — determina automaticamente o modo de permissão apropriado
+- **DONT_ASK** — não pergunta; nega tudo o que não estiver pré-aprovado por regras de permissão (allow)
+- **AUTO** — um classificador baseado em modelo aprova ou nega cada chamada de ferramenta
 
 ## Callback de permissão personalizado
 

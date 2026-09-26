@@ -66,6 +66,44 @@ public static List<Message> query(
 
 **送出**：上と同じで、`QueryFailedException` を含みます。
 
+ストリーム中の各メッセージは、それぞれ自分の実行を持ちます。フック、`canUseTool` コールバック、
+SDK MCP サーバーのいずれかが設定されている場合、stdin は*最後の*メッセージの実行が終わるまで開いた
+ままになります（[クエリが戻るタイミング](#クエリが戻るタイミング)を参照）。`verbatimPrompts(true)`
+の場合、各メッセージはコピーに対して `client_composed: true` を付けて書き込まれ、あなたの Map は
+変更されません。
+
+### query(..., Transport transport)
+
+```java
+public static List<Message> query(String prompt, ClaudeAgentOptions options, Transport transport)
+public static List<Message> query(Iterator<Map<String, Object>> messageStream,
+                                  ClaudeAgentOptions options, Transport transport)
+```
+
+上と同じですが、起動した CLI サブプロセスの代わりに独自の
+[`Transport`](./feature-transport-layer.md#独自のトランスポート) を使います（`null` を渡すと既定の
+ものが選ばれます）。SDK はその `connect()` を呼び、プロンプトを `write()` で届け、フック、エージェント、
+その他の `initialize` リクエストの設定を制御プロトコル経由で送ります。コマンドラインのオプション
+（モデル、cwd、権限モード、ツール、`env` など）は独自トランスポートには適用されず、ストアを使う
+セッションのレジュームも行われません。
+
+### クエリが戻るタイミング
+
+`query(...)` は CLI の出力が終わった時点で戻り、それは SDK が CLI の stdin を閉じた後に起こります。
+フック、`canUseTool`、SDK MCP サーバーがどれも無い場合、stdin はプロンプトを書き終えた時点ですぐに
+閉じられます。いずれかがある場合、CLI は `result` の後もコールバックしてくる可能性がある —— 例えば、
+完了したバックグラウンドサブエージェントが起こす後続のターンで —— ため、SDK は実行が終わるまで
+stdin を開いたままにします：
+
+- CLI がセッション状態を報告する場合は、`idle` の時点で；
+- そうでなければ、バックグラウンドタスクが何も進行中でない最初の `result` の時点で；
+- あるいは、CLI が `running` を報告し続けている間は、新しいターンが始まらないまま
+  `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`（既定 10 分、`0` = 無制限）が経過した時点で。
+
+[アーキテクチャ → stdin のライフサイクル](./architecture.md#stdin-のライフサイクルと実行の終了)
+と [エージェント → バックグラウンドのサブエージェントとコールバック](./feature-agents.md#バックグラウンドのサブエージェントとコールバック)
+を参照してください。
+
 ### エラー結果と部分メッセージ
 
 CLI は `error_max_turns` と `error_max_budget_usd` を、*完全な*ターン —— アシスタントメッセージと、

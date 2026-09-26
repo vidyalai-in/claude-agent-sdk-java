@@ -41,6 +41,8 @@ Transport transport = new SubprocessCLITransport(options);
 - 자동 정리
 - 유예 기간을 둔 정상 종료(stdin EOF 이후 SIGTERM을 보내기 전에, 서브프로세스가 세션 파일을 비울 때까지 기다림)
 - 기본적으로 `CLAUDE_CODE_ENTRYPOINT=sdk-java` 설정(`ClaudeAgentOptions.env()`로 덮어쓸 수 있음)
+- 호출자의 `env()`나 상속된 환경에 (대소문자와 무관하게) 이미 그 이름이 있지 않으면 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`을 설정해, CLI가 `sdk_host_only`가 표시된 `session_state_changed` 프레임을 보고하게 합니다. `QueryHandler`는 이를 읽어 stdin을 닫을 수 있는 시점을 판단하고, 소비자에게 닿기 전에 걸러 냅니다. [아키텍처 → stdin 수명 주기](./architecture.md#stdin-수명-주기와-실행의-끝)를 참고하세요. 전송 계층이 설정하는 변수의 전체 목록은 [구성 옵션 → env()](./feature-configuration-options.md#env)에 있습니다.
+- CLI가 2.0.0보다 오래되었을 때, 그리고 `verbatimPrompts`가 켜져 있는데 CLI가 `client_composed`를 무시하는 2.1.248 미만일 때 연결 시점에 경고(`WARNING` 로그)를 남깁니다. 버전 확인은 `<cli> -v`를 실행하며, `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK`가 설정되어 있으면 건너뜁니다.
 
 ### CLI 플래그 전달
 
@@ -52,6 +54,8 @@ Transport transport = new SubprocessCLITransport(options);
 | `sessionStore(...)` | `--session-mirror` | `sessionStore != null`일 때 추가됩니다. CLI에게 stdout으로 `transcript_mirror` 프레임을 내보내라고 알리고, SDK가 그것을 걷어내어 설정된 `SessionStore`로 전달합니다. |
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display`는 `Adaptive`와 `Enabled` 구성에서만(그리고 `display != null`일 때만) 전달됩니다. `Disabled`는 결코 내보내지 않습니다. |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | `display`가 설정되면 두 플래그가 함께 나갑니다. |
+| `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | 일반 문자열과 같습니다. `snapshot`은 대신 `initialize` 요청에 실려 갑니다. |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | `local` 플러그인마다 하나씩. 다른 타입은 건너뜁니다. |
 
 **stderr 파이프**: stderr는 `options.stderrCallback() != null`일 때만 파이프됩니다. 예전의
 `--debug-to-stderr` 추가 인자 감지는 0.1.13에서 제거되었습니다(해당 CLI 플래그의 폐기에 대비).
@@ -395,6 +399,12 @@ public class RemoteTransport implements Transport {
 ```
 
 ## 사용자 정의 전송 사용하기
+
+사용자 정의 전송을 쓰면 SDK는 그 `connect()`를 호출하고, `write()`로 프롬프트를 전달하며, 훅·에이전트·그
+밖의 `initialize` 요청 설정(`systemPromptSnapshot` 포함)을 제어 프로토콜로 보냅니다.
+`SubprocessCLITransport`가 CLI 플래그나 환경 변수로 바꾸는 모든 것 — model, cwd, 권한 모드, 도구, `env`
+등 — 은 적용되지 **않으며**, 저장소 기반 세션 재개도 건너뜁니다. `verbatimPrompts`는 여전히 적용됩니다.
+SDK가 `write()`를 호출하기 전에 프롬프트에 표시를 붙이기 때문입니다.
 
 ```java
 // Create custom transport

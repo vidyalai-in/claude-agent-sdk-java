@@ -271,6 +271,14 @@ public class HooksExample {
 }
 ```
 
+## バックグラウンドのサブエージェント終了後のフック
+
+単発の `ClaudeSDK.query(...)` では、バックグラウンドのサブエージェントの完了が起こすターンでのフックは、
+CLI がそれを呼び出す時点で stdin がまだ開いている場合にのみ実行されます。SDK は最初の result ではなく、
+実行が終わるまで stdin を開いたままにします。規則と CLI バージョンに関する注意点については
+[エージェント → バックグラウンドのサブエージェントとコールバック](./feature-agents.md#バックグラウンドのサブエージェントとコールバック)
+を、実行可能なデモについては `BackgroundAgentHooksExample` を参照してください。
+
 ## 関連項目
 - [設定オプション](./feature-configuration-options.md#フック)
 - [Hooks のサンプル](../../examples/src/main/java/examples/Hooks.java)

@@ -1,99 +1,94 @@
 # Sistema de plugins
 
-Arquitetura extensível para funcionalidades próprias no SDK.
+Carregue plugins do Claude Code — comandos de barra personalizados, agentes, skills e hooks
+empacotados em um diretório — em uma sessão do SDK.
 
 > **Sobre esta tradução**: a documentação em inglês é a única autoritativa. Esta tradução pode estar desatualizada em relação ao [original em inglês](../feature-plugin-system.md); em caso de divergência, o inglês prevalece. Os blocos de código são mantidos idênticos ao original e não foram traduzidos.
 
 ## Visão geral
 
-O sistema de plugins permite estender o comportamento do SDK com lógica própria. Plugins podem
-interceptar e modificar operações do SDK.
+Um plugin é um diretório que o Claude Code CLI carrega na inicialização. O SDK não executa código
+de plugin por conta própria: ele passa o diretório de cada plugin ao CLI com `--plugin-dir`, e o
+CLI descobre o que o plugin fornece.
 
 ## SdkPluginConfig
 
+`SdkPluginConfig` é um record aninhado em `ClaudeAgentOptions`:
+
 ```java
-public record SdkPluginConfig(
-    String name,
-    Map<String, Object> config
-)
+public record SdkPluginConfig(String type, String path) {
+    public static SdkPluginConfig local(String path);  // type = "local"
+}
 ```
+
+Apenas o tipo `"local"` é suportado. Para cada plugin `local`, o transporte acrescenta
+`--plugin-dir <path>` ao comando do CLI; uma configuração com qualquer outro `type` é ignorada sem
+erro, então sempre construa as configurações com `local(...)`.
 
 ## Configurando plugins
 
 ```java
+import in.vidyalai.claude.sdk.ClaudeAgentOptions;
+import in.vidyalai.claude.sdk.ClaudeAgentOptions.SdkPluginConfig;
+
 var options = ClaudeAgentOptions.builder()
     .plugins(List.of(
-        new SdkPluginConfig(
-            "my-plugin",
-            Map.of(
-                "setting1", "value1",
-                "setting2", 123
-            )
-        )
-    ))
+        SdkPluginConfig.local("/path/to/my-plugin"),
+        SdkPluginConfig.local("/path/to/another-plugin")))
     .build();
 ```
 
-## Casos de uso
+Os plugins são repassados na ordem da lista, um `--plugin-dir` por plugin.
 
-### Plugin de log
+## Estrutura de um plugin
 
-Acompanhe todas as operações do SDK:
+O plugin de demonstração do repositório mostra a estrutura mínima que o CLI espera:
 
-```java
-new SdkPluginConfig("logger", Map.of(
-    "level", "DEBUG",
-    "output", "/var/log/claude-sdk.log"
-))
+```
+examples/src/main/java/examples/plugins/demo-plugin/
+├── .claude-plugin/
+│   └── plugin.json       # Manifest: name, description, version, author
+└── commands/
+    └── greet.md          # A custom /greet slash command
 ```
 
-### Plugin de métricas
+`plugin.json`:
 
-Colete métricas de desempenho:
-
-```java
-new SdkPluginConfig("metrics", Map.of(
-    "endpoint", "http://metrics-server/api",
-    "interval", 60
-))
+```json
+{
+  "name": "demo-plugin",
+  "description": "A demo plugin showing how to extend Claude Code with custom commands",
+  "version": "1.0.0",
+  "author": {
+    "name": "Claude Code Team"
+  }
+}
 ```
 
-### Plugin de cache
+Plugins também podem fornecer agentes, skills e hooks; consulte a documentação de plugins do
+Claude Code para a estrutura de diretórios completa.
 
-Armazene respostas em cache:
+## Verificando se um plugin foi carregado
 
-```java
-new SdkPluginConfig("cache", Map.of(
-    "ttl", 3600,
-    "maxSize", 1000
-))
-```
-
-## Exemplo
+O CLI informa os plugins carregados no campo `plugins` da mensagem de sistema `init`, uma lista de
+maps com `name` e `path`:
 
 ```java
-public class PluginsExample {
-    public static void main(String[] args) {
-        var options = ClaudeAgentOptions.builder()
-            .plugins(List.of(
-                new SdkPluginConfig("logger", Map.of(
-                    "level", "INFO",
-                    "format", "json"
-                )),
-                new SdkPluginConfig("metrics", Map.of(
-                    "enabled", true
-                ))
-            ))
-            .build();
-
-        List<Message> messages = ClaudeSDK.query(
-            "What is Java?",
-            options
-        );
+for (Message msg : ClaudeSDK.query("Hello!", options)) {
+    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
+        @SuppressWarnings("unchecked")
+        List<Object> plugins = (List<Object>) system.get("plugins");
+        if (plugins != null) {
+            for (Object p : plugins) {
+                if (p instanceof Map<?, ?> plugin) {
+                    System.out.println(plugin.get("name") + " (" + plugin.get("path") + ")");
+                }
+            }
+        }
     }
 }
 ```
 
 ## Veja também
-- [Opções de configuração](./feature-configuration-options.md#recursos-avançados) — opção plugins
+- [Opções de configuração](./feature-configuration-options.md#plugins) — opção plugins
 - [Exemplo de Plugins](../../examples/src/main/java/examples/PluginsExample.java)

@@ -66,6 +66,28 @@ public static List<Message> query(
 
 **抛出**：与上文相同，包括 `QueryFailedException`。
 
+流中的每条消息都各自对应一次运行：配置了钩子、`canUseTool` 回调或 SDK MCP 服务器时，stdin 会一直保持打开，直到*最后*一条消息的运行结束（参见[查询何时返回](#查询何时返回)）。使用 `verbatimPrompts(true)` 时，每条消息都会带上 `client_composed: true` 写出，标记加在副本上；你的 map 不会被修改。
+
+### query(..., Transport transport)
+
+```java
+public static List<Message> query(String prompt, ClaudeAgentOptions options, Transport transport)
+public static List<Message> query(Iterator<Map<String, Object>> messageStream,
+                                  ClaudeAgentOptions options, Transport transport)
+```
+
+与上面相同，但通过自定义 [`Transport`](./feature-transport-layer.md#自定义传输) 进行，而不是启动 CLI 子进程（传入 `null` 则使用默认传输）。SDK 会调用它的 `connect()`，通过 `write()` 投递提示词，并经由控制协议发送钩子、agent 以及其他 `initialize` 请求中的设置。命令行选项（model、cwd、权限模式、tools、`env` 等）不会应用到自定义传输层上，基于存储的会话恢复也会被跳过。
+
+### 查询何时返回
+
+`query(...)` 在 CLI 的输出结束后返回，而这发生在 SDK 关闭 CLI 的 stdin 之后。没有钩子、`canUseTool` 或 SDK MCP 服务器时，提示词一写完 stdin 就会关闭。只要配置了其中任意一项，CLI 就可能在 `result` 之后仍然发起回调 —— 例如在已完成的后台子 agent 唤醒的后续轮次中 —— 因此 SDK 会保持 stdin 打开，直到运行结束：
+
+- 在 CLI 报告会话状态时，于 `idle` 时结束；
+- 否则，在第一个没有后台任务在执行的 `result` 时结束；
+- 或者，当 CLI 持续报告 `running` 时，在经过 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`（默认 10 分钟，`0` = 不限制）且没有新轮次之后结束。
+
+参见[架构 → stdin 的生命周期](./architecture.md#stdin-的生命周期与一次运行的结束)和 [Agent → 后台子 agent 与回调](./feature-agents.md#后台子-agent-与回调)。
+
 ### 错误结果与部分消息
 
 CLI 报告 `error_max_turns` 与 `error_max_budget_usd` 的方式，是发出一个*完整*的轮次 —— 助手消息，

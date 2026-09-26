@@ -27,7 +27,7 @@ Guía completa para configurar el comportamiento del SDK de Claude con `ClaudeAg
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .maxTurns(10)
     .permissionMode(PermissionMode.BYPASS_PERMISSIONS)
     .build();
@@ -42,7 +42,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ClaudeAgentOptions.Builder builder = ClaudeAgentOptions.builder();
 
 // Configure
-builder.model("claude-sonnet-4-5")
+builder.model("claude-sonnet-5")
        .maxTurns(10);
 
 // Build immutable instance
@@ -149,9 +149,40 @@ Define un prompt de sistema personalizado para guiar el comportamiento de Claude
 // Use Claude Code preset with exclude_dynamic_sections for cross-user caching
 .systemPrompt(SystemPromptPreset.claudeCode("Custom instructions", true))
 
+// Custom prompt in the form that can also set snapshot (see below)
+.systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+
 // Use prompt from file
 .systemPrompt(new SystemPromptFile("/path/to/prompt.md"))
 ```
+
+| Forma | Se envía a la CLI como |
+|------|--------------------|
+| `String` | `--system-prompt <text>` |
+| `SystemPromptCustom` | `--system-prompt <prompt>`, más `snapshot` en la petición `initialize` |
+| `SystemPromptPreset` | `--append-system-prompt <append>` cuando `append` está definido; `excludeDynamicSections` y `snapshot` en la petición `initialize` |
+| `SystemPromptFile` | `--system-prompt-file <path>` |
+| sin definir (`null`) | `--system-prompt ""` (sin prompt de sistema) |
+
+#### Snapshot
+
+De forma predeterminada, Claude Code construye el prompt de sistema en la primera solicitud de una
+sesión, lo registra y lo reutiliza en todas las solicitudes posteriores, incluso después de reanudar
+la sesión. Por eso, un prompt personalizado modificado, o un texto `append` modificado sobre el preset,
+no tiene efecto hasta que la sesión se compacta o se inicia una sesión nueva. Para reconstruir el
+prompt en cada solicitud, por ejemplo mientras iteras sobre su redacción, establece `snapshot` en
+`false`:
+
+```java
+.systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+.systemPrompt(SystemPromptPreset.claudeCode("Be concise.").withSnapshot(false))
+```
+
+`snapshot` viaja en la petición de control `initialize` como `systemPromptSnapshot`. Se envía siempre
+que esté definido, incluido `false`, y se omite cuando es `null`, de modo que se aplica el valor por
+defecto de la CLI: `true`, salvo en modo bare (`--bare`), donde actúa como `false`. Solo lo llevan las
+formas preset y personalizada. Requiere Claude Code CLI 2.1.257 o posterior; antes de la 2.1.265, una
+sesión con un prompt `append` o personalizado solo lo registraba cuando `snapshot` era `true`.
 
 ## Servidores MCP
 
@@ -180,16 +211,20 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
     "external", externalServer
 ))
 
-// From file path
-.mcpServers(Path.of("~/.claude/mcp_servers.json"))
+// From file path (passed as-is to --mcp-config; Java does not expand "~")
+.mcpServers(Path.of(System.getProperty("user.home"), ".claude", "mcp_servers.json"))
 
-// From JSON string
-.mcpServers("""
-    {
+// From an inline JSON string (also passed as-is to --mcp-config)
+.mcpServersJson("""
+    {"mcpServers": {
         "server1": {"type": "stdio", "command": "node", "args": ["server.js"]}
-    }
+    }}
     """)
 ```
+
+Un mapa se serializa como `{"mcpServers": {...}}` antes de llegar a `--mcp-config`; una ruta o una
+cadena JSON se pasan sin tocar, así que una cadena JSON debe usar esa misma clave de nivel superior
+`mcpServers`.
 
 ## Ajustes de permisos
 
@@ -202,12 +237,12 @@ Controla cómo se gestionan los permisos de las herramientas.
 ```
 
 **Modos**:
-- `PROMPT` (predeterminado) — pregunta en cada permiso
-- `ACCEPT_ALL` — acepta todos los permisos automáticamente
+- `DEFAULT` (el valor por defecto de la CLI) — comportamiento de permisos estándar
 - `ACCEPT_EDITS` — acepta las ediciones de archivos automáticamente, pregunta en el resto
+- `PLAN` — modo de planificación; no se ejecuta ninguna herramienta
 - `BYPASS_PERMISSIONS` — omite por completo las comprobaciones de permisos
-- `DONT_ASK` — permite todas las herramientas sin preguntar
-- `AUTO` — determina automáticamente el modo de permisos adecuado
+- `DONT_ASK` — no pregunta; deniega todo lo que no esté aprobado de antemano por reglas allow
+- `AUTO` — un clasificador basado en un modelo aprueba o deniega cada llamada a herramienta
 
 ### permissionPromptToolName()
 
@@ -413,9 +448,11 @@ String wire = level.getValue(); // "xhigh"
 
 ### maxThinkingTokens()
 
-**OBSOLETO**: usa `thinking()` en su lugar.
+**OBSOLETO**: usa `thinking()` en su lugar: adaptativo, habilitado con un presupuesto de tokens, o
+deshabilitado.
 
-Tokens máximos para los bloques de razonamiento.
+Tokens máximos para los bloques de razonamiento. En los modelos más recientes este valor se trata como
+encendido/apagado (0 = deshabilitado, cualquier otro valor = adaptativo).
 
 ```java
 .maxThinkingTokens(10000)  // Deprecated - use thinking() instead
@@ -438,7 +475,7 @@ Auméntalo en escenarios de alto rendimiento.
 Establece el modelo de IA.
 
 ```java
-.model("claude-sonnet-4-5")
+.model("claude-sonnet-5")
 ```
 
 **Modelos disponibles**:
@@ -511,11 +548,18 @@ Esto **no** es un simple bypass: una exención a secas devolvería íntegro el a
 
 ### settings()
 
-Ruta a un archivo JSON de ajustes.
+Ruta a un archivo JSON de ajustes adicional, o una cadena JSON en línea.
 
 ```java
 .settings("/path/to/settings.json")
+.settings("{\"permissions\": {\"allow\": [\"Read\"]}}")
 ```
+
+Sin `sandbox()`, el valor se pasa tal cual a `--settings`. Si también se define `sandbox()`, ambos se
+fusionan en una única cadena JSON: un valor que empieza por `{` y termina en `}` se analiza como JSON,
+y cualquier otro se lee como ruta de archivo (un archivo inexistente o ilegible se registra en el log y
+solo se pasan los ajustes del sandbox). Se cargan en la capa de «flag settings» de la CLI, la de mayor
+prioridad entre los ajustes controlados por el usuario.
 
 ### addDirs()
 
@@ -542,16 +586,39 @@ Establece variables de entorno para el proceso de la CLI.
 ))
 ```
 
+El mapa se fusiona sobre el entorno del proceso padre: sus entradas sobrescriben los valores heredados,
+y `CLAUDECODE` se elimina del conjunto heredado. El transporte también establece:
+
+| Variable | Cuándo | Sobrescribible aquí |
+|----------|------|------------------|
+| `CLAUDE_CODE_ENTRYPOINT=sdk-java` | siempre | sí |
+| `CLAUDE_AGENT_SDK_VERSION` | siempre | no |
+| `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` | salvo que este mapa o el entorno heredado ya la nombren (con cualquier combinación de mayúsculas y minúsculas) | sí |
+| `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` | `enableFileCheckpointing(true)` | — |
+| `PWD` | `cwd(...)` está definido | — |
+| `TRACEPARENT` / `TRACESTATE` | hay un span de OpenTelemetry activo (consulta [Contexto de trazas](./feature-trace-context.md)) | sí |
+
+Dos variables ajustan cuánto tiempo mantiene abierto el stdin una consulta de un solo uso para los hooks
+y las llamadas MCP del SDK (consulta [Arquitectura → Ciclo de vida del stdin](./architecture.md#ciclo-de-vida-del-stdin-y-el-final-de-una-ejecución)):
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` acota la espera entre turnos (por defecto `600000`, `0` para no
+poner límite), y `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` activa los marcos `session_state_changed` de
+la CLI. Define `CLAUDE_AGENT_SDK_CLIENT_APP` (por ejemplo, `"my-app/1.0.0"`) para identificar tu
+aplicación en la cabecera User-Agent.
+
 ### extraArgs()
 
 Pasa banderas arbitrarias a la CLI.
 
 ```java
 .extraArgs(Map.of(
-    "--verbose", "",
-    "--config", "custom.json"
+    "replay-user-messages", "",   // flag with no value: --replay-user-messages
+    "debug", "api"                // flag with a value: --debug api
 ))
 ```
+
+Las claves son nombres de bandera **sin** el `--` inicial; el transporte lo añade. Un valor `null` o en
+blanco emite una bandera sin valor. Un valor que empieza por `-` se envía con la forma `--flag=value`
+para que no pueda interpretarse como una bandera aparte; cualquier otro valor se envía como dos tokens.
 
 ## Callbacks
 
@@ -645,7 +712,39 @@ Habilita el streaming de mensajes parciales.
 .includePartialMessages(true)
 ```
 
-Recibe mensajes `StreamEvent` con deltas conforme se genera el contenido.
+Recibe mensajes `StreamEvent` con deltas conforme se genera el contenido, uno por cada evento del
+stream de la API.
+
+### verbatimPrompts()
+
+Entrega todos los prompts a Claude tal como están escritos.
+
+```java
+.verbatimPrompts(true)
+```
+
+Claude Code normalmente expande un `@/absolute/path` en el texto del prompt al contenido de ese
+archivo, fuera del directorio de trabajo y sin llamada a herramienta, y despacha un `/command` inicial
+como comando slash. Eso encaja con texto que ha tecleado un usuario; no encaja con texto que tu
+aplicación ha montado a partir de otras fuentes (turnos anteriores, resultados de herramientas,
+contenido de terceros). Con esta opción activada, todos los mensajes de usuario que escribe el SDK se
+marcan con `client_composed: true`, y Claude Code los entrega exactamente como se dieron. Eso abarca
+los prompts de cadena y en streaming de `ClaudeSDK.query`, y `ClaudeSDKClient.connect(String)`,
+`query(String)` y `query(Iterator)`.
+
+- La marca se pone sobre una copia; tus mapas de mensajes nunca se modifican.
+- Mientras la opción está activada, sobrescribe cualquier valor `client_composed` de un mensaje en
+  streaming. Para controlarlo por turno, déjala desactivada y pon `"client_composed": true` en los
+  mensajes en streaming concretos; el SDK lo transmite sin tocarlo.
+- En las versiones actuales de Claude Code, un turno literal también se salta la fase de adjuntos del
+  inicio del turno: las menciones MCP `@server:resource` no se expanden, y el prompt se envía sin el
+  contexto que normalmente se adjunta con él (archivos `CLAUDE.md` anidados y de reglas, listados de
+  skills y herramientas, otros recordatorios por turno). La mayor parte de ese contexto llega, en su
+  lugar, después de la primera llamada a herramienta del turno.
+- Requiere Claude Code 2.1.248 o posterior. Las versiones anteriores ignoran el campo, y el transporte
+  registra un `WARNING` al conectar cuando detecta una.
+
+Consulta `examples/VerbatimPromptsExample.java`.
 
 ### forwardSubagentText()
 
@@ -729,6 +828,13 @@ Detalles de comportamiento:
 
 Configura el sandbox de los comandos bash.
 
+Cuando está habilitado, los comandos se ejecutan en un entorno aislado que restringe el acceso al
+sistema de archivos y a la red. Las restricciones de sistema de archivos y de red a nivel de
+herramienta se siguen configurando con reglas de permisos (`Read`/`Edit` para el sistema de archivos,
+`WebFetch` para la red); el ajuste `network` de más abajo configura el aislamiento de red propio del
+sandbox para los comandos bash aislados. Definir un sandbox también cambia cómo se pasa `settings()`;
+consulta [settings()](#settings).
+
 ```java
 // Minimal: just enable sandboxing.
 .sandbox(new SandboxSettings(true))
@@ -774,13 +880,15 @@ Se conserva un constructor retrocompatible de 5 argumentos `(allowUnixSockets, a
 
 ### plugins()
 
-Añade plugins personalizados.
+Carga plugins de Claude Code desde directorios locales.
 
 ```java
 .plugins(List.of(
-    new SdkPluginConfig("my-plugin", config)
+    ClaudeAgentOptions.SdkPluginConfig.local("/path/to/my-plugin")
 ))
 ```
+
+Cada plugin `local` se convierte en `--plugin-dir <path>`. Consulta [Sistema de plugins](./feature-plugin-system.md).
 
 ### outputFormat()
 
@@ -800,15 +908,18 @@ Formato de salida estructurada (estilo Messages API).
 ))
 ```
 
-### checkpointFiles()
+### enableFileCheckpointing()
 
 Habilita los checkpoints de archivos para poder revertir.
 
 ```java
-.checkpointFiles(true)
+.enableFileCheckpointing(true)
+.extraArgs(Map.of("replay-user-messages", ""))  // so UserMessage carries a uuid
 ```
 
-Permite usar `ClaudeSDKClient.rewindFiles()`.
+Establece `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` en el proceso de la CLI y permite usar
+`ClaudeSDKClient.rewindFiles(userMessageId)`. Reproducir los mensajes de usuario es lo que te da el
+`uuid` al que volver. No se puede combinar con `sessionStore()`.
 
 ## Ejemplos completos
 
@@ -816,7 +927,7 @@ Permite usar `ClaudeSDKClient.rewindFiles()`.
 
 ```java
 var options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .cwd(Path.of("/path/to/codebase"))
     .allowedTools(List.of("Read", "Grep", "Glob"))
     .disallowedTools(List.of("Write", "Edit", "Bash"))
@@ -833,7 +944,7 @@ var options = ClaudeAgentOptions.builder()
 var calcServer = ClaudeSDK.createSdkMcpServer("calc", new Calculator());
 
 var options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .cwd(Path.of("/project"))
     .allowedTools(List.of(
         "Read", "Write", "Edit", "Grep", "Glob",
@@ -842,7 +953,7 @@ var options = ClaudeAgentOptions.builder()
     .mcpServers(Map.of("calc", calcServer))
     .permissionMode(PermissionMode.ACCEPT_EDITS)
     .maxTurns(50)
-    .checkpointFiles(true)
+    .enableFileCheckpointing(true)
     .systemPrompt("""
         You are a development assistant.
         - Write clean, tested code
@@ -904,7 +1015,7 @@ var options = ClaudeAgentOptions.builder()
 ```java
 // First session
 var options1 = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .build();
 
 try (var client = ClaudeSDK.createClient(options1)) {
@@ -915,7 +1026,7 @@ try (var client = ClaudeSDK.createClient(options1)) {
 
 // Resume later with context
 var options2 = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .resume("previous-session-id")
     .build();
 
@@ -971,7 +1082,7 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 ```java
 // ✅ Good: Match model to task
 .model("claude-haiku-4-5")  // Simple tasks
-.model("claude-sonnet-4-5") // Balanced
+.model("claude-sonnet-5") // Balanced
 .model("claude-opus-4-6")   // Complex reasoning
 
 // ❌ Bad: Always using most expensive
@@ -1014,10 +1125,11 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 
 ```java
 // ✅ Good: Enable for safety
-.checkpointFiles(true)
+.enableFileCheckpointing(true)
+.extraArgs(Map.of("replay-user-messages", ""))
 
-// Allows rewinding if mistakes
-client.rewindFiles(checkpointId);
+// Allows rewinding if mistakes: pass the uuid of a replayed UserMessage
+client.rewindFiles(userMessageUuid);
 ```
 
 ### 7. Trata los datos sensibles con cuidado

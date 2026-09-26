@@ -266,6 +266,10 @@ public class HooksExample {
 }
 ```
 
+## 后台子 agent 完成之后的钩子
+
+使用一次性的 `ClaudeSDK.query(...)` 时，在后台子 agent 完成所唤醒的那一轮中，钩子只有在 CLI 调用它时 stdin 仍然打开才会运行。SDK 会保持 stdin 打开直到运行结束，而不是在第一个 result 处关闭；相关规则以及一条关于 CLI 版本的注意事项参见 [Agent → 后台子 agent 与回调](./feature-agents.md#后台子-agent-与回调)，可运行的演示参见 `BackgroundAgentHooksExample`。
+
 ## 另见
 - [配置选项](./feature-configuration-options.md#钩子)
 - [Hooks 示例](../../examples/src/main/java/examples/Hooks.java)

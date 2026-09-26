@@ -13,6 +13,7 @@ com tarefas específicas.
 - [Agentes baseados no sistema de arquivos](#agentes-baseados-no-sistema-de-arquivos)
 - [Definições de agente grandes](#definições-de-agente-grandes)
 - [Observando a saída de um subagente](#observando-a-saída-de-um-subagente)
+- [Subagentes em segundo plano e callbacks](#subagentes-em-segundo-plano-e-callbacks)
 - [Exemplos](#exemplos)
 
 ## Visão geral
@@ -259,6 +260,40 @@ Ler a transcrição completa de um subagente *já concluído* é outro caminho �
 sessões](./feature-session-history.md) para `listSubagents()` e `getSubagentMessages()`, cujos
 resultados trazem o mesmo `parentToolUseId` mais um `parentAgentId` para subagentes aninhados.
 
+## Subagentes em segundo plano e callbacks
+
+Um subagente iniciado com `run_in_background` continua rodando depois que o turno do pai termina
+e, quando conclui, sua conclusão acorda o pai para um turno de continuação. Com um
+`ClaudeSDK.query(...)` pontual que tenha hooks, um callback `canUseTool` ou servidores MCP do SDK,
+esses callbacks no turno de continuação só funcionam enquanto o stdin ainda estiver aberto. Por
+isso, o SDK não fecha o stdin no primeiro `result`:
+
+- Enquanto uma tarefa `local_agent` ou `local_workflow` ainda estiver em andamento, o stdin
+  permanece aberto.
+- Quando o CLI informa o estado da sessão, o stdin é fechado em `idle` após um resultado, de modo
+  que um turno de continuação devido a um subagente que terminou *logo antes* do resultado ainda é
+  atendido.
+- A espera entre turnos é limitada por `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (10 minutos por
+  padrão, `0` para sem limite).
+
+O SDK pede o estado da sessão ao CLI com `CLAUDE_CODE_SDK_READS_SESSION_STATE`. O Claude Code
+2.1.283 ainda não respeita essa variável; com um CLI assim, o stdin é fechado no primeiro resultado
+sem nenhuma tarefa em andamento, e se os callbacks do turno de continuação vão rodar depende do
+momento em que as coisas acontecem. Definir `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` em `env()`
+faz o CLI informar o estado já hoje, ao custo de os quadros `session_state_changed` também chegarem
+ao seu iterador:
+
+```java
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .agents(Map.of("worker", worker))
+    .hooks(hooks)
+    .env(Map.of("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"))
+    .build();
+```
+
+O `ClaudeSDKClient` não é afetado: ele mantém o stdin aberto até você desconectar. As regras
+completas estão em [Arquitetura → Ciclo de vida do stdin](./architecture.md#ciclo-de-vida-do-stdin-e-o-fim-de-uma-execução).
+
 ## Exemplos
 
 Veja os arquivos de exemplo para demonstrações completas e executáveis:
@@ -267,6 +302,7 @@ Veja os arquivos de exemplo para demonstrações completas e executáveis:
 - [`FilesystemAgentsExample.java`](../../examples/src/main/java/examples/FilesystemAgentsExample.java) — carregando agentes de arquivos em `.claude/agents/`
 - [`LargeAgentsExample.java`](../../examples/src/main/java/examples/LargeAgentsExample.java) — teste de estresse com cargas de agente acima de 260KB
 - [`ForwardSubagentTextExample.java`](../../examples/src/main/java/examples/ForwardSubagentTextExample.java) — a mesma execução com o encaminhamento de texto do subagente desligado e ligado
+- [`BackgroundAgentHooksExample.java`](../../examples/src/main/java/examples/BackgroundAgentHooksExample.java) — um hook `PreToolUse` atendido no turno de continuação que a conclusão de um subagente em segundo plano desperta
 
 ## Veja também
 

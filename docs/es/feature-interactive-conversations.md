@@ -363,10 +363,12 @@ client.setPermissionMode(PermissionMode.ACCEPT_EDITS);
 ```
 
 **Modos disponibles**:
-- `ACCEPT_ALL` — acepta todos los permisos automáticamente
+- `DEFAULT` — comportamiento de permisos estándar (el valor por defecto del CLI)
 - `ACCEPT_EDITS` — acepta las ediciones automáticamente, pregunta en el resto
+- `PLAN` — modo de planificación; no se ejecuta ninguna herramienta
 - `BYPASS_PERMISSIONS` — omite todas las comprobaciones de permisos
-- `PROMPT` — pregunta en todos los permisos (predeterminado)
+- `DONT_ASK` — deniega todo lo que no esté aprobado de antemano por reglas allow
+- `AUTO` — un clasificador basado en un modelo aprueba o deniega cada llamada a herramienta
 
 ### rewindFiles(String userMessageId)
 
@@ -375,7 +377,8 @@ Revierte los archivos al estado de un mensaje de usuario (requiere el checkpoint
 ```java
 // Enable checkpointing in options
 var options = ClaudeAgentOptions.builder()
-    .checkpointFiles(true)
+    .enableFileCheckpointing(true)
+    .extraArgs(Map.of("replay-user-messages", ""))  // so UserMessage carries a uuid
     .build();
 
 try (var client = ClaudeSDK.createClient(options)) {
@@ -384,7 +387,7 @@ try (var client = ClaudeSDK.createClient(options)) {
     client.sendMessage("Create file.txt");
     for (var msg : client.receiveResponse()) {
         if (msg instanceof UserMessage user) {
-            String messageId = user.id();
+            String messageId = user.uuid();
             // Save ID for later
         }
     }
@@ -399,8 +402,10 @@ try (var client = ClaudeSDK.createClient(options)) {
 Obtiene el estado de las conexiones con servidores MCP.
 
 ```java
-Map<String, Object> status = client.getMcpStatus();
-System.out.println("MCP servers: " + status);
+McpStatusResponse status = client.getMcpStatus();
+for (McpServerStatus server : status.mcpServers()) {
+    System.out.println(server.name() + ": " + server.status());
+}
 ```
 
 ### getServerInfo()
@@ -409,7 +414,7 @@ Obtiene la información de inicialización del servidor.
 
 ```java
 Map<String, Object> info = client.getServerInfo();
-System.out.println("CLI version: " + info.get("version"));
+System.out.println("Commands: " + info.get("commands"));
 ```
 
 ## Gestión de sesiones
@@ -702,7 +707,8 @@ public class MultiSession {
 public class Checkpointing {
     public static void main(String[] args) {
         var options = ClaudeAgentOptions.builder()
-            .checkpointFiles(true)
+            .enableFileCheckpointing(true)
+            .extraArgs(Map.of("replay-user-messages", ""))
             .build();
 
         try (var client = ClaudeSDK.createClient(options)) {
@@ -714,7 +720,7 @@ public class Checkpointing {
             client.sendMessage("Create test.txt with 'Hello'");
             for (var msg : client.receiveResponse()) {
                 if (msg instanceof UserMessage user) {
-                    checkpointId = user.id();
+                    checkpointId = user.uuid();
                 }
             }
 

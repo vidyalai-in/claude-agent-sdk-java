@@ -66,6 +66,40 @@ public static List<Message> query(
 
 **던짐**: 위와 같으며 `QueryFailedException`을 포함합니다.
 
+스트림의 각 메시지는 저마다 하나의 실행을 가집니다: 훅, `canUseTool` 콜백, SDK MCP 서버 중 하나라도
+구성되어 있으면 *마지막* 메시지의 실행이 끝날 때까지 stdin이 열려 있습니다([질의가 반환되는
+시점](#질의가-반환되는-시점) 참고). `verbatimPrompts(true)`이면 각 메시지는 사본에
+`client_composed: true`가 붙은 채로 기록되며, 여러분의 Map은 수정되지 않습니다.
+
+### query(..., Transport transport)
+
+```java
+public static List<Message> query(String prompt, ClaudeAgentOptions options, Transport transport)
+public static List<Message> query(Iterator<Map<String, Object>> messageStream,
+                                  ClaudeAgentOptions options, Transport transport)
+```
+
+위와 같지만, CLI 서브프로세스를 띄우는 대신 사용자 정의 [`Transport`](./feature-transport-layer.md#사용자-정의-전송)를
+사용합니다(`null`이면 기본값). SDK는 그 `connect()`를 호출하고, `write()`로 프롬프트를 전달하며,
+훅·에이전트·그 밖의 `initialize` 요청 설정을 제어 프로토콜로 보냅니다. 명령줄 옵션(model, cwd,
+권한 모드, 도구, `env` 등)은 사용자 정의 전송에 적용되지 않으며, 저장소 기반 세션 재개도 건너뜁니다.
+
+### 질의가 반환되는 시점
+
+`query(...)`는 CLI의 출력이 끝나면 반환하며, 이는 SDK가 CLI의 stdin을 닫은 뒤에 일어납니다. 훅,
+`canUseTool`, SDK MCP 서버가 없으면 프롬프트를 쓰자마자 stdin을 닫습니다. 그중 하나라도 있으면
+CLI가 `result` 이후에도 — 예를 들어 끝난 백그라운드 서브에이전트가 깨우는 후속 턴에서 — 다시 호출할
+수 있으므로, SDK는 실행이 끝날 때까지 stdin을 열어 둡니다:
+
+- CLI가 세션 상태를 보고하는 경우, `idle`에서;
+- 그렇지 않으면 진행 중인 백그라운드 작업이 없는 첫 `result`에서;
+- 또는 CLI가 계속 `running`을 보고하는 동안, 새 턴 없이
+  `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`(기본 10분, `0` = 제한 없음)가 지난 뒤.
+
+[아키텍처 → stdin 수명 주기](./architecture.md#stdin-수명-주기와-실행의-끝)와
+[에이전트 → 백그라운드 서브에이전트와 콜백](./feature-agents.md#백그라운드-서브에이전트와-콜백)을
+참고하세요.
+
 ### 오류 결과와 부분 메시지
 
 CLI는 `error_max_turns`와 `error_max_budget_usd`를, *완전한* 턴 — 어시스턴트 메시지와 하위 타입·비용·

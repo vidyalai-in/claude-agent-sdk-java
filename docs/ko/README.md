@@ -218,6 +218,26 @@ var messages = List.of(
 List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 ```
 
+### 시스템 프롬프트
+
+기본적으로 Claude Code는 세션의 첫 요청에서 시스템 프롬프트를 구성해 기록해 두고, 세션을 재개한 뒤를
+포함해 이후의 모든 요청에서 이를 재사용합니다. 따라서 사용자 정의 프롬프트를 바꾸거나 `claude_code`
+프리셋의 `append` 텍스트를 바꾸더라도, 세션이 압축(compact)되거나 새 세션을 시작하기 전까지는 효과가
+없습니다. 예를 들어 프롬프트 문구를 반복해서 다듬는 중이라서 매 요청마다 프롬프트를 다시 구성하고 싶다면,
+`SystemPromptCustom` 또는 `SystemPromptPreset`에서 `snapshot`을 `false`로 설정하세요:
+
+```java
+var options = ClaudeAgentOptions.builder()
+    .systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+    // or: .systemPrompt(SystemPromptPreset.claudeCode("Be concise.").withSnapshot(false))
+    .build();
+```
+
+Claude Code CLI 2.1.257 이상이 필요합니다. 2.1.265 이전에는 `append` 또는 사용자 정의 프롬프트를 쓰는
+세션이 `snapshot`이 `true`일 때만 프롬프트를 기록했습니다. 자세한 내용은
+[시스템 프롬프트 수정하기](https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts#change-the-prompt-of-an-existing-session)를
+참고하세요.
+
 ## ClaudeSDKClient
 
 `ClaudeSDKClient`는 Claude Code와의 양방향 대화형 세션을 지원합니다. `query()`와 달리
@@ -297,7 +317,7 @@ try (var client = ClaudeSDK.createClient()) {
     client.connect("Start with default model");
 
     // Switch to a different model mid-conversation
-    client.setModel("claude-sonnet-4-5");
+    client.setModel("claude-sonnet-5");
 
     client.sendMessage("Continue with new model");
 }

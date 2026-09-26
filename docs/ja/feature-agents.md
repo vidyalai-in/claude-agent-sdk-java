@@ -12,6 +12,7 @@
 - [ファイルシステムベースのエージェント](#ファイルシステムベースのエージェント)
 - [大きなエージェント定義](#大きなエージェント定義)
 - [サブエージェントの出力の観測](#サブエージェントの出力の観測)
+- [バックグラウンドのサブエージェントとコールバック](#バックグラウンドのサブエージェントとコールバック)
 - [サンプル](#サンプル)
 
 ## 概要
@@ -258,6 +259,35 @@ for (Message msg : ClaudeSDK.query(prompt, options)) {
 `getSubagentMessages()` については[セッション履歴](./feature-session-history.md)を参照してください。
 それらの結果も同じ `parentToolUseId` を持ち、入れ子のサブエージェントには `parentAgentId` も付きます。
 
+## バックグラウンドのサブエージェントとコールバック
+
+`run_in_background` で起動したサブエージェントは、親のターンが終わった後も動き続け、終わるとその完了が
+親を起こして後続のターンが走ります。フック、`canUseTool` コールバック、SDK MCP サーバーのいずれかを
+持つ単発の `ClaudeSDK.query(...)` では、後続ターンでのそれらのコールバックは stdin がまだ開いている
+間しか動きません。そのため SDK は最初の `result` で stdin を閉じません：
+
+- `local_agent` または `local_workflow` のタスクがまだ進行中の間は、stdin は開いたままです。
+- CLI がセッション状態を報告する場合、stdin は result の後の `idle` で閉じられるので、result の
+  *直前*に終わったサブエージェントが求める後続ターンも処理されます。
+- ターン間の待ち時間は `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`（既定 10 分、`0` で無制限）で制限されます。
+
+SDK は `CLAUDE_CODE_SDK_READS_SESSION_STATE` で CLI にセッション状態を求めます。Claude Code 2.1.283
+はまだこれに対応していません。そのような CLI では、タスクが何も進行中でない最初の result で stdin が
+閉じられ、後続ターンのコールバックが動くかどうかはタイミング次第になります。`env()` で
+`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` を設定すると、現時点でも CLI に状態を報告させられますが、
+その代わりに `session_state_changed` フレームがあなたのイテレータにも届くようになります：
+
+```java
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .agents(Map.of("worker", worker))
+    .hooks(hooks)
+    .env(Map.of("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"))
+    .build();
+```
+
+`ClaudeSDKClient` は影響を受けません。切断するまで stdin を開いたままにするからです。規則の全体は
+[アーキテクチャ → stdin のライフサイクル](./architecture.md#stdin-のライフサイクルと実行の終了)にあります。
+
 ## サンプル
 
 実行できる完全なデモについてはサンプルファイルを参照してください：
@@ -266,6 +296,7 @@ for (Message msg : ClaudeSDK.query(prompt, options)) {
 - [`FilesystemAgentsExample.java`](../../examples/src/main/java/examples/FilesystemAgentsExample.java) —— `.claude/agents/` のファイルからエージェントを読み込む
 - [`LargeAgentsExample.java`](../../examples/src/main/java/examples/LargeAgentsExample.java) —— 260KB 超のエージェントペイロードによるストレステスト
 - [`ForwardSubagentTextExample.java`](../../examples/src/main/java/examples/ForwardSubagentTextExample.java) —— サブエージェントのテキスト転送をオフ／オンにした同じ実行
+- [`BackgroundAgentHooksExample.java`](../../examples/src/main/java/examples/BackgroundAgentHooksExample.java) —— バックグラウンドサブエージェントの完了が起こす後続ターンで処理される `PreToolUse` フック
 
 ## 関連項目
 
