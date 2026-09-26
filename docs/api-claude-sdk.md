@@ -64,6 +64,44 @@ Execute streaming query with multiple messages.
 
 **Throws**: same as above, including `QueryFailedException`.
 
+Each message in the stream owes a run of its own: with hooks, a `canUseTool`
+callback or SDK MCP servers configured, stdin stays open until the *last*
+message's run has ended (see [When the query returns](#when-the-query-returns)).
+With `verbatimPrompts(true)`, each message is written with `client_composed: true`,
+on a copy; your maps are not modified.
+
+### query(..., Transport transport)
+
+```java
+public static List<Message> query(String prompt, ClaudeAgentOptions options, Transport transport)
+public static List<Message> query(Iterator<Map<String, Object>> messageStream,
+                                  ClaudeAgentOptions options, Transport transport)
+```
+
+The same, over a custom [`Transport`](./feature-transport-layer.md#custom-transport)
+instead of a spawned CLI subprocess (`null` selects the default). The SDK calls
+its `connect()`, delivers the prompt over `write()`, and sends hooks, agents and
+the other `initialize`-request settings through the control protocol.
+Command-line options (model, cwd, permission mode, tools, `env`, …) are not
+applied to a custom transport, and store-backed session resume is skipped.
+
+### When the query returns
+
+`query(...)` returns once the CLI's output ends, which happens after the SDK
+closes the CLI's stdin. Without hooks, `canUseTool` or SDK MCP servers, stdin
+closes as soon as the prompt is written. With any of them, the CLI may still
+call back after a `result` — for example in the follow-up turn a finished
+background subagent wakes — so the SDK keeps stdin open until the run ends:
+
+- at `idle`, when the CLI reports session state;
+- otherwise at the first `result` with no background task in flight;
+- or, while the CLI keeps reporting `running`, after
+  `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (default 10 minutes, `0` = no limit)
+  pass with no new turn.
+
+See [Architecture → Stdin Lifecycle](./architecture.md#stdin-lifecycle-and-the-end-of-a-run)
+and [Agents → Background subagents and callbacks](./feature-agents.md#background-subagents-and-callbacks).
+
 ### Error results and partial messages
 
 The CLI reports `error_max_turns` and `error_max_budget_usd` by emitting a

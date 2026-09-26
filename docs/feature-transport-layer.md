@@ -37,6 +37,8 @@ Transport transport = new SubprocessCLITransport(options);
 - Automatic cleanup
 - Graceful shutdown with grace period (waits for subprocess to flush session file after stdin EOF before sending SIGTERM)
 - Sets `CLAUDE_CODE_ENTRYPOINT=sdk-java` by default (overridable via `ClaudeAgentOptions.env()`)
+- Sets `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` unless the caller's `env()` or the inherited environment already names it (any letter case), so the CLI reports `session_state_changed` frames marked `sdk_host_only`; `QueryHandler` reads them to decide when stdin can close and drops them before the consumer. See [Architecture → Stdin Lifecycle](./architecture.md#stdin-lifecycle-and-the-end-of-a-run). The full list of variables the transport sets is in [Configuration Options → env()](./feature-configuration-options.md#env).
+- Warns at connect time (log `WARNING`) when the CLI is older than 2.0.0, and when `verbatimPrompts` is on but the CLI is older than 2.1.248, which ignores `client_composed`. The version check runs `<cli> -v` and is skipped when `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` is set.
 
 ### CLI flag forwarding
 
@@ -47,6 +49,8 @@ Transport transport = new SubprocessCLITransport(options);
 | `sessionStore(...)` | `--session-mirror` | Added when `sessionStore != null`. Tells the CLI to emit `transcript_mirror` frames on stdout, which the SDK peels off and forwards to the configured `SessionStore`. |
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display` is forwarded only for `Adaptive` and `Enabled` configs (and only when `display != null`); `Disabled` never emits it. |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | Both flags emitted together when `display` is set. |
+| `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | Same as a plain string; `snapshot` travels on the `initialize` request instead. |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | One per `local` plugin; other types are skipped. |
 
 **Stderr piping**: stderr is piped only when `options.stderrCallback() != null`. The legacy `--debug-to-stderr` extra-arg detection was removed in 0.1.13 (prep for the CLI flag's deprecation). To capture verbose CLI debug output, pass `extraArgs(Map.of("debug-file", "/path/to/log"))` and read that file instead.
 
@@ -301,6 +305,14 @@ public class RemoteTransport implements Transport {
 ```
 
 ## Using Custom Transport
+
+With a custom transport the SDK calls its `connect()`, delivers prompts over
+`write()`, and sends hooks, agents and the other `initialize`-request settings
+(including `systemPromptSnapshot`) through the control protocol. Everything
+`SubprocessCLITransport` turns into CLI flags or environment variables — model,
+cwd, permission mode, tools, `env`, and so on — is **not** applied, and
+store-backed session resume is skipped. `verbatimPrompts` still applies, since
+the SDK stamps the prompts before calling `write()`.
 
 ```java
 // Create custom transport

@@ -14,12 +14,12 @@ The permission system controls which tools Claude can use and how permission req
 
 ### Available Modes
 
-- **PROMPT** (default) - Prompt user for each permission
-- **ACCEPT_ALL** - Automatically accept all permissions
-- **ACCEPT_EDITS** - Auto-accept file edits, prompt for others
+- **DEFAULT** (the CLI's default) - Standard permission behavior; tools that need approval go through `canUseTool` or `permissionPromptToolName`
+- **ACCEPT_EDITS** - Auto-accept file edits, ask for others
+- **PLAN** - Planning mode; no tools are executed
 - **BYPASS_PERMISSIONS** - Skip permission checks entirely
-- **DONT_ASK** - Allow all tools without prompting
-- **AUTO** - Automatically determine the appropriate permission mode
+- **DONT_ASK** - Don't ask; deny anything not pre-approved by allow rules
+- **AUTO** - A model classifier approves or denies each tool call
 
 ## Custom Permission Callback
 

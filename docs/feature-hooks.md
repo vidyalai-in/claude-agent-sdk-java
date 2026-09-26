@@ -254,6 +254,15 @@ public class HooksExample {
 }
 ```
 
+## Hooks after a background subagent finishes
+
+With a one-shot `ClaudeSDK.query(...)`, a hook in the turn a background
+subagent's completion wakes runs only if stdin is still open when the CLI calls
+it. The SDK keeps stdin open until the run ends rather than at the first
+result; see [Agents → Background subagents and callbacks](./feature-agents.md#background-subagents-and-callbacks)
+for the rules and a CLI-version caveat, and `BackgroundAgentHooksExample` for a
+runnable demonstration.
+
 ## See Also
 - [Configuration Options](./feature-configuration-options.md#hooks)
 - [Hooks Example](../examples/src/main/java/examples/Hooks.java)

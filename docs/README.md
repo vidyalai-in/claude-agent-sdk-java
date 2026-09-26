@@ -13,7 +13,7 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
 - ⚡ **Virtual Threads**: Background work runs on Project Loom virtual threads on Java 21+, and on daemon platform threads on 17-20
 - 🔧 **Flexible Architecture**: Support for both stateless queries and stateful conversations
 - 🛠️ **Custom Tools**: Create custom tools using MCP (Model Context Protocol)
-- 🔌 **Plugin System**: Extensible architecture for custom functionality
+- 🔌 **Plugins**: Load Claude Code plugins (commands, agents, skills, hooks) from local directories
 - 🎨 **Builder Pattern**: Fluent API for configuration
 
 ## Documentation Index
@@ -24,6 +24,7 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Core components (API layer, configuration, protocol, transport)
   - Design patterns (sealed interfaces, builder, facade, virtual threads)
   - Data flow diagrams and concurrency model
+  - Stdin lifecycle: when a run ends (session state, task ledger, between-turns ceiling)
   - Type system hierarchy and dependencies
 
 ### Core Features
@@ -45,9 +46,11 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
 - **[Configuration Options](./feature-configuration-options.md)** - Complete guide to ClaudeAgentOptions builder
   - All 30+ configuration options
   - Tool configuration
+  - System prompt forms and `snapshot`
   - Permission settings
   - Model configuration
-  - Environment variables
+  - Environment variables, and the ones the SDK sets itself
+  - `verbatimPrompts` — deliver prompts without `@path` expansion or slash commands
   - Hooks and callbacks
   - Complete examples for common patterns
 
@@ -151,9 +154,9 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Custom transport example
   - Windows batch-script refusal, and the explicit opt-in for npm `claude.cmd` deployments
 
-- **[Plugin System](./feature-plugin-system.md)** - Creating and using plugins
-  - SdkPluginConfig
-  - Use cases and examples
+- **[Plugin System](./feature-plugin-system.md)** - Loading Claude Code plugins
+  - `SdkPluginConfig.local(path)` → `--plugin-dir`
+  - Plugin layout and verifying a plugin loaded
 
 ### API Reference
 - **[ClaudeSDK](./api-claude-sdk.md)** - Static facade for simple queries
@@ -275,13 +278,15 @@ try (var client = ClaudeSDK.createClient(options)) {
 
 ## Examples
 
-The SDK includes 15+ comprehensive examples covering:
+The SDK includes 30+ runnable examples covering:
 - Basic queries and conversations
 - Custom MCP tools
 - Permission callbacks
-- Hook system
+- Hook system, including hooks served in a background subagent's follow-up turn (`BackgroundAgentHooksExample`)
 - Streaming events
 - Error handling
+- System prompts, including `snapshot` (`SystemPromptExample`)
+- Delivering prompts verbatim (`VerbatimPromptsExample`)
 - Advanced features (checkpointing, sandbox, output format)
 - And more...
 
@@ -300,11 +305,12 @@ See the `examples/` directory in the repository.
 ### ✅ Completed - All Core Documentation
 - Main README with quick start and overview
 - Architecture overview (comprehensive with diagrams; SessionStore subsystem;
-  control-request failure handling)
+  control-request failure handling; stdin lifecycle and run-end detection)
 - All feature guides:
   - Simple Queries
   - Interactive Conversations
-  - Configuration Options (including `sessionStore` and `loadTimeoutMs`)
+  - Configuration Options (including `sessionStore`, `loadTimeoutMs`,
+    `verbatimPrompts` and system prompt `snapshot`)
   - Message Types (task messages, server tool blocks, MirrorErrorMessage)
   - MCP Servers (with ToolAnnotations, tool titles, status types, input
     validation, failure semantics, cancellation and custom handlers)
@@ -316,7 +322,8 @@ See the `examples/` directory in the repository.
   - Transport Layer (with `--session-mirror`, `--thinking-display`, drop `--debug-to-stderr`)
   - Plugin System
   - Session History (listSessions / getSessionMessages)
-  - Session Store (mirror transcripts to S3/Postgres/Redis/custom)
+  - Session Store (mirror transcripts to S3/Postgres/Redis/custom; bounded
+    executors)
 - Complete API Reference (5 documents):
   - ClaudeSDK (including session history methods)
   - ClaudeSDKClient

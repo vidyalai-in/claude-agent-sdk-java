@@ -9,6 +9,7 @@ Custom agents allow you to define specialized subagents with their own system pr
 - [Filesystem-Based Agents](#filesystem-based-agents)
 - [Large Agent Definitions](#large-agent-definitions)
 - [Observing a subagent's output](#observing-a-subagents-output)
+- [Background subagents and callbacks](#background-subagents-and-callbacks)
 - [Examples](#examples)
 
 ## Overview
@@ -252,6 +253,42 @@ Reading a *finished* subagent's full transcript is a different path — see
 `getSubagentMessages()`, whose results carry the same `parentToolUseId` plus a
 `parentAgentId` for nested subagents.
 
+## Background subagents and callbacks
+
+A subagent launched with `run_in_background` keeps running after the parent's
+turn ends, and when it finishes, its completion wakes the parent for a
+follow-up turn. With a one-shot `ClaudeSDK.query(...)` that has hooks, a
+`canUseTool` callback or SDK MCP servers, those callbacks in the follow-up turn
+only work while stdin is still open. The SDK therefore does not close stdin at
+the first `result`:
+
+- While a `local_agent` or `local_workflow` task is still in flight, stdin
+  stays open.
+- When the CLI reports session state, stdin closes at `idle` after a result, so
+  a follow-up turn owed by a subagent that finished *just before* the result is
+  still served.
+- The wait between turns is bounded by `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`
+  (10 minutes by default, `0` for no limit).
+
+The SDK asks the CLI for session state with
+`CLAUDE_CODE_SDK_READS_SESSION_STATE`. Claude Code 2.1.283 does not honor it
+yet; with such a CLI, stdin closes at the first result with no task in flight,
+and whether the follow-up turn's callbacks run depends on timing. Setting
+`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` in `env()` makes the CLI report state
+today, at the cost of the `session_state_changed` frames also reaching your
+iterator:
+
+```java
+ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+    .agents(Map.of("worker", worker))
+    .hooks(hooks)
+    .env(Map.of("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"))
+    .build();
+```
+
+`ClaudeSDKClient` is unaffected: it keeps stdin open until you disconnect. The
+full rules are in [Architecture → Stdin Lifecycle](./architecture.md#stdin-lifecycle-and-the-end-of-a-run).
+
 ## Examples
 
 See the example files for complete runnable demonstrations:
@@ -260,6 +297,7 @@ See the example files for complete runnable demonstrations:
 - [`FilesystemAgentsExample.java`](../examples/src/main/java/examples/FilesystemAgentsExample.java) — Loading agents from `.claude/agents/` files
 - [`LargeAgentsExample.java`](../examples/src/main/java/examples/LargeAgentsExample.java) — Stress test with 260KB+ agent payloads
 - [`ForwardSubagentTextExample.java`](../examples/src/main/java/examples/ForwardSubagentTextExample.java) — The same run with subagent text forwarding off and on
+- [`BackgroundAgentHooksExample.java`](../examples/src/main/java/examples/BackgroundAgentHooksExample.java) — A `PreToolUse` hook served in the follow-up turn a background subagent's completion wakes
 
 ## See Also
 

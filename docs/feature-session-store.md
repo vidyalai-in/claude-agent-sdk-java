@@ -220,6 +220,21 @@ SessionStoreExecutor.setDefault(Executors.newFixedThreadPool(8));
 SessionStoreExecutor.reset();
 ```
 
+A bounded executor — even a single thread — is safe. The configured executor
+only ever runs your adapter's own calls; the SDK never blocks one of its threads
+waiting on another task submitted to the same executor:
+
+- **Transcript mirroring**: each drain runs on a small SDK-owned thread-per-task
+  executor (threads named `session-store-mirror-drain-<n>`) and waits there
+  for the `appendAsync` it submits to your executor.
+- **Store-backed listing**: `listSessionsFromStore` issues its per-session
+  `loadAsync` calls from the calling thread, with at most 16 in flight; when
+  the limit is reached, the calling thread waits, not an executor thread.
+
+Earlier versions ran both coordinators *on* the configured executor, so a
+bounded pool could deadlock listing or silently drop every mirrored batch
+after `sendTimeoutMs`.
+
 You can also pass a per-call executor:
 
 ```java
@@ -451,7 +466,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 | `BATCHED` (default) | Once per `result` message OR when pending exceeds 500 entries / 1 MiB | Almost all production workloads — keeps adapter latency off the streaming hot path |
 | `EAGER` | Background drain scheduled after every enqueued frame | Live transcript streaming to clients, real-time audit pipelines, very large turns where you can't wait until `result` |
 
-`EAGER` zeroes the batcher's pending thresholds — every enqueued frame schedules a background flush via the configured `SessionStoreExecutor` (one named thread per task; virtual on Java 21+). Appends remain serialized in enqueue order; a slow adapter will not stall the read loop but will see frames coalesced while it's busy. The option is ignored when `sessionStore` is unset.
+`EAGER` zeroes the batcher's pending thresholds — every enqueued frame schedules a background drain on the SDK's own drain executor (one `session-store-mirror-drain-<n>` thread per task; virtual on Java 21+), which calls your adapter's `appendAsync` on the configured `SessionStoreExecutor`. Appends remain serialized in enqueue order; a slow adapter will not stall the read loop but will see frames coalesced while it's busy. The option is ignored when `sessionStore` is unset.
 
 ## Importing Local Sessions Into a Store
 
@@ -647,7 +662,7 @@ Each `*Async` method has both a no-arg overload (uses the configured default exe
 |---|---|
 | `Executor getDefault()` | Current default executor |
 | `void setDefault(Executor)` | Override; `null` resets to built-in |
-| `void reset()` | Reset to built-in `Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("session-store-", 0).factory())` |
+| `void reset()` | Reset to the built-in one-thread-per-task executor (`session-store-<n>`; virtual threads on Java 21+, daemon platform threads on 17-20) |
 
 ### `SessionStoreConformance`
 

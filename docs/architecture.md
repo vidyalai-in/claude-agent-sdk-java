@@ -104,7 +104,8 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Hooks: `hooks()`
   - MCP: `mcpServers()`
   - Agents: `agents()` (sent via stdin initialize request, no size limit)
-  - Advanced: `sandbox()`, `outputFormat()`, `checkpointFiles()`
+  - System prompt: `systemPrompt()` — string, `SystemPromptPreset`, `SystemPromptCustom` or `SystemPromptFile`
+  - Advanced: `sandbox()`, `outputFormat()`, `enableFileCheckpointing()`, `forwardSubagentText()`, `verbatimPrompts()`
 
 **Design Pattern**: Builder + Immutable Object
 
@@ -117,7 +118,9 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Hook callbacks
   - Tool permission callbacks
   - Message streaming
-  - Initialization handshake (includes hooks, agent definitions, and excludeDynamicSections)
+  - Initialization handshake (includes hooks, agent definitions, `excludeDynamicSections`, `systemPromptSnapshot`, the skills allowlist and `forwardSubagentText`)
+  - **Prompt stamping**: with `verbatimPrompts`, every user message `streamInput()` writes gets `client_composed: true` (`stampUserMessage`, which copies rather than mutates); `ClaudeSDKClient` stamps its own writes the same way
+  - **Run-end tracking**: decides when stdin can close from the CLI's `session_state_changed` frames, the in-flight task ledger and a between-turns ceiling, and drops the `sdk_host_only` state frames the SDK asked for (see [Stdin Lifecycle](#stdin-lifecycle-and-the-end-of-a-run))
   - MCP server lifecycle management
   - **Actionable error replacement**: tracks the most recent error result's payload while reading the stream; when a `ProcessException` follows a result with `is_error=true`, it is replaced by a `ResultException` carrying that payload and the message `"Claude Code returned an error result: <text>"` (built from the result's `errors` array, then its `result` text, then a non-`success` `subtype`, then the API error status) instead of the generic `"Command failed with exit code N"`. Resets on any non-result, non-`session_state_changed` traffic. The exception object rides on the synthetic `{"type":"error"}` frame, so the consumer iterator rethrows it with its type and payload intact.
 - **Thread Safety**: Fully thread-safe with atomic operations and synchronization
@@ -518,7 +521,7 @@ This is not theoretical. A stale IDE-compiled class carrying an "unresolved
 compilation problem" `Error` made every SDK MCP control request hang silently
 until this catch was widened.
 
-### Stdin Lifecycle and In-Flight Tasks
+### Stdin Lifecycle and the End of a Run
 
 > **`controlExecutor` must stay thread-per-task.** An SDK MCP tool call parks
 > its control thread until the tool answers, and the `notifications/cancelled`
@@ -526,29 +529,59 @@ until this catch was widened.
 > that cancellation would queue behind the very call it exists to cancel, and
 > deadlock. No test would catch it — a fixed pool of two passes everything.
 
-When hooks, SDK MCP servers, or a `canUseTool` permission callback are registered, the control protocol needs stdin open for the entire conversation, so `QueryHandler.streamInput()` waits for a run-ending `result` frame before calling `transport.endInput()`. All three are served the same way — the CLI writes a `control_request` and blocks until the SDK writes the matching `control_response` to stdin — so all three count as bidirectional needs (`hasBidirectionalNeeds()`). Closing too early is not benign: the CLI in stream-json mode exits **only** on stdin EOF, so the close cannot simply be deferred to `close()` either — that would hang a one-shot `query()` forever.
+When hooks, SDK MCP servers, or a `canUseTool` permission callback are registered, the control protocol needs stdin open for as long as the CLI may still call back, so `QueryHandler.streamInput()` waits for **the end of the run** before calling `transport.endInput()`. All three are served the same way — the CLI writes a `control_request` and blocks until the SDK writes the matching `control_response` to stdin — so all three count as bidirectional needs (`hasBidirectionalNeeds()`). Without any of them, stdin closes as soon as the prompts are written. Closing too early is not benign, and the close cannot simply be deferred to `close()` either: the CLI in stream-json mode exits **only** on stdin EOF, so that would hang a one-shot `query()` forever.
 
-The subtlety is that **a `result` frame ends one turn, not the run**. A background task keeps running past it and still needs stdin for hook and SDK-MCP control responses. Closing on the first result meant a still-running subagent's SDK-MCP tool calls failed with `"Stream closed"`, and — more quietly — its `PreToolUse` hooks were never delivered, so built-in tools kept executing and deny-gate hooks stopped gating.
+The subtlety is that **a `result` frame ends one turn, not the run**. A background subagent keeps running past it, and when it finishes, its completion wakes the parent for a follow-up turn. That turn's hook, permission and SDK MCP requests need stdin too. Closing too early made those requests fail with `"Stream closed"` and — more quietly — skipped `PreToolUse` hooks, so built-in tools ran with no callback and deny-gate hooks stopped gating.
 
-`QueryHandler` therefore keeps a ledger of in-flight tasks, populated from `system` task lifecycle frames, and only treats a result as run-ending when the ledger is empty:
+`QueryHandler` decides when the run is over from two sources.
+
+**1. The CLI's session state (primary).** The transport sets `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` on the CLI process (unless the caller's `options.env` or the inherited environment already names it, in any letter case). A CLI that honors it sends `system` / `session_state_changed` frames marked `sdk_host_only: true`: it stays `running` while a background agent is live or its completion is still owed a turn, `requires_action` while it waits on the host, and reports `idle` once no further turn is owed. The reader tracks the latest state and **drops frames marked `sdk_host_only`** before they reach the consumer. Unmarked frames — sent because the caller opted in with `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` — drive the run end the same way and are passed through.
+
+**2. The task ledger (fallback, and a guard).** `QueryHandler` keeps a ledger of in-flight tasks, populated from `system` task lifecycle frames:
 
 ```
 system: task_started (task_type ∈ DEFERRING_TASK_TYPES)  ─►  add task_id
 system: task_notification                                ─►  remove task_id
 system: task_updated (patch.status ∈ TERMINAL_TASK_STATUSES) ─► remove task_id
-
-result frame
-    ├─ ledger empty     ─►  complete firstResultEvent  ─►  endInput()
-    └─ ledger non-empty ─►  keep stdin open, log at FINE
 ```
 
-Each task completion wakes the parent for a follow-up turn that ends in another result frame, so the close still happens promptly — and chained background tasks work, because the ledger only empties after the last one settles.
+The run-end rules, all under one `runLock`:
+
+```
+result frame
+    ├─ state is null (CLI sends none) or "idle", or no bidirectional needs
+    │      └─ ledger empty      ─►  end the run  ─►  endInput()
+    │      └─ ledger non-empty  ─►  keep stdin open (log at FINE)
+    ├─ state is "requires_action" ─►  wait (a request is being answered)
+    └─ state is "running"         ─►  wait, and arm the run-end ceiling
+
+session_state_changed
+    ├─ "idle" after a result  ─►  end the run, unless the ledger is non-empty
+    ├─ "idle" before a result ─►  nothing (the prompt's run has not produced a result yet)
+    ├─ "requires_action"      ─►  reopen the run if it had ended; stop the ceiling
+    └─ "running" (or other)   ─►  reopen the run if it had ended; restart the ceiling if past a result
+```
+
+Some hosts send `idle` just *before* the result; the result then ends the run. A CLI that sends no state at all (older CLIs, and Claude Code 2.1.283, which does not yet honor `CLAUDE_CODE_SDK_READS_SESSION_STATE`) leaves the state `null`, so the first result with an empty ledger ends the run — the pre-0.2.3 behavior.
+
+**The run-end ceiling.** The CLI's own background-wait ceiling only starts counting once stdin is closed, so without a bound of its own, work that never finishes would hold `running` — and stdin — open forever. After a result with the CLI still reporting `running`, `QueryHandler` starts a sleeper on a thread from `Threads`; if no new turn starts before it wakes, it ends the run. The duration is `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`, read the way the CLI will see it — `options.env` first, then the process environment — with `0` meaning no limit, anything that is not a non-negative integer falling back to the CLI's default of 600000 ms (10 minutes), and values past `Integer.MAX_VALUE` ms (~24.8 days) clamped to it. The ceiling counts only the wait **between** turns:
+
+- A main-thread `assistant` or `stream_event` frame (`parent_tool_use_id == null`) marks a turn under way: the ceiling stops, and the run reopens even if the ceiling had already ended it. A subagent's own messages do **not** stop it — they are the very work it bounds.
+- A result restarts it; so does `running` arriving after a result.
+- `requires_action` stops it until the `running` that follows.
+- A tracked agent still in flight when it fires is not cut off; the ceiling starts over once the ledger empties.
+
+Each sleeper carries a generation number, and clearing or re-arming the ceiling bumps it and interrupts the sleeper, so a sleeper that wakes late stands down.
+
+**Reopening.** Ending the run completes a `CompletableFuture`; work the CLI takes up afterwards (a finished background task waking it) swaps in a fresh one, so a waiter that has not yet started waiting — `streamInput`, still writing prompts — waits for the new work too. Each prompt `streamInput` writes owes a run of its own: before writing it, the run is reopened and "result received" reset, so a multi-message prompt waits for its *last* prompt's run rather than the first one's. Once stdin is closed, or the reader has exited, the run is final and stays ended, and no ceiling is armed for frames that arrive while the CLI winds down. `close()` and the reader's `finally` block both end the run, so the waiter can never hang.
+
+There is no other timeout on the wait. Java previously also capped it at `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` (60 s), which cut off any background agent running over a minute; that cap is gone, and `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` now only sets the `initialize` timeout.
 
 `DEFERRING_TASK_TYPES` is `{"local_agent", "local_workflow"}`. The exclusions are deliberate, not oversights: background shells (`local_bash`) and monitors run indefinitely by design, and teammates stay `running` for their whole lifetime, so none of them reliably reaches a terminal status. Tracking one would withhold the close *forever* rather than briefly — and with no process exit, not even the reader's `finally` would run. Anything added to this set must be a type that reliably terminates.
 
 `background_tasks_changed` frames are ignored in both directions. That payload is the live *background* set, but a subagent is registered in the foreground and only flips to backgrounded later without a second `task_started` — so narrowing against it would drop exactly the agent this ledger exists to protect, and widening from it could admit an id no later frame ever clears.
 
-This is a mitigation rather than a complete answer: an empty ledger means "nothing we know of is running", which is not the same as "the run is over". A task that settles *before* its turn's result frame leaves the ledger empty at that result. No ledger can close that gap — it would need a run-boundary signal from the CLI — but the common ordering, where the task outlives the turn that spawned it, is fixed.
+Known limitation: from a CLI that reports no session state, a result for an earlier prompt of a multi-message prompt iterator still ends the run even when a later prompt is already queued CLI-side, so control requests from that later turn can find stdin closed. Single-message and string prompts, the common one-shot shapes, are fully covered.
 
 ## Concurrency Model
 

@@ -1,96 +1,92 @@
 # Plugin System
 
-Extensible architecture for custom SDK functionality.
+Load Claude Code plugins — custom slash commands, agents, skills and hooks
+packaged in a directory — into an SDK session.
 
 ## Overview
 
-The plugin system allows you to extend SDK behavior with custom logic. Plugins can intercept and modify SDK operations.
+A plugin is a directory the Claude Code CLI loads at startup. The SDK does not
+run plugin code itself: it passes each plugin's directory to the CLI with
+`--plugin-dir`, and the CLI discovers what the plugin provides.
 
 ## SdkPluginConfig
 
+`SdkPluginConfig` is a record nested in `ClaudeAgentOptions`:
+
 ```java
-public record SdkPluginConfig(
-    String name,
-    Map<String, Object> config
-)
+public record SdkPluginConfig(String type, String path) {
+    public static SdkPluginConfig local(String path);  // type = "local"
+}
 ```
+
+Only the `"local"` type is supported. For each `local` plugin the transport
+adds `--plugin-dir <path>` to the CLI command; a config with any other `type`
+is skipped without an error, so always build configs with `local(...)`.
 
 ## Configuring Plugins
 
 ```java
+import in.vidyalai.claude.sdk.ClaudeAgentOptions;
+import in.vidyalai.claude.sdk.ClaudeAgentOptions.SdkPluginConfig;
+
 var options = ClaudeAgentOptions.builder()
     .plugins(List.of(
-        new SdkPluginConfig(
-            "my-plugin",
-            Map.of(
-                "setting1", "value1",
-                "setting2", 123
-            )
-        )
-    ))
+        SdkPluginConfig.local("/path/to/my-plugin"),
+        SdkPluginConfig.local("/path/to/another-plugin")))
     .build();
 ```
 
-## Use Cases
+Plugins are passed in list order, one `--plugin-dir` per plugin.
 
-### Logging Plugin
+## Plugin Layout
 
-Track all SDK operations:
+The repository's demo plugin shows the minimal layout the CLI expects:
 
-```java
-new SdkPluginConfig("logger", Map.of(
-    "level", "DEBUG",
-    "output", "/var/log/claude-sdk.log"
-))
+```
+examples/src/main/java/examples/plugins/demo-plugin/
+├── .claude-plugin/
+│   └── plugin.json       # Manifest: name, description, version, author
+└── commands/
+    └── greet.md          # A custom /greet slash command
 ```
 
-### Metrics Plugin
+`plugin.json`:
 
-Collect performance metrics:
-
-```java
-new SdkPluginConfig("metrics", Map.of(
-    "endpoint", "http://metrics-server/api",
-    "interval", 60
-))
+```json
+{
+  "name": "demo-plugin",
+  "description": "A demo plugin showing how to extend Claude Code with custom commands",
+  "version": "1.0.0",
+  "author": {
+    "name": "Claude Code Team"
+  }
+}
 ```
 
-### Cache Plugin
+Plugins can also contribute agents, skills and hooks; see the Claude Code
+plugin documentation for the full directory layout.
 
-Cache responses:
+## Verifying a Plugin Loaded
 
-```java
-new SdkPluginConfig("cache", Map.of(
-    "ttl", 3600,
-    "maxSize", 1000
-))
-```
-
-## Example
+The CLI reports loaded plugins in the `init` system message's `plugins` field,
+a list of maps with `name` and `path`:
 
 ```java
-public class PluginsExample {
-    public static void main(String[] args) {
-        var options = ClaudeAgentOptions.builder()
-            .plugins(List.of(
-                new SdkPluginConfig("logger", Map.of(
-                    "level", "INFO",
-                    "format", "json"
-                )),
-                new SdkPluginConfig("metrics", Map.of(
-                    "enabled", true
-                ))
-            ))
-            .build();
-
-        List<Message> messages = ClaudeSDK.query(
-            "What is Java?",
-            options
-        );
+for (Message msg : ClaudeSDK.query("Hello!", options)) {
+    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
+        @SuppressWarnings("unchecked")
+        List<Object> plugins = (List<Object>) system.get("plugins");
+        if (plugins != null) {
+            for (Object p : plugins) {
+                if (p instanceof Map<?, ?> plugin) {
+                    System.out.println(plugin.get("name") + " (" + plugin.get("path") + ")");
+                }
+            }
+        }
     }
 }
 ```
 
 ## See Also
-- [Configuration Options](./feature-configuration-options.md#advanced-features) - plugins option
+- [Configuration Options](./feature-configuration-options.md#plugins) - plugins option
 - [Plugins Example](../examples/src/main/java/examples/PluginsExample.java)

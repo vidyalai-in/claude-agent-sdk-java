@@ -15,7 +15,15 @@ Client for stateful, interactive conversations with Claude.
 ```java
 public ClaudeSDKClient()
 public ClaudeSDKClient(ClaudeAgentOptions options)
+public ClaudeSDKClient(ClaudeAgentOptions options, Transport transport)
 ```
+
+With a non-null `transport`, the client uses it instead of spawning the CLI
+subprocess. The SDK calls its `connect()`, writes prompts through `write()`, and
+sends hooks, agents and the other initialize-request settings over the control
+protocol. The CLI-flag options (model, cwd, permission mode, tools, and the
+rest the subprocess transport turns into flags) are not applied to a custom
+transport, and store-backed session resume is skipped.
 
 ## Connection Methods
 
@@ -86,6 +94,11 @@ public void query(String prompt)
 
 Send a message. Returns as soon as the prompt is written — read the reply with
 [`receiveResponse()`](#receiveresponse) or [`receiveMessages()`](#receivemessages).
+
+With `verbatimPrompts(true)` on the options, every prompt this client writes —
+from `connect(String)`, `sendMessage`, and both `query` forms — is marked
+`client_composed: true`, so Claude Code delivers it as written (no `@path`
+expansion, no slash-command dispatch). Streamed messages are stamped on a copy.
 
 Equivalent to `query(prompt, "default")`.
 
@@ -185,7 +198,7 @@ public void setModel(String model)
 
 Change AI model.
 
-**Parameters**: `model` - Model name (e.g., "claude-opus-4-6")
+**Parameters**: `model` - Model name or alias (e.g. `"claude-sonnet-5"`, `"haiku"`), or `null` for the default. The CLI checks full model IDs against the API, so a retired ID fails; an alias is mapped to a current model.
 
 ### setPermissionMode(PermissionMode mode)
 
@@ -203,19 +216,56 @@ Change permission mode.
 public void rewindFiles(String userMessageId)
 ```
 
-Rewind files to state at user message (requires checkpointing).
+Rewind tracked files to their state at a user message.
 
-**Parameters**: `userMessageId` - Message ID to rewind to
+Requires `enableFileCheckpointing(true)` to track file changes, and
+`extraArgs(Map.of("replay-user-messages", ""))` so that `UserMessage` objects in
+the stream carry the `uuid` to rewind to.
+
+**Parameters**: `userMessageId` - UUID of the user message to rewind to
 
 ### getMcpStatus()
 
 ```java
-public Map<String, Object> getMcpStatus()
+public McpStatusResponse getMcpStatus()
 ```
 
 Get MCP server connection status.
 
-**Returns**: `Map<String, Object>` - Status information
+**Returns**: `McpStatusResponse` - its `mcpServers()` lists one `McpServerStatus` per server
+
+### reconnectMcpServer(String serverName)
+
+```java
+public void reconnectMcpServer(String serverName)
+```
+
+Retry connecting to an MCP server that failed to connect or was disconnected.
+
+### toggleMcpServer(String serverName, boolean enabled)
+
+```java
+public void toggleMcpServer(String serverName, boolean enabled)
+```
+
+Enable or disable an MCP server. Disabling disconnects it and removes its tools
+from the available set; enabling reconnects it and makes them available again.
+
+### stopTask(String taskId)
+
+```java
+public void stopTask(String taskId)
+```
+
+Stop a running background task.
+
+**Parameters**: `taskId` - The task ID from a `TaskStartedMessage`
+
+After this returns, the CLI reports the task's end as a `TaskUpdatedMessage`
+whose status is terminal (`"killed"` for a stopped task). A
+`TaskNotificationMessage` with status `"stopped"` may follow, but is sometimes
+suppressed, so treat a terminal status from either message as the end (see
+`TaskUpdatedMessage.TERMINAL_TASK_STATUSES`).
 
 ### getContextUsage()
 
@@ -243,9 +293,11 @@ Returns the same data shown by the `/context` command in the CLI, including toke
 public Map<String, Object> getServerInfo()
 ```
 
-Get server initialization info.
+Get server initialization info: available commands, output styles and server
+capabilities.
 
-**Returns**: `Map<String, Object>` - Server information
+**Returns**: `Map<String, Object>` - The info from the `initialize` response
+(`null` only if the CLI returned none)
 
 ## Thread Safety
 

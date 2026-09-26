@@ -25,7 +25,7 @@ Complete guide to configuring Claude SDK behavior using `ClaudeAgentOptions`.
 
 ```java
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .maxTurns(10)
     .permissionMode(PermissionMode.BYPASS_PERMISSIONS)
     .build();
@@ -40,7 +40,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ClaudeAgentOptions.Builder builder = ClaudeAgentOptions.builder();
 
 // Configure
-builder.model("claude-sonnet-4-5")
+builder.model("claude-sonnet-5")
        .maxTurns(10);
 
 // Build immutable instance
@@ -147,9 +147,41 @@ Set custom system prompt to guide Claude's behavior.
 // Use Claude Code preset with exclude_dynamic_sections for cross-user caching
 .systemPrompt(SystemPromptPreset.claudeCode("Custom instructions", true))
 
+// Custom prompt in the form that can also set snapshot (see below)
+.systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+
 // Use prompt from file
 .systemPrompt(new SystemPromptFile("/path/to/prompt.md"))
 ```
+
+| Form | Sent to the CLI as |
+|------|--------------------|
+| `String` | `--system-prompt <text>` |
+| `SystemPromptCustom` | `--system-prompt <prompt>`, plus `snapshot` on the `initialize` request |
+| `SystemPromptPreset` | `--append-system-prompt <append>` when `append` is set; `excludeDynamicSections` and `snapshot` on the `initialize` request |
+| `SystemPromptFile` | `--system-prompt-file <path>` |
+| not set (`null`) | `--system-prompt ""` (no system prompt) |
+
+#### Snapshot
+
+By default, Claude Code builds the system prompt on a session's first request,
+records it, and reuses it on every later request, including after you resume
+the session. A changed custom prompt, or changed `append` text on the preset,
+then has no effect until the session is compacted or you start a new session.
+To rebuild the prompt on every request instead, for example while you iterate
+on its wording, set `snapshot` to `false`:
+
+```java
+.systemPrompt(SystemPromptCustom.of("You are a release bot.", false))
+.systemPrompt(SystemPromptPreset.claudeCode("Be concise.").withSnapshot(false))
+```
+
+`snapshot` rides on the `initialize` control request as `systemPromptSnapshot`.
+It is sent whenever set, including `false`, and omitted when `null`, so the
+CLI's default applies: `true`, except in bare mode (`--bare`), where it acts as
+`false`. Only the preset and custom forms carry it. Requires Claude Code CLI
+2.1.257 or later; before 2.1.265, a session with an `append` or custom prompt
+recorded it only when `snapshot` was `true`.
 
 ## MCP Servers
 
@@ -178,16 +210,20 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
     "external", externalServer
 ))
 
-// From file path
-.mcpServers(Path.of("~/.claude/mcp_servers.json"))
+// From file path (passed as-is to --mcp-config; Java does not expand "~")
+.mcpServers(Path.of(System.getProperty("user.home"), ".claude", "mcp_servers.json"))
 
-// From JSON string
-.mcpServers("""
-    {
+// From an inline JSON string (also passed as-is to --mcp-config)
+.mcpServersJson("""
+    {"mcpServers": {
         "server1": {"type": "stdio", "command": "node", "args": ["server.js"]}
-    }
+    }}
     """)
 ```
+
+A map is serialized as `{"mcpServers": {...}}` before it reaches
+`--mcp-config`; a path or JSON string is passed through untouched, so a JSON
+string must use that same top-level `mcpServers` key.
 
 ## Permission Settings
 
@@ -200,12 +236,12 @@ Control how tool permissions are handled.
 ```
 
 **Modes**:
-- `PROMPT` (default) - Ask for each permission
-- `ACCEPT_ALL` - Auto-accept all permissions
-- `ACCEPT_EDITS` - Auto-accept file edits, prompt for others
+- `DEFAULT` (the CLI's default) - Standard permission behavior
+- `ACCEPT_EDITS` - Auto-accept file edits, ask for others
+- `PLAN` - Planning mode; no tools are executed
 - `BYPASS_PERMISSIONS` - Skip permission checks entirely
-- `DONT_ASK` - Allow all tools without prompting
-- `AUTO` - Automatically determine the appropriate permission mode
+- `DONT_ASK` - Don't ask; deny anything not pre-approved by allow rules
+- `AUTO` - A model classifier approves or denies each tool call
 
 ### permissionPromptToolName()
 
@@ -411,9 +447,11 @@ String wire = level.getValue(); // "xhigh"
 
 ### maxThinkingTokens()
 
-**DEPRECATED**: Use `thinking()` instead.
+**DEPRECATED**: Use `thinking()` instead: adaptive, enabled with a token
+budget, or disabled.
 
-Maximum tokens for thinking blocks.
+Maximum tokens for thinking blocks. On newer models this value is treated as
+on/off (0 = disabled, any other value = adaptive).
 
 ```java
 .maxThinkingTokens(10000)  // Deprecated - use thinking() instead
@@ -436,7 +474,7 @@ Increase for high-throughput scenarios.
 Set the AI model.
 
 ```java
-.model("claude-sonnet-4-5")
+.model("claude-sonnet-5")
 ```
 
 **Available Models**:
@@ -509,11 +547,19 @@ This is **not** a plain bypass — a bare waiver would restore the full `cmd.exe
 
 ### settings()
 
-Path to settings JSON file.
+Path to an additional settings JSON file, or an inline JSON string.
 
 ```java
 .settings("/path/to/settings.json")
+.settings("{\"permissions\": {\"allow\": [\"Read\"]}}")
 ```
+
+Without `sandbox()`, the value is passed as-is to `--settings`. With
+`sandbox()` also set, the two are merged into one JSON string: a value that
+starts with `{` and ends with `}` is parsed as JSON, anything else is read as a
+file path (a missing or unreadable file is logged and only the sandbox settings
+are passed). These load into the CLI's "flag settings" layer, the highest
+priority among user-controlled settings.
 
 ### addDirs()
 
@@ -540,16 +586,42 @@ Set environment variables for CLI process.
 ))
 ```
 
+The map is merged over the parent process's environment: entries here override
+inherited values, and `CLAUDECODE` is dropped from the inherited set. The
+transport also sets:
+
+| Variable | When | Overridable here |
+|----------|------|------------------|
+| `CLAUDE_CODE_ENTRYPOINT=sdk-java` | always | yes |
+| `CLAUDE_AGENT_SDK_VERSION` | always | no |
+| `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` | unless this map or the inherited environment already names it (in any letter case) | yes |
+| `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` | `enableFileCheckpointing(true)` | — |
+| `PWD` | `cwd(...)` is set | — |
+| `TRACEPARENT` / `TRACESTATE` | an OpenTelemetry span is active (see [Trace Context](./feature-trace-context.md)) | yes |
+
+Two variables here tune how long a one-shot query keeps stdin open for hooks
+and SDK MCP calls (see [Architecture → Stdin Lifecycle](./architecture.md#stdin-lifecycle-and-the-end-of-a-run)):
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` bounds the wait between turns (default
+`600000`, `0` for no limit), and `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` opts
+you in to the CLI's `session_state_changed` frames. Set
+`CLAUDE_AGENT_SDK_CLIENT_APP` (e.g. `"my-app/1.0.0"`) to identify your
+application in the User-Agent header.
+
 ### extraArgs()
 
 Pass arbitrary CLI flags.
 
 ```java
 .extraArgs(Map.of(
-    "--verbose", "",
-    "--config", "custom.json"
+    "replay-user-messages", "",   // flag with no value: --replay-user-messages
+    "debug", "api"                // flag with a value: --debug api
 ))
 ```
+
+Keys are flag names **without** the leading `--`; the transport adds it. A
+`null` or blank value emits a bare flag. A value starting with `-` is sent in
+the `--flag=value` form so it cannot be parsed as a separate flag; any other
+value is sent as two tokens.
 
 ## Callbacks
 
@@ -643,7 +715,42 @@ Enable partial message streaming.
 .includePartialMessages(true)
 ```
 
-Receive `StreamEvent` messages with deltas as content is generated.
+Receive `StreamEvent` messages with deltas as content is generated, one per API
+stream event.
+
+### verbatimPrompts()
+
+Deliver every prompt to Claude as written.
+
+```java
+.verbatimPrompts(true)
+```
+
+Claude Code normally expands an `@/absolute/path` in prompt text into the
+contents of that file, outside the working directory and without a tool call,
+and dispatches a leading `/command` as a slash command. That suits text a user
+typed; it does not suit text your application assembled from somewhere else
+(earlier turns, tool results, third-party content). With this option on, every
+user message the SDK writes is marked `client_composed: true`, and Claude Code
+delivers it exactly as given. That covers `ClaudeSDK.query` string and streamed
+prompts, and `ClaudeSDKClient.connect(String)`, `query(String)` and
+`query(Iterator)`.
+
+- The stamp goes on a copy; your message maps are never modified.
+- While the option is on it overwrites any `client_composed` value on a
+  streamed message. For per-turn control, leave it off and put
+  `"client_composed": true` on individual streamed messages; the SDK passes
+  that through untouched.
+- On current Claude Code versions a verbatim turn also skips the turn-start
+  attachment pass: `@server:resource` MCP mentions are not expanded, and the
+  prompt is sent without the context normally attached alongside it (nested
+  `CLAUDE.md` and rules files, skill and tool listings, other per-turn
+  reminders). Most of that context arrives after the turn's first tool call
+  instead.
+- Requires Claude Code 2.1.248 or later. Older versions ignore the field, and
+  the transport logs a `WARNING` at connect time when it detects one.
+
+See `examples/VerbatimPromptsExample.java`.
 
 ### forwardSubagentText()
 
@@ -727,6 +834,13 @@ Behavior details:
 
 Configure bash command sandboxing.
 
+When enabled, commands execute in a sandboxed environment that restricts
+filesystem and network access. Tool-level filesystem and network restrictions
+are still configured with permission rules (`Read`/`Edit` for the filesystem,
+`WebFetch` for the network); the `network` setting below configures the
+sandbox's own network isolation for sandboxed bash commands. Setting a sandbox
+also changes how `settings()` is passed; see [settings()](#settings).
+
 ```java
 // Minimal: just enable sandboxing.
 .sandbox(new SandboxSettings(true))
@@ -772,13 +886,15 @@ A backward-compatible 5-arg constructor `(allowUnixSockets, allowAllUnixSockets,
 
 ### plugins()
 
-Add custom plugins.
+Load Claude Code plugins from local directories.
 
 ```java
 .plugins(List.of(
-    new SdkPluginConfig("my-plugin", config)
+    ClaudeAgentOptions.SdkPluginConfig.local("/path/to/my-plugin")
 ))
 ```
+
+Each `local` plugin becomes `--plugin-dir <path>`. See [Plugin System](./feature-plugin-system.md).
 
 ### outputFormat()
 
@@ -798,15 +914,18 @@ Structured output format (Messages API style).
 ))
 ```
 
-### checkpointFiles()
+### enableFileCheckpointing()
 
 Enable file checkpointing for rewinding.
 
 ```java
-.checkpointFiles(true)
+.enableFileCheckpointing(true)
+.extraArgs(Map.of("replay-user-messages", ""))  // so UserMessage carries a uuid
 ```
 
-Allows using `ClaudeSDKClient.rewindFiles()`.
+Sets `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` on the CLI process and
+allows `ClaudeSDKClient.rewindFiles(userMessageId)`. Replaying user messages is
+what gives you the `uuid` to rewind to. Cannot be combined with `sessionStore()`.
 
 ## Complete Examples
 
@@ -814,7 +933,7 @@ Allows using `ClaudeSDKClient.rewindFiles()`.
 
 ```java
 var options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .cwd(Path.of("/path/to/codebase"))
     .allowedTools(List.of("Read", "Grep", "Glob"))
     .disallowedTools(List.of("Write", "Edit", "Bash"))
@@ -831,7 +950,7 @@ var options = ClaudeAgentOptions.builder()
 var calcServer = ClaudeSDK.createSdkMcpServer("calc", new Calculator());
 
 var options = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .cwd(Path.of("/project"))
     .allowedTools(List.of(
         "Read", "Write", "Edit", "Grep", "Glob",
@@ -840,7 +959,7 @@ var options = ClaudeAgentOptions.builder()
     .mcpServers(Map.of("calc", calcServer))
     .permissionMode(PermissionMode.ACCEPT_EDITS)
     .maxTurns(50)
-    .checkpointFiles(true)
+    .enableFileCheckpointing(true)
     .systemPrompt("""
         You are a development assistant.
         - Write clean, tested code
@@ -902,7 +1021,7 @@ var options = ClaudeAgentOptions.builder()
 ```java
 // First session
 var options1 = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .build();
 
 try (var client = ClaudeSDK.createClient(options1)) {
@@ -913,7 +1032,7 @@ try (var client = ClaudeSDK.createClient(options1)) {
 
 // Resume later with context
 var options2 = ClaudeAgentOptions.builder()
-    .model("claude-sonnet-4-5")
+    .model("claude-sonnet-5")
     .resume("previous-session-id")
     .build();
 
@@ -969,7 +1088,7 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 ```java
 // ✅ Good: Match model to task
 .model("claude-haiku-4-5")  // Simple tasks
-.model("claude-sonnet-4-5") // Balanced
+.model("claude-sonnet-5") // Balanced
 .model("claude-opus-4-6")   // Complex reasoning
 
 // ❌ Bad: Always using most expensive
@@ -1012,10 +1131,11 @@ List<Message> responses = ClaudeSDK.query(messages.iterator(), options);
 
 ```java
 // ✅ Good: Enable for safety
-.checkpointFiles(true)
+.enableFileCheckpointing(true)
+.extraArgs(Map.of("replay-user-messages", ""))
 
-// Allows rewinding if mistakes
-client.rewindFiles(checkpointId);
+// Allows rewinding if mistakes: pass the uuid of a replayed UserMessage
+client.rewindFiles(userMessageUuid);
 ```
 
 ### 7. Handle Sensitive Data Carefully
