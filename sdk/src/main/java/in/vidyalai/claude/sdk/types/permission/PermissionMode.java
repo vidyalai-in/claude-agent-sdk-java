@@ -28,7 +28,8 @@ public enum PermissionMode {
     BYPASS_PERMISSIONS("bypassPermissions"),
 
     /**
-     * Allow all tools without prompting (alias for bypassPermissions).
+     * Don't prompt for permissions: deny any tool call not pre-approved by
+     * allow rules. The opposite of {@link #BYPASS_PERMISSIONS}, not an alias.
      */
     DONT_ASK("dontAsk"),
 
