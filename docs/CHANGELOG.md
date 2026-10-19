@@ -23,6 +23,9 @@ Synced with Python SDK v0.2.168 plus the commits after it up to `498e063` (from 
 - **`VerbatimPromptsExample` checks the session transcript as well as the reply**, mirroring the Python e2e test. The CLI records an expanded `@`-mention as a `file` attachment. With no tools, the model sometimes dismisses that expansion as a forged tool result and answers UNKNOWN, so the reply alone could understate what was read. The example resolves the transcript from the run's cwd with `ClaudeSDK.projectKeyForDirectory`, and still flags a marker that shows up in the reply.
 - **The README's sandbox and hook snippets now compile**, in English and in all five translations. The sandbox snippet passed a `Path` where `allowUnsandboxedCommands` goes and used the old `SandboxIgnoreViolations` shape. The hook snippet called a `HookSpecificOutput.preToolUse()` builder that does not exist; it now constructs a `PreToolUseHookSpecificOutput`. The message-handling snippet also shows `SystemMessage.initData()`.
 
+### Fixed
+- **Maven Central publishing works under Maven 3.10.** `central-publishing-maven-plugin` moves from 0.11.0 to 0.12.0. GitHub's Ubuntu 24.04 runner image moved from Maven 3.9.16 to 3.10.0 (Maven Resolver 2), and under it 0.11.0 staged Maven's local-repository bookkeeping, `maven-metadata-local.xml` and `_remote.repositories`, into the bundle. Central rejected that bundle with "Bundle has content that does NOT have a .pom file", which failed the first 0.2.4 publish attempt; nothing was released. With 0.12.0 the bundle again holds only the artifacts, their signatures and checksums, under Maven 3.10.0, 3.9.16 and 3.8.7. The published artifacts are unaffected.
+
 ## [0.2.3] - 2026-09-26
 
 Synced with Python SDK v0.2.160 (from v0.2.140).
