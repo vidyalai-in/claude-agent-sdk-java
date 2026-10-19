@@ -1,10 +1,14 @@
 package examples;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDK;
@@ -12,6 +16,7 @@ import in.vidyalai.claude.sdk.ClaudeSDKClient;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
 import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.message.ResultMessage;
 
 /**
  * Example demonstrating {@code verbatimPrompts}.
@@ -35,6 +40,13 @@ import in.vidyalai.claude.sdk.types.message.Message;
  * {@code ClaudeSDKClient} with it on — and reports whether the marker leaked.
  *
  * <p>
+ * The session transcript, not the model's reply, decides whether the file was
+ * read: the CLI records an expanded {@code @}-mention as a {@code file}
+ * attachment. The model sees that expansion as a Read call and its result,
+ * and with no tools it sometimes dismisses it as a forged tool result and
+ * answers UNKNOWN, so the reply alone can understate what the CLI attached.
+ *
+ * <p>
  * Requires Claude Code 2.1.248 or later; an older CLI ignores the option and
  * the SDK logs a warning.
  *
@@ -55,15 +67,15 @@ public class VerbatimPromptsExample {
                 + "or UNKNOWN if you cannot see it. @" + secret;
 
         System.out.println("=== Default: @path is expanded ===");
-        report(marker, viaQuery(prompt, options(cwd, false)));
+        report(marker, viaQuery(prompt, options(cwd, false)), cwd);
 
         System.out.println();
         System.out.println("=== verbatimPrompts(true) via ClaudeSDK.query ===");
-        report(marker, viaQuery(prompt, options(cwd, true)));
+        report(marker, viaQuery(prompt, options(cwd, true)), cwd);
 
         System.out.println();
         System.out.println("=== verbatimPrompts(true) via ClaudeSDKClient ===");
-        report(marker, viaClient(prompt, options(cwd, true)));
+        report(marker, viaClient(prompt, options(cwd, true)), cwd);
     }
 
     private static ClaudeAgentOptions options(Path cwd, boolean verbatimPrompts) {
@@ -80,34 +92,89 @@ public class VerbatimPromptsExample {
                 .build();
     }
 
-    private static String viaQuery(String prompt, ClaudeAgentOptions options) {
+    /** The model's reply and the run's session ID. */
+    private record Run(String reply, String sessionId) {
+    }
+
+    private static Run viaQuery(String prompt, ClaudeAgentOptions options) {
         StringBuilder reply = new StringBuilder();
+        String sessionId = null;
         for (Message message : ClaudeSDK.query(prompt, options)) {
             if (message instanceof AssistantMessage assistant) {
                 reply.append(assistant.getTextContent());
+            } else if (message instanceof ResultMessage result) {
+                sessionId = result.sessionId();
             }
         }
-        return reply.toString();
+        return new Run(reply.toString(), sessionId);
     }
 
-    private static String viaClient(String prompt, ClaudeAgentOptions options) {
+    private static Run viaClient(String prompt, ClaudeAgentOptions options) {
         StringBuilder reply = new StringBuilder();
+        String sessionId = null;
         try (ClaudeSDKClient client = new ClaudeSDKClient(options)) {
             client.connect();
             client.query(prompt);
             for (Message message : (Iterable<Message>) client.receiveResponse()::iterator) {
                 if (message instanceof AssistantMessage assistant) {
                     reply.append(assistant.getTextContent());
+                } else if (message instanceof ResultMessage result) {
+                    sessionId = result.sessionId();
                 }
             }
         }
-        return reply.toString();
+        return new Run(reply.toString(), sessionId);
     }
 
-    private static void report(String marker, String reply) {
-        System.out.println("Claude: " + reply.strip());
-        System.out.println(reply.contains(marker)
-                ? "-> the file was read into the prompt"
-                : "-> the prompt was delivered as written; the file stayed unread");
+    /**
+     * The session's {@code file} attachments, as JSON text, read from its
+     * transcript at
+     * {@code $CLAUDE_CONFIG_DIR/projects/<project key for cwd>/<session>.jsonl}
+     * ({@code CLAUDE_CONFIG_DIR} defaults to {@code ~/.claude}).
+     */
+    private static String attachedFiles(String sessionId, Path cwd) {
+        if (sessionId == null) {
+            throw new IllegalStateException("run should report a session id");
+        }
+        String configDir = System.getenv("CLAUDE_CONFIG_DIR");
+        Path transcript = (configDir != null ? Path.of(configDir) : Path.of(System.getProperty("user.home"), ".claude"))
+                .resolve("projects")
+                .resolve(ClaudeSDK.projectKeyForDirectory(cwd))
+                .resolve(sessionId + ".jsonl");
+        if (!Files.exists(transcript)) {
+            throw new IllegalStateException("no transcript for session " + sessionId + " at " + transcript);
+        }
+        ObjectMapper mapper = new ObjectMapper();
+        StringBuilder attached = new StringBuilder();
+        try {
+            for (String line : Files.readAllLines(transcript)) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                JsonNode entry = mapper.readTree(line);
+                if ("attachment".equals(entry.path("type").asText())
+                        && "file".equals(entry.path("attachment").path("type").asText())) {
+                    attached.append(entry.get("attachment"));
+                }
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return attached.toString();
+    }
+
+    private static void report(String marker, Run run, Path cwd) {
+        System.out.println("Claude: " + run.reply().strip());
+        boolean attached = attachedFiles(run.sessionId(), cwd).contains(marker);
+        boolean inReply = run.reply().contains(marker);
+        if (attached) {
+            System.out.println("-> the CLI attached the file to the session");
+        } else if (inReply) {
+            // Not attached, yet the reply has the marker: it reached the
+            // model some other way, which this example does not expect.
+            System.out.println("-> unexpected: the marker is in the reply but no file was attached");
+        } else {
+            System.out.println("-> the prompt was delivered as written; the file stayed unread");
+        }
     }
 }

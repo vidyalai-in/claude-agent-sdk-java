@@ -20,6 +20,13 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
  * @param permissionMode current permission mode (can be null)
  * @param agentId        unique identifier for the subagent
  * @param agentType      type of the subagent
+ * @param promptId       UUID of the user prompt being processed. Matches the
+ *                       {@code prompt.id} attribute on OpenTelemetry events.
+ *                       Absent until the first user input
+ * @param effort         effort in effect for the current turn. Present for
+ *                       hooks that fire within a tool-use context (PreToolUse,
+ *                       PostToolUse, Stop, SubagentStop, etc.) on models that
+ *                       support effort
  */
 public record SubagentStartHookInput(
         @JsonProperty("session_id") String sessionId,
@@ -27,7 +34,19 @@ public record SubagentStartHookInput(
         @JsonProperty("cwd") String cwd,
         @JsonProperty("permission_mode") @Nullable String permissionMode,
         @JsonProperty("agent_id") String agentId,
-        @JsonProperty("agent_type") String agentType) implements HookInput {
+        @JsonProperty("agent_type") String agentType,
+        @JsonProperty("prompt_id") @Nullable String promptId,
+        @JsonProperty("effort") @Nullable HookEffort effort) implements HookInput {
+
+    /**
+     * Backwards-compatible constructor without {@code promptId},
+     * {@code effort}.
+     */
+    public SubagentStartHookInput(String sessionId, String transcriptPath, String cwd,
+            @Nullable String permissionMode, String agentId, String agentType) {
+        this(sessionId, transcriptPath, cwd, permissionMode, agentId, agentType,
+                null, null);
+    }
 
     @JsonProperty("hook_event_name")
     @Override

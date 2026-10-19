@@ -209,11 +209,13 @@ public class AdvancedFeatures {
                 1080 // SOCKS proxy port
         );
 
-        // Violations to ignore
-        SandboxIgnoreViolations ignoreViolations = new SandboxIgnoreViolations(
-                List.of("/tmp", "/var/tmp"), // Ignore file violations for temp dirs
-                List.of("localhost", "127.0.0.1") // Ignore network violations for localhost
-        );
+        // Violations to leave unreported: command pattern ("*" for every
+        // command) -> substrings of the violation text. Plain substring
+        // matches, not globs. This changes what is reported, not what the
+        // sandbox blocks.
+        SandboxIgnoreViolations ignoreViolations = SandboxIgnoreViolations.of(Map.of(
+                SandboxIgnoreViolations.ALL_COMMANDS, List.of("/tmp", "/var/tmp"),
+                "npm test", List.of("registry.npmjs.org")));
 
         // Full sandbox settings
         SandboxSettings sandbox = new SandboxSettings(

@@ -683,8 +683,10 @@ public final class ClaudeAgentOptions {
      * <p>When true, the CLI emits hook events (PreToolUse, PostToolUse, Stop,
      * etc.) as
      * {@link in.vidyalai.claude.sdk.types.message.HookEventMessage} objects in
-     * the message stream. Mirrors the TypeScript SDK's {@code includeHookEvents}
-     * and the Python SDK's {@code include_hook_events}.
+     * the message stream. The {@code SessionStart} and {@code Setup} hook
+     * events are emitted regardless of this setting. Mirrors the TypeScript
+     * SDK's {@code includeHookEvents} and the Python SDK's
+     * {@code include_hook_events}.
      *
      * @return true if hook events should be included
      */
@@ -1617,7 +1619,8 @@ public final class ClaudeAgentOptions {
          * <p>When true, the CLI emits hook events (PreToolUse, PostToolUse,
          * Stop, etc.) as
          * {@link in.vidyalai.claude.sdk.types.message.HookEventMessage} objects
-         * alongside regular messages.
+         * alongside regular messages. The {@code SessionStart} and
+         * {@code Setup} hook events are emitted regardless of this setting.
          *
          * @param includeHookEvents true to include hook events
          * @return this builder

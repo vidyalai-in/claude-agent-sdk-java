@@ -544,7 +544,13 @@ MCP 기능(리소스, 프롬프트, 자동완성)이 필요한 애플리케이�
 ### 예시: 위험한 명령 차단
 
 ```java
-import in.vidyalai.claude.sdk.types.*;
+import in.vidyalai.claude.sdk.types.hook.HookEvent;
+import in.vidyalai.claude.sdk.types.hook.HookMatcher;
+import in.vidyalai.claude.sdk.types.hook.input.PreToolUseHookInput;
+import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
+import in.vidyalai.claude.sdk.types.hook.output.PreToolUseHookSpecificOutput;
+import in.vidyalai.claude.sdk.types.message.Message;
+import in.vidyalai.claude.sdk.types.permission.PermissionDecision;
 import java.util.concurrent.CompletableFuture;
 
 HookMatcher.HookCallback checkBashCommand = (input, context) -> {
@@ -558,12 +564,11 @@ HookMatcher.HookCallback checkBashCommand = (input, context) -> {
                 if (command.contains(pattern)) {
                     return CompletableFuture.completedFuture(
                         HookOutput.builder()
-                            .hookSpecificOutput(
-                                HookSpecificOutput.preToolUse()
-                                    .permissionDecision("deny")
-                                    .permissionDecisionReason("Command contains blocked pattern: " + pattern)
-                                    .build()
-                            )
+                            .hookSpecificOutput(new PreToolUseHookSpecificOutput(
+                                PermissionDecision.DENY,
+                                "Command contains blocked pattern: " + pattern,
+                                null,   // updatedInput
+                                null))  // additionalContext
                             .build()
                     );
                 }
@@ -833,7 +838,7 @@ SandboxSettings sandbox = new SandboxSettings(
     true,   // enabled
     true,   // autoAllowBashIfSandboxed
     List.of("git", "docker"),  // excludedCommands
-    Path.of("/sandbox"),       // sandboxDir
+    null,   // allowUnsandboxedCommands (CLI default)
     new SandboxNetworkConfig(
         List.of("/tmp/ssh-agent.sock"),  // allowUnixSockets
         false,  // allowAllUnixSockets
@@ -841,11 +846,13 @@ SandboxSettings sandbox = new SandboxSettings(
         8080,   // httpProxyPort
         8081    // socksProxyPort
     ),
-    new SandboxIgnoreViolations(
-        List.of("/tmp"),  // file paths to ignore
-        List.of("localhost")  // network hosts to ignore
-    ),
-    false  // allowNestedSandbox
+    // Violations to leave unreported: command pattern ("*" = every command)
+    // -> substrings of the violation text. Affects reporting, not blocking.
+    SandboxIgnoreViolations.of(Map.of(
+        "*", List.of("/etc/hosts"),
+        "npm test", List.of("registry.npmjs.org")
+    )),
+    false   // enableWeakerNestedSandbox
 );
 
 ClaudeAgentOptions options = ClaudeAgentOptions.builder()
@@ -873,6 +880,11 @@ for (Message msg : messages) {
         }
         case SystemMessage system -> {
             System.out.println("System: " + system.subtype());
+            // Typed view of the session metadata; null unless subtype is "init"
+            SystemInitData init = system.initData();
+            if (init != null) {
+                System.out.println("Model: " + init.model() + " (CLI " + init.claudeCodeVersion() + ")");
+            }
         }
         case ResultMessage result -> {
             System.out.println("Result: " + result.subtype());

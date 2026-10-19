@@ -34,7 +34,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *                                  commands must run sandboxed (or be in
  *                                  excludedCommands). Default: True
  * @param network                   network configuration for sandbox
- * @param ignoreViolations          violations to ignore
+ * @param ignoreViolations          violations to leave unreported, as a map
+ *                                  of command pattern ({@code "*"} for every
+ *                                  command) to substrings of the violation
+ *                                  text. See {@link SandboxIgnoreViolations}
  * @param enableWeakerNestedSandbox enable weaker sandbox for unprivileged
  *                                  Docker environments (Linux only). Reduces
  *                                  security. Default: False

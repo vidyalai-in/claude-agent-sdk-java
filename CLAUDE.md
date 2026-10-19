@@ -234,7 +234,11 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
     │   ├── UserMessage.java            # User message record
     │   ├── AssistantMessage.java       # Assistant message record
     │   ├── AssistantMessageError.java  # Error types enum
-    │   ├── SystemMessage.java          # System message record
+    │   ├── SystemMessage.java          # System message record (initData() for init frames)
+    │   ├── SystemInitData.java         # Typed init payload (+ SystemInitMcpServer,
+    │   │                               # SystemInitPlugin, SystemInitPluginError)
+    │   ├── FastModeState.java          # Fast mode state enum (init payload)
+    │   ├── FastModeDisabledReason.java # Fast mode disabled reason enum (init payload)
     │   ├── ResultMessage.java          # Result message record
     │   ├── StreamEvent.java            # Stream event record
     │   ├── ConversationResetMessage.java # Conversation replaced mid-session
@@ -259,7 +263,10 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
     │   ├── HookMatcher.java            # Hook matcher class
     │   ├── HookContext.java            # Hook context record
     │   ├── input/                      # Hook input types (from CLI)
-    │   │   ├── HookInput.java              # Base sealed interface
+    │   │   ├── HookInput.java              # Base sealed interface (promptId, effort)
+    │   │   ├── HookEffort.java             # Effort level in effect when a hook fires
+    │   │   ├── BackgroundTaskSummary.java  # In-flight task, on Stop/SubagentStop inputs
+    │   │   ├── SessionCronSummary.java     # Scheduled wakeup, on Stop/SubagentStop inputs
     │   │   ├── PreToolUseHookInput.java    # Pre-tool-use hook
     │   │   ├── PostToolUseHookInput.java   # Post-tool-use hook
     │   │   ├── PostToolUseFailureHookInput.java # Tool failure hook
@@ -272,14 +279,29 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
     │   │   └── PermissionRequestHookInput.java # Permission request hook
     │   └── output/                     # Hook output types (to CLI)
     │       ├── HookOutput.java             # Hook output class
-    │       ├── HookSpecificOutput.java     # Hook-specific output builder
+    │       ├── HookSpecificOutput.java     # Sealed interface (21 permitted records)
     │       ├── PreToolUseHookSpecificOutput.java
     │       ├── PostToolUseHookSpecificOutput.java
     │       ├── PostToolUseFailureHookSpecificOutput.java
     │       ├── UserPromptSubmitHookSpecificOutput.java
     │       ├── NotificationHookSpecificOutput.java
     │       ├── SubagentStartHookSpecificOutput.java
-    │       └── PermissionRequestHookSpecificOutput.java
+    │       ├── PermissionRequestHookSpecificOutput.java
+    │       ├── SessionStartHookSpecificOutput.java
+    │       ├── UserPromptExpansionHookSpecificOutput.java
+    │       ├── PostToolBatchHookSpecificOutput.java
+    │       ├── StopHookSpecificOutput.java
+    │       ├── SubagentStopHookSpecificOutput.java
+    │       ├── PermissionDeniedHookSpecificOutput.java
+    │       ├── PreModelSwitchHookSpecificOutput.java
+    │       ├── PostModelSwitchHookSpecificOutput.java
+    │       ├── ElicitationHookSpecificOutput.java
+    │       ├── ElicitationResultHookSpecificOutput.java
+    │       ├── ElicitationAction.java      # accept/decline/cancel enum
+    │       ├── CwdChangedHookSpecificOutput.java
+    │       ├── FileChangedHookSpecificOutput.java
+    │       ├── WorktreeCreateHookSpecificOutput.java
+    │       └── MessageDisplayHookSpecificOutput.java
     ├── config/                     # Configuration types
     │   ├── AIModel.java                # AI model enum
     │   ├── AgentDefinition.java        # Agent definition
@@ -290,6 +312,7 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
     │   ├── SdkBeta.java                # Beta features enum
     │   ├── SandboxSettings.java        # Sandbox configuration
     │   ├── SandboxNetworkConfig.java   # Network config
+    │   ├── SandboxIgnoreViolations.java # Command pattern -> violation substrings map
     │   └── CompactTriggerType.java     # Compact trigger types
     ├── mcp/                        # MCP server types
     │   ├── McpServerConfig.java        # MCP server config interface
@@ -469,7 +492,8 @@ sdk/src/test/java/in/vidyalai/claude/sdk/
 └── types/
     ├── MessageParserTest.java     # Message parsing tests
     ├── TypesTest.java             # Type creation tests
-    └── AdditionalTypesTest.java   # Additional type tests
+    ├── AdditionalTypesTest.java   # Additional type tests
+    └── HookAndInitTypesTest.java  # Hook output/input key-set parity, SystemInitData
 ```
 
 # Design Patterns

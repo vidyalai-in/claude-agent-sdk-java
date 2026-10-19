@@ -85,4 +85,23 @@ public sealed interface HookInput permits
     @Nullable
     String permissionMode();
 
+    /**
+     * UUID of the user prompt being processed. Matches the {@code prompt.id}
+     * attribute on OpenTelemetry events.
+     *
+     * @return the prompt ID, or null before the first user input
+     */
+    @Nullable
+    String promptId();
+
+    /**
+     * Effort in effect for the current turn. Present for hooks that fire
+     * within a tool-use context (PreToolUse, PostToolUse, Stop, SubagentStop,
+     * etc.) on models that support effort.
+     *
+     * @return the effort, or null if not reported
+     */
+    @Nullable
+    HookEffort effort();
+
 }

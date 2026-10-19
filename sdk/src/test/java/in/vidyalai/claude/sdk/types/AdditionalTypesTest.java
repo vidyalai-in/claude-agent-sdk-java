@@ -8,6 +8,8 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import in.vidyalai.claude.sdk.types.config.AIModel;
 import in.vidyalai.claude.sdk.types.config.AgentDefinition;
 import in.vidyalai.claude.sdk.types.config.MemoryScope;
@@ -394,9 +396,7 @@ class AdditionalTypesTest {
                 8080,
                 1080);
 
-        SandboxIgnoreViolations ignore = new SandboxIgnoreViolations(
-                List.of("/tmp"),
-                List.of("localhost"));
+        SandboxIgnoreViolations ignore = SandboxIgnoreViolations.forAllCommands(List.of("/tmp"));
 
         SandboxSettings sandbox = new SandboxSettings(
                 true,
@@ -411,7 +411,31 @@ class AdditionalTypesTest {
         assertThat(sandbox.autoAllowBashIfSandboxed()).isTrue();
         assertThat(sandbox.excludedCommands()).containsExactly("git", "docker");
         assertThat(sandbox.network().httpProxyPort()).isEqualTo(8080);
-        assertThat(sandbox.ignoreViolations().file()).containsExactly("/tmp");
+        assertThat(sandbox.ignoreViolations().patterns()).containsExactly(Map.entry("*", List.of("/tmp")));
+    }
+
+    @Test
+    void testSandboxIgnoreViolationsIsCommandPatternMapOnTheWire() throws Exception {
+        // ignoreViolations matches the CLI schema: command pattern -> substrings
+        ObjectMapper mapper = new ObjectMapper();
+        String json = "{\"*\":[\"/etc/hosts\"],\"npm test\":[\"registry.npmjs.org\"]}";
+
+        SandboxIgnoreViolations read = mapper.readValue(json, SandboxIgnoreViolations.class);
+        assertThat(read.patterns()).containsExactly(
+                Map.entry("*", List.of("/etc/hosts")),
+                Map.entry("npm test", List.of("registry.npmjs.org")));
+        assertThat(mapper.readTree(mapper.writeValueAsString(read))).isEqualTo(mapper.readTree(json));
+
+        // Nested in SandboxSettings, both directions
+        SandboxSettings settings = mapper.readValue(
+                "{\"enabled\":true,\"ignoreViolations\":" + json + "}", SandboxSettings.class);
+        assertThat(settings.ignoreViolations()).isEqualTo(read);
+        assertThat(mapper.readTree(mapper.writeValueAsString(settings)).get("ignoreViolations"))
+                .isEqualTo(mapper.readTree(json));
+
+        assertThat(mapper.readValue("{}", SandboxIgnoreViolations.class).patterns()).isEmpty();
+        assertThatThrownBy(() -> mapper.readValue("{\"*\":null}", SandboxIgnoreViolations.class))
+                .isInstanceOf(com.fasterxml.jackson.databind.JsonMappingException.class);
     }
 
     @Test

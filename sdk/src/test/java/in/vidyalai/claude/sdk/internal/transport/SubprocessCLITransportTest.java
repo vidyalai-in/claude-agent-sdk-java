@@ -6,11 +6,15 @@ import java.io.BufferedReader;
 import java.io.StringReader;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
 import org.junit.jupiter.api.Test;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.types.config.AIModel;
@@ -1094,9 +1098,9 @@ class SubprocessCLITransportTest {
     @SuppressWarnings("null")
     @Test
     void testSandboxIgnoreViolationsConfig() {
-        SandboxIgnoreViolations ignore = new SandboxIgnoreViolations(
-                List.of("/tmp"),
-                List.of("localhost", "127.0.0.1"));
+        SandboxIgnoreViolations ignore = SandboxIgnoreViolations.of(Map.of(
+                "*", List.of("/tmp"),
+                "curl", List.of("localhost", "127.0.0.1")));
         SandboxSettings sandbox = new SandboxSettings(
                 true,
                 null,
@@ -1111,8 +1115,43 @@ class SubprocessCLITransportTest {
                 .build();
 
         assertThat(options.sandbox().ignoreViolations()).isNotNull();
-        assertThat(options.sandbox().ignoreViolations().file()).containsExactly("/tmp");
-        assertThat(options.sandbox().ignoreViolations().network()).containsExactly("localhost", "127.0.0.1");
+        assertThat(options.sandbox().ignoreViolations().patterns())
+                .containsEntry("*", List.of("/tmp"))
+                .containsEntry("curl", List.of("localhost", "127.0.0.1"));
+    }
+
+    @Test
+    void testSandboxIgnoreViolationsPassedThrough() throws Exception {
+        // ignoreViolations reaches --settings as a command-pattern map
+        Map<String, List<String>> patterns = new LinkedHashMap<>();
+        patterns.put("*", List.of("/etc/hosts"));
+        patterns.put("npm test", List.of("registry.npmjs.org"));
+        SandboxSettings sandbox = new SandboxSettings(
+                true, null, null, null, null, SandboxIgnoreViolations.of(patterns), null);
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .sandbox(sandbox)
+                .cliPath(Path.of("/usr/bin/claude"))
+                .build();
+        SubprocessCLITransport transport = new SubprocessCLITransport(options);
+        List<String> cmd = transport.buildCommand();
+
+        int idx = cmd.indexOf("--settings");
+        assertThat(idx).isGreaterThanOrEqualTo(0);
+        JsonNode parsed = new ObjectMapper().readTree(cmd.get(idx + 1));
+        assertThat(parsed.path("sandbox").path("ignoreViolations"))
+                .isEqualTo(new ObjectMapper().readTree(
+                        "{\"*\": [\"/etc/hosts\"], \"npm test\": [\"registry.npmjs.org\"]}"));
+        transport.close();
+    }
+
+    @SuppressWarnings({ "removal", "null" })
+    @Test
+    void testSandboxIgnoreViolationsLegacyConstructorAppliesToAllCommands() {
+        // The pre-0.2.4 file/network shape now lands under "*" instead of
+        // being sent as the command patterns "file" and "network".
+        SandboxIgnoreViolations ignore = new SandboxIgnoreViolations(
+                List.of("/tmp"), List.of("localhost"));
+        assertThat(ignore.patterns()).containsExactly(Map.entry("*", List.of("/tmp", "localhost")));
     }
 
     // ==================== MCP Server Configuration Tests ====================

@@ -1,9 +1,9 @@
 package examples;
 
-import java.util.Map;
-
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDKClient;
+import in.vidyalai.claude.sdk.types.config.ThinkingConfigEnabled;
+import in.vidyalai.claude.sdk.types.config.ThinkingDisplay;
 import in.vidyalai.claude.sdk.types.message.Message;
 
 /**
@@ -34,7 +34,10 @@ public class IncludePartialMessagesExample {
                 .includePartialMessages(true)
                 .model("claude-sonnet-4-5")
                 .maxTurns(2)
-                .env(Map.of("MAX_THINKING_TOKENS", "8000"))
+                // Ask for summarized thinking explicitly. Since CLI 2.1.287
+                // thinking text is omitted unless requested: the
+                // thinking_delta events still arrive, but with empty text.
+                .thinking(new ThinkingConfigEnabled(8000, ThinkingDisplay.SUMMARIZED))
                 .build();
 
         try (ClaudeSDKClient client = new ClaudeSDKClient(options)) {

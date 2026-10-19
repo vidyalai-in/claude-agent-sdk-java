@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-09-26 (Updated)
-**Java SDK Version:** 0.2.3
-**Python SDK Version:** [0.2.160](https://github.com/anthropics/claude-agent-sdk-python/commit/36f95486ee9fc49d8ee1ed56811f07b5e8e23ac6) (latest)
+**Analysis Date:** 2026-10-19 (Updated)
+**Java SDK Version:** 0.2.4
+**Python SDK Version:** [0.2.168](https://github.com/anthropics/claude-agent-sdk-python/commit/498e063489d08a36210dbfc5fa5f5b72b401ea62) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,14 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.2.160):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.160. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.168):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.168. These updates include:
+- **v0.2.161-0.2.168** - Three type-level changes, all in v0.2.166; everything else is bundled-CLI bumps (2.1.284 → 2.1.303), CI hardening (#1328, #1329, #1366, #1368) and e2e-test fixes. Ported to Java:
+  - **Hook-specific output types and missing hook input fields** (PR #1331). Fourteen new `HookSpecificOutput` records (Python added 13; `SessionStartHookSpecificOutput` already existed in Python and had been missed in Java): `SessionStart` (`additionalContext`, `initialUserMessage`, `sessionTitle`, `watchPaths`, `reloadSkills`), `UserPromptExpansion`, `PostToolBatch`, `Stop`, `SubagentStop`, `PermissionDenied` (`retry`), `PreModelSwitch` (`permissionDecision` limited to allow/deny/ask — the record rejects `DEFER`), `PostModelSwitch`, `Elicitation`/`ElicitationResult` (`action` as the new `ElicitationAction` enum, `content`), `CwdChanged`/`FileChanged` (`watchPaths`), `WorktreeCreate` (required `worktreePath`) and `MessageDisplay` (`displayContent`). `UserPromptSubmitHookSpecificOutput` gains `sessionTitle` and `suppressOriginalPrompt`. All are registered in `@JsonSubTypes` and `permits`. Every `HookInput` gains `promptId()` and `effort()` (new `HookEffort` record); `PostToolUse`/`PostToolUseFailure` gain `durationMs`; `Stop`/`SubagentStop` gain `lastAssistantMessage`, `backgroundTasks` (`BackgroundTaskSummary`) and `sessionCrons` (`SessionCronSummary`). New components are appended and each record keeps its previous canonical signature as an overload. As in Python, `HookEvent` is unchanged, so SDK callbacks still cannot register for the events that only have outputs.
+  - **`SystemInitData`** (PR #1332): the `system`/`init` payload as a record, with `SystemInitMcpServer`, `SystemInitPlugin`, `SystemInitPluginError` and the `FastModeState`/`FastModeDisabledReason` enums. Python narrows with `cast(SystemInitData, msg.data)`; Java reads it with `SystemMessage.initData()` (null for other subtypes) or `SystemInitData.from(map)`. The parser still returns a plain `SystemMessage`. Unknown keys are ignored and an unrecognized enum value reads as `null` (Python's literals are an open set too), with the raw value left in `data()`.
+  - **`SandboxSettings.ignoreViolations` type fix** (PR #1380): now a command-pattern → violation-substrings map, matching the CLI schema. `SandboxIgnoreViolations` is a single-component record (`patterns`) serialized as the bare map via `@JsonValue`, with `of(Map)`, `forAllCommands(List)` and `ALL_COMMANDS`. The old `(file, network)` constructor stays, deprecated for removal, and now puts both lists under `"*"`. It used to send `"file"`/`"network"` as command patterns. The `file()`/`network()` accessors are gone (breaking).
+  - **Docs** (#1336): `includeHookEvents` Javadoc notes that `SessionStart` and `Setup` hook events are emitted regardless.
+  - **e2e fixes**: `test_include_partial_messages.py` now asks for `thinking={"type": "enabled", "budget_tokens": 8000, "display": "summarized"}` because CLI 2.1.287+ omits thinking text otherwise; `IncludePartialMessagesExample` makes the same switch from `MAX_THINKING_TOKENS`. `test_verbatim_prompts.py` decides by the transcript's `file` attachments instead of the model's reply; `VerbatimPromptsExample` now also reads the session transcript, resolved from the run's cwd via `ClaudeSDK.projectKeyForDirectory`, and flags the marker in either the transcript or the reply.
+  - *Tests.* `HookAndInitTypesTest` ports `TestHookSpecificOutputTypes`' new cases, `TestHookInputFieldParity` and `TestSystemInitData`. Key sets are checked against each record's `@JsonProperty` names and JSpecify `@Nullable` markers, the way Python checks `__required_keys__`/`__optional_keys__`. `SubprocessCLITransportTest.testSandboxIgnoreViolationsPassedThrough` ports the `--settings` passthrough test. `AdditionalTypesTest.testSandboxIgnoreViolationsIsCommandPatternMapOnTheWire` is the counterpart of `test_sandbox_ignore_violations_is_command_pattern_map`: it reads and writes the bare map, alone and nested in `SandboxSettings`.
 - **v0.2.141-0.2.160** - Three behavioral changes; everything else is bundled-CLI bumps (2.1.236 → 2.1.283), wheel/CI packaging work, and a docstring pass (#1293). Ported to Java:
   - **Keep stdin open until the CLI reports idle** (PR #1279, v0.2.160, issue #1190): the #1088 task ledger cannot see a background agent that settles *before* the turn's result, yet that completion still wakes the parent for a follow-up turn whose hook, permission and SDK MCP requests need stdin. The transport now sets `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` (unless the caller named it, in any case), so the CLI sends `session_state_changed` frames marked `sdk_host_only`; `QueryHandler` reads them and drops the marked ones before the consumer. With state reported, the run ends at `idle` after a result (still deferring to the ledger); without it, at the first result with nothing tracked in flight, as before. The wait for `idle` is bounded **between turns** by `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (default 600000, `0` = none, read from `options.env` over the ambient environment): restarted at each result and each `running`, stopped by main-thread `assistant`/`stream_event` frames and by `requires_action`, and it never cuts off a tracked agent. Each prompt `streamInput` writes owes a run of its own, so a multi-message prompt waits for its last prompt's run, and work the CLI takes up after `idle` reopens the run while input is still open. 23 tests in `QueryHandlerRunEndTest`, plus the transport env default in `SystemPromptAndSessionStateTransportTest`.
     - *Stand-in CLI test.* `tests/test_run_end_subprocess.py` is ported as `RunEndSubprocessTest`: the real `SubprocessCLITransport` spawns `FakeSessionStateCli` (a Java program behind a shell script), so the env default, frame filtering, a hook served in the follow-up turn, and the `options.env` ceiling are all exercised through `ClaudeSDK.query`. The same stand-in drives the `verbatimPrompts` older-CLI warning through the real version check.
@@ -319,6 +326,8 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | User message | `UserMessage` dataclass (with `tool_use_result`) | `UserMessage` record (with `tool_use_result`) | ✅ |
 | Assistant message | `AssistantMessage` dataclass | `AssistantMessage` record | ✅ |
 | System message | `SystemMessage` dataclass | `SystemMessage` record | ✅ |
+| Init payload | `SystemInitData` TypedDict (+ `SystemInitMcpServer`, `SystemInitPlugin`, `SystemInitPluginError`) | `SystemInitData` record via `SystemMessage.initData()` (+ nested records) | ✅ |
+| Fast mode literals | `FastModeState`, `FastModeDisabledReason` Literals | `FastModeState`, `FastModeDisabledReason` enums | ✅ |
 | Task started message | `TaskStartedMessage` dataclass | `TaskStartedMessage` record | ✅ |
 | Task progress message | `TaskProgressMessage` dataclass | `TaskProgressMessage` record | ✅ |
 | Task notification message | `TaskNotificationMessage` dataclass | `TaskNotificationMessage` record | ✅ |
@@ -377,17 +386,20 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | Permission behavior | `PermissionBehavior` | `PermissionBehavior` enum | ✅ |
 | Permission rule value | `PermissionRuleValue` | `PermissionRuleValue` enum | ✅ |
 
-### Hook System (20 types)
+### Hook System (38 types)
 
 | Type | Python | Java | Status |
 |------|--------|------|--------|
-| Hook input (base) | `HookInput` union | `HookInput` sealed interface | ✅ |
+| Hook input (base) | `HookInput` union (`BaseHookInput` with `prompt_id`, `effort`) | `HookInput` sealed interface (`promptId()`, `effort()`) | ✅ |
+| Hook effort | `HookEffort` TypedDict | `HookEffort` record | ✅ |
+| Background task summary | `BackgroundTaskSummary` TypedDict | `BackgroundTaskSummary` record | ✅ |
+| Session cron summary | `SessionCronSummary` TypedDict | `SessionCronSummary` record | ✅ |
 | PreToolUse input | `PreToolUseHookInput` (with tool_use_id) | `PreToolUseHookInput` (with toolUseId) | ✅ |
-| PostToolUse input | `PostToolUseHookInput` (with tool_use_id) | `PostToolUseHookInput` (with toolUseId) | ✅ |
-| PostToolUseFailure input | `PostToolUseFailureHookInput` | `PostToolUseFailureHookInput` record | ✅ |
+| PostToolUse input | `PostToolUseHookInput` (with tool_use_id, duration_ms) | `PostToolUseHookInput` (with toolUseId, durationMs) | ✅ |
+| PostToolUseFailure input | `PostToolUseFailureHookInput` (with duration_ms) | `PostToolUseFailureHookInput` record (with durationMs) | ✅ |
 | UserPromptSubmit input | `UserPromptSubmitHookInput` | `UserPromptSubmitHookInput` record | ✅ |
-| Stop input | `StopHookInput` | `StopHookInput` record | ✅ |
-| SubagentStop input | `SubagentStopHookInput` (with agent_id, agent_transcript_path, agent_type) | `SubagentStopHookInput` (with agentId, agentTranscriptPath, agentType) | ✅ |
+| Stop input | `StopHookInput` (with last_assistant_message, background_tasks, session_crons) | `StopHookInput` record (with lastAssistantMessage, backgroundTasks, sessionCrons) | ✅ |
+| SubagentStop input | `SubagentStopHookInput` (with agent_id, agent_transcript_path, agent_type, last_assistant_message, background_tasks, session_crons) | `SubagentStopHookInput` (with agentId, agentTranscriptPath, agentType, lastAssistantMessage, backgroundTasks, sessionCrons) | ✅ |
 | SubagentStart input | `SubagentStartHookInput` | `SubagentStartHookInput` record | ✅ |
 | PreCompact input | `PreCompactHookInput` | `PreCompactHookInput` record | ✅ |
 | Notification input | `NotificationHookInput` | `NotificationHookInput` record | ✅ |
@@ -395,11 +407,16 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | Hook matcher | `HookMatcher` | `HookMatcher` class | ✅ |
 | Hook output | `HookJSONOutput` | `HookOutput` class | ✅ |
 | Hook context | `HookContext` | `HookContext` record | ✅ |
-| Hook specific output (base) | `HookSpecificOutput` union | `HookSpecificOutput` class | ✅ |
+| Hook specific output (base) | `HookSpecificOutput` union (21 members) | `HookSpecificOutput` sealed interface (21 permitted records) | ✅ |
 | PreToolUse specific output | With additionalContext | With additionalContext | ✅ |
 | PostToolUse specific output | With additionalContext, updatedMCPToolOutput | With additionalContext, updatedMCPToolOutput | ✅ |
 | PostToolUseFailure specific output | `PostToolUseFailureHookSpecificOutput` | `PostToolUseFailureHookSpecificOutput` | ✅ |
-| UserPromptSubmit specific output | `UserPromptSubmitHookSpecificOutput` | `UserPromptSubmitHookSpecificOutput` | ✅ |
+| UserPromptSubmit specific output | `UserPromptSubmitHookSpecificOutput` (with sessionTitle, suppressOriginalPrompt) | `UserPromptSubmitHookSpecificOutput` (with sessionTitle, suppressOriginalPrompt) | ✅ |
+| SessionStart specific output | `SessionStartHookSpecificOutput` | `SessionStartHookSpecificOutput` | ✅ |
+| UserPromptExpansion / PostToolBatch / Stop / SubagentStop specific outputs | `*HookSpecificOutput` TypedDicts | `*HookSpecificOutput` records | ✅ |
+| PermissionDenied / PreModelSwitch / PostModelSwitch specific outputs | `*HookSpecificOutput` TypedDicts | `*HookSpecificOutput` records | ✅ |
+| Elicitation / ElicitationResult specific outputs | `*HookSpecificOutput` TypedDicts (`action` Literal) | `*HookSpecificOutput` records (`ElicitationAction` enum) | ✅ |
+| CwdChanged / FileChanged / WorktreeCreate / MessageDisplay specific outputs | `*HookSpecificOutput` TypedDicts | `*HookSpecificOutput` records | ✅ |
 | Notification specific output | `NotificationHookSpecificOutput` | `NotificationHookSpecificOutput` | ✅ |
 | SubagentStart specific output | `SubagentStartHookSpecificOutput` | `SubagentStartHookSpecificOutput` | ✅ |
 | PermissionRequest specific output | `PermissionRequestHookSpecificOutput` | `PermissionRequestHookSpecificOutput` | ✅ |
@@ -421,7 +438,7 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 |------|--------|------|--------|
 | Sandbox settings | `SandboxSettings` TypedDict | `SandboxSettings` class | ✅ |
 | Network config | `SandboxNetworkConfig` TypedDict | `SandboxNetworkConfig` class | ✅ |
-| Ignore violations | `SandboxIgnoreViolations` TypedDict | `SandboxIgnoreViolations` class | ✅ |
+| Ignore violations | `SandboxIgnoreViolations` alias for `dict[str, list[str]]` | `SandboxIgnoreViolations` record serialized as the bare map | ✅ |
 
 ### Exception Types (7 exceptions)
 
@@ -649,8 +666,9 @@ All 37+ configuration options are implemented with 100% parity:
 ### ✅ Hook System: 100% Parity
 
 - [x] All 10 hook events (PreToolUse, PostToolUse, PostToolUseFailure, UserPromptSubmit, Stop, SubagentStop, SubagentStart, PreCompact, Notification, PermissionRequest)
-- [x] Enhanced hook input types with new fields (tool_use_id, agent_id, agent_transcript_path, agent_type)
-- [x] Enhanced hook output types with new fields (additionalContext, updatedMCPToolOutput)
+- [x] Enhanced hook input types with new fields (tool_use_id, agent_id, agent_transcript_path, agent_type, prompt_id, effort, duration_ms, last_assistant_message, background_tasks, session_crons)
+- [x] Enhanced hook output types with new fields (additionalContext, updatedMCPToolOutput, sessionTitle, suppressOriginalPrompt)
+- [x] Typed outputs for SessionStart, UserPromptExpansion, PostToolBatch, Stop, SubagentStop, PermissionDenied, Pre/PostModelSwitch, Elicitation, ElicitationResult, CwdChanged, FileChanged, WorktreeCreate and MessageDisplay
 - [x] Hook matchers with patterns
 - [x] Hook callbacks
 - [x] Hook-specific outputs for all event types
@@ -902,7 +920,7 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-09-26
-**Python SDK Version:** 0.2.160 (commit 36f95486ee9fc49d8ee1ed56811f07b5e8e23ac6)
-**Java SDK Version:** 0.2.3
+**Latest Verification:** 2026-10-19
+**Python SDK Version:** 0.2.168 (commit 498e063489d08a36210dbfc5fa5f5b72b401ea62)
+**Java SDK Version:** 0.2.4
 **Status:** ✅ 100% Feature Parity Maintained

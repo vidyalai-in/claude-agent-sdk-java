@@ -18,10 +18,25 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
  * responses.
  * See {@link in.vidyalai.claude.sdk.types} package documentation for details.
  *
- * @param additionalContext optional additional context for Claude
+ * @param additionalContext      optional additional context for Claude
+ * @param sessionTitle           sets the session title
+ * @param suppressOriginalPrompt when the hook output's {@code decision} is
+ *                               {@code "block"}, omit the original prompt from
+ *                               the block message
  */
 public record UserPromptSubmitHookSpecificOutput(
-        @JsonProperty("additionalContext") @Nullable String additionalContext) implements HookSpecificOutput {
+        @JsonProperty("additionalContext") @Nullable String additionalContext,
+        @JsonProperty("sessionTitle") @Nullable String sessionTitle,
+        @JsonProperty("suppressOriginalPrompt") @Nullable Boolean suppressOriginalPrompt)
+        implements HookSpecificOutput {
+
+    /**
+     * Backwards-compatible constructor without {@code sessionTitle} and
+     * {@code suppressOriginalPrompt}.
+     */
+    public UserPromptSubmitHookSpecificOutput(@Nullable String additionalContext) {
+        this(additionalContext, null, null);
+    }
 
     @JsonProperty("hookEventName")
     @Override
@@ -35,6 +50,12 @@ public record UserPromptSubmitHookSpecificOutput(
         result.put(HOOK_EVENT_NAME, hookEventName());
         if (additionalContext != null) {
             result.put(ADDITIONAL_CONTEXT, additionalContext);
+        }
+        if (sessionTitle != null) {
+            result.put(SESSION_TITLE, sessionTitle);
+        }
+        if (suppressOriginalPrompt != null) {
+            result.put(SUPPRESS_ORIGINAL_PROMPT, suppressOriginalPrompt);
         }
         return result;
     }

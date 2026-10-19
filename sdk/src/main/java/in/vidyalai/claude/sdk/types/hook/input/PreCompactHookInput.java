@@ -22,6 +22,13 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
  * @param trigger            what triggered the compaction
  * @param customInstructions optional custom instructions for compaction (can be
  *                           null)
+ * @param promptId           UUID of the user prompt being processed. Matches
+ *                           the {@code prompt.id} attribute on OpenTelemetry
+ *                           events. Absent until the first user input
+ * @param effort             effort in effect for the current turn. Present for
+ *                           hooks that fire within a tool-use context
+ *                           (PreToolUse, PostToolUse, Stop, SubagentStop, etc.)
+ *                           on models that support effort
  */
 public record PreCompactHookInput(
         @JsonProperty("session_id") String sessionId,
@@ -29,7 +36,20 @@ public record PreCompactHookInput(
         @JsonProperty("cwd") String cwd,
         @JsonProperty("permission_mode") @Nullable String permissionMode,
         @JsonProperty("trigger") CompactTriggerType trigger,
-        @JsonProperty("custom_instructions") @Nullable String customInstructions) implements HookInput {
+        @JsonProperty("custom_instructions") @Nullable String customInstructions,
+        @JsonProperty("prompt_id") @Nullable String promptId,
+        @JsonProperty("effort") @Nullable HookEffort effort) implements HookInput {
+
+    /**
+     * Backwards-compatible constructor without {@code promptId},
+     * {@code effort}.
+     */
+    public PreCompactHookInput(String sessionId, String transcriptPath, String cwd,
+            @Nullable String permissionMode, CompactTriggerType trigger,
+            @Nullable String customInstructions) {
+        this(sessionId, transcriptPath, cwd, permissionMode, trigger,
+                customInstructions, null, null);
+    }
 
     @JsonProperty("hook_event_name")
     @Override
