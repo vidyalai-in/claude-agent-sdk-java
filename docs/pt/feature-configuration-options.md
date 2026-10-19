@@ -673,17 +673,19 @@ seguintes pelo resto da sessão.
 Registra callbacks de hook para eventos do ciclo de vida.
 
 ```java
+HookMatcher.HookCallback beforeRead = (input, context) -> {
+    System.out.println("About to read file");
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+
 .hooks(Map.of(
-    HookEvent.PRE_TOOL_USE, List.of(
-        new HookMatcher(null, "Read", (context) -> {
-            System.out.println("About to read file");
-            return CompletableFuture.completedFuture(
-                HookOutput.empty()
-            );
-        })
-    )
+    HookEvent.PRE_TOOL_USE, List.of(new HookMatcher("Read", List.of(beforeRead)))
 ))
 ```
+
+Um callback recebe o `HookInput` tipado e um `HookContext`, e retorna um
+`CompletableFuture<HookOutput>`. Veja [Hooks](./feature-hooks.md) para as
+entradas, as saídas e as saídas específicas de hook.
 
 **Eventos disponíveis**:
 - `PRE_TOOL_USE` — antes de executar a ferramenta
@@ -873,6 +875,22 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
+`ignoreViolations` recebe um `SandboxIgnoreViolations`: um map de um padrão de comando (`"*"` para
+todos os comandos) para substrings do texto da violação. Uma violação deixa de ser reportada quando o
+texto do comando contém o padrão e o texto da violação contém uma das strings. As duas verificações são
+simples correspondências de substring, não globs, e a configuração muda quais violações são
+reportadas, não o que o sandbox bloqueia. Ela é serializada como o map puro:
+
+```java
+SandboxIgnoreViolations.forAllCommands(List.of("/etc/hosts"))   // {"*": ["/etc/hosts"]}
+
+SandboxIgnoreViolations.of(Map.of(
+    SandboxIgnoreViolations.ALL_COMMANDS, List.of("/etc/hosts"),
+    "npm test", List.of("registry.npmjs.org")))
+```
+
+O construtor obsoleto `(file, network)` de antes da 0.2.4 coloca as duas listas em `"*"`.
+
 Campos de `SandboxNetworkConfig`:
 
 - `allowedDomains` — domínios que os processos no sandbox podem alcançar.
@@ -996,20 +1014,18 @@ var options = ClaudeAgentOptions.builder()
     .allowedTools(List.of("mcp__tools__process"))
     .hooks(Map.of(
         HookEvent.PRE_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
-                log("Processing: " + context.input());
-                return CompletableFuture.completedFuture(
-                    HookOutput.logs(List.of("Started processing"))
-                );
-            })
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
+                if (input instanceof PreToolUseHookInput pre) {
+                    log("Processing: " + pre.toolInput());
+                }
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         ),
         HookEvent.POST_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
                 log("Completed processing");
-                return CompletableFuture.completedFuture(
-                    HookOutput.empty()
-                );
-            })
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         )
     ))
     .build();

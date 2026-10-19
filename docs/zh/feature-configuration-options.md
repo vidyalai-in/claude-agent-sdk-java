@@ -639,17 +639,18 @@ BiFunction<String, Object, ToolPermissionContext, CompletableFuture<PermissionRe
 为生命周期事件注册钩子回调。
 
 ```java
+HookMatcher.HookCallback beforeRead = (input, context) -> {
+    System.out.println("About to read file");
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+
 .hooks(Map.of(
-    HookEvent.PRE_TOOL_USE, List.of(
-        new HookMatcher(null, "Read", (context) -> {
-            System.out.println("About to read file");
-            return CompletableFuture.completedFuture(
-                HookOutput.empty()
-            );
-        })
-    )
+    HookEvent.PRE_TOOL_USE, List.of(new HookMatcher("Read", List.of(beforeRead)))
 ))
 ```
+
+回调接收类型化的 `HookInput` 和一个 `HookContext`，并返回 `CompletableFuture<HookOutput>`。
+输入、输出以及钩子专属输出详见[钩子](./feature-hooks.md)。
 
 **可用事件**：
 - `PRE_TOOL_USE` —— 工具执行前
@@ -816,6 +817,20 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
+`ignoreViolations` 接受一个 `SandboxIgnoreViolations`：它是从命令模式（`"*"` 表示所有命令）到违规文本子串的映射。
+当命令文本包含该模式、且违规文本包含其中某个字符串时，这条违规就不会被报告。两项检查都是普通的子串匹配，而非 glob；
+该设置改变的是哪些违规会被报告，而不是沙箱会拦截什么。它会序列化为一个裸 map：
+
+```java
+SandboxIgnoreViolations.forAllCommands(List.of("/etc/hosts"))   // {"*": ["/etc/hosts"]}
+
+SandboxIgnoreViolations.of(Map.of(
+    SandboxIgnoreViolations.ALL_COMMANDS, List.of("/etc/hosts"),
+    "npm test", List.of("registry.npmjs.org")))
+```
+
+0.2.4 之前已弃用的 `(file, network)` 构造器会把两个列表都放在 `"*"` 下。
+
 `SandboxNetworkConfig` 字段：
 
 - `allowedDomains` —— 沙箱进程可以访问的域名。
@@ -937,20 +952,18 @@ var options = ClaudeAgentOptions.builder()
     .allowedTools(List.of("mcp__tools__process"))
     .hooks(Map.of(
         HookEvent.PRE_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
-                log("Processing: " + context.input());
-                return CompletableFuture.completedFuture(
-                    HookOutput.logs(List.of("Started processing"))
-                );
-            })
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
+                if (input instanceof PreToolUseHookInput pre) {
+                    log("Processing: " + pre.toolInput());
+                }
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         ),
         HookEvent.POST_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
                 log("Completed processing");
-                return CompletableFuture.completedFuture(
-                    HookOutput.empty()
-                );
-            })
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         )
     ))
     .build();

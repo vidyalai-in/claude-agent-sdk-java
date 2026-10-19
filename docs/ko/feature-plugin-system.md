@@ -69,24 +69,29 @@ examples/src/main/java/examples/plugins/demo-plugin/
 
 ## 플러그인 로드 여부 확인
 
-CLI는 로드된 플러그인을 `init` 시스템 메시지의 `plugins` 필드에 `name`과 `path`를 가진 Map의 목록으로
-보고합니다:
+CLI는 로드된 플러그인을 `init` 시스템 메시지로 보고합니다. 로드에 실패한 플러그인도 함께 나열하는
+`SystemMessage.initData()`를 통해 읽으세요:
 
 ```java
 for (Message msg : ClaudeSDK.query("Hello!", options)) {
-    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
-        @SuppressWarnings("unchecked")
-        List<Object> plugins = (List<Object>) system.get("plugins");
-        if (plugins != null) {
-            for (Object p : plugins) {
-                if (p instanceof Map<?, ?> plugin) {
-                    System.out.println(plugin.get("name") + " (" + plugin.get("path") + ")");
-                }
+    if (msg instanceof SystemMessage system && system.initData() != null) {
+        SystemInitData init = system.initData();
+        for (SystemInitPlugin plugin : init.plugins()) {
+            System.out.println(plugin.name() + " (" + plugin.path() + ")");
+        }
+        if (init.pluginErrors() != null) {
+            for (SystemInitPluginError error : init.pluginErrors()) {
+                System.out.println("Failed: " + error.plugin() + " - " + error.type() + ": " + error.message());
             }
         }
     }
 }
 ```
+
+`SystemInitPlugin.version()`은 플러그인 매니페스트에 선언된 버전이며, 선언이 없으면 `null`입니다. 아예
+로드되지 않은 플러그인 디렉터리의 경우 `SystemInitPluginError.plugin()`은 `inline[0]` 같은 위치 태그일 수
+있고, `path()`는 해당 항목의 경로를 cwd 기준으로 해석한 값입니다.
+[메시지 타입 → init 메시지](./feature-message-types.md#init-메시지-systeminitdata)를 참고하세요.
 
 ## 관련 항목
 - [구성 옵션](./feature-configuration-options.md#plugins) — plugins 옵션

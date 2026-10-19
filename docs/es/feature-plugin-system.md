@@ -70,24 +70,30 @@ Claude Code para ver la estructura de directorios completa.
 
 ## Verificar que un plugin se cargó
 
-El CLI informa de los plugins cargados en el campo `plugins` del mensaje de sistema `init`, una lista
-de mapas con `name` y `path`:
+El CLI informa de los plugins cargados en el mensaje de sistema `init`. Léelos mediante
+`SystemMessage.initData()`, que también enumera los plugins que no se pudieron cargar:
 
 ```java
 for (Message msg : ClaudeSDK.query("Hello!", options)) {
-    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
-        @SuppressWarnings("unchecked")
-        List<Object> plugins = (List<Object>) system.get("plugins");
-        if (plugins != null) {
-            for (Object p : plugins) {
-                if (p instanceof Map<?, ?> plugin) {
-                    System.out.println(plugin.get("name") + " (" + plugin.get("path") + ")");
-                }
+    if (msg instanceof SystemMessage system && system.initData() != null) {
+        SystemInitData init = system.initData();
+        for (SystemInitPlugin plugin : init.plugins()) {
+            System.out.println(plugin.name() + " (" + plugin.path() + ")");
+        }
+        if (init.pluginErrors() != null) {
+            for (SystemInitPluginError error : init.pluginErrors()) {
+                System.out.println("Failed: " + error.plugin() + " - " + error.type() + ": " + error.message());
             }
         }
     }
 }
 ```
+
+`SystemInitPlugin.version()` es la versión declarada en el manifiesto del plugin,
+o `null` cuando no declara ninguna. Para un directorio de plugin que no llegó a cargarse
+en absoluto, `SystemInitPluginError.plugin()` puede ser una etiqueta posicional como
+`inline[0]`, y `path()` es la ruta de esa entrada resuelta respecto al cwd. Consulta
+[Tipos de mensaje → El mensaje init](./feature-message-types.md#el-mensaje-init-systeminitdata).
 
 ## Véase también
 - [Opciones de configuración](./feature-configuration-options.md#plugins): opción plugins

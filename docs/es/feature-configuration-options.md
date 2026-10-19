@@ -670,17 +670,19 @@ posteriores durante el resto de la sesión.
 Registra callbacks de hook para eventos del ciclo de vida.
 
 ```java
+HookMatcher.HookCallback beforeRead = (input, context) -> {
+    System.out.println("About to read file");
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+
 .hooks(Map.of(
-    HookEvent.PRE_TOOL_USE, List.of(
-        new HookMatcher(null, "Read", (context) -> {
-            System.out.println("About to read file");
-            return CompletableFuture.completedFuture(
-                HookOutput.empty()
-            );
-        })
-    )
+    HookEvent.PRE_TOOL_USE, List.of(new HookMatcher("Read", List.of(beforeRead)))
 ))
 ```
+
+Un callback recibe el `HookInput` tipado y un `HookContext`, y devuelve un
+`CompletableFuture<HookOutput>`. Consulta [Hooks](./feature-hooks.md) para ver las
+entradas, las salidas y las salidas específicas de cada hook.
 
 **Eventos disponibles**:
 - `PRE_TOOL_USE` — antes de ejecutar la herramienta
@@ -868,6 +870,24 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
+`ignoreViolations` recibe un `SandboxIgnoreViolations`: un mapa de un patrón
+de comando (`"*"` para todos los comandos) a subcadenas del texto de la infracción. Una
+infracción no se notifica cuando el texto del comando contiene el patrón y
+el texto de la infracción contiene una de las cadenas. Ambas comprobaciones son coincidencias
+simples de subcadena, no globs, y el ajuste cambia qué infracciones se
+notifican, no lo que bloquea el sandbox. Se serializa como el mapa sin envoltorio:
+
+```java
+SandboxIgnoreViolations.forAllCommands(List.of("/etc/hosts"))   // {"*": ["/etc/hosts"]}
+
+SandboxIgnoreViolations.of(Map.of(
+    SandboxIgnoreViolations.ALL_COMMANDS, List.of("/etc/hosts"),
+    "npm test", List.of("registry.npmjs.org")))
+```
+
+El constructor obsoleto `(file, network)` anterior a 0.2.4 coloca ambas listas
+bajo `"*"`.
+
 Campos de `SandboxNetworkConfig`:
 
 - `allowedDomains` — dominios que pueden alcanzar los procesos del sandbox.
@@ -991,20 +1011,18 @@ var options = ClaudeAgentOptions.builder()
     .allowedTools(List.of("mcp__tools__process"))
     .hooks(Map.of(
         HookEvent.PRE_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
-                log("Processing: " + context.input());
-                return CompletableFuture.completedFuture(
-                    HookOutput.logs(List.of("Started processing"))
-                );
-            })
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
+                if (input instanceof PreToolUseHookInput pre) {
+                    log("Processing: " + pre.toolInput());
+                }
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         ),
         HookEvent.POST_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
                 log("Completed processing");
-                return CompletableFuture.completedFuture(
-                    HookOutput.empty()
-                );
-            })
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         )
     ))
     .build();

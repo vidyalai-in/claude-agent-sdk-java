@@ -94,7 +94,7 @@ options.toBuilder()
 
 ### 훅
 - `hooks(Map<HookEvent, List<HookMatcher>>)` — 훅 콜백
-- `includeHookEvents(boolean)` — `true`이면 CLI가 훅 수명 주기 이벤트(`PreToolUse`, `PostToolUse`, `Stop` 등)를 `HookEventMessage` 객체로 메시지 스트림에 흘려보냅니다. `--include-hook-events`에 대응합니다. [훅 → 스트림의 훅 수명 주기 이벤트](./feature-hooks.md#스트림의-훅-수명-주기-이벤트)를 참고하세요.
+- `includeHookEvents(boolean)` — `true`이면 CLI가 훅 수명 주기 이벤트(`PreToolUse`, `PostToolUse`, `Stop` 등)를 `HookEventMessage` 객체로 메시지 스트림에 흘려보냅니다. `SessionStart`와 `Setup` 훅 이벤트는 이 설정과 상관없이 내보내집니다. `--include-hook-events`에 대응합니다. [훅 → 스트림의 훅 수명 주기 이벤트](./feature-hooks.md#스트림의-훅-수명-주기-이벤트)를 참고하세요.
 
 ### 고급
 - `user(String)` — 사용자 식별자

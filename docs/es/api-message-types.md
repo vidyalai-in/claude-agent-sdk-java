@@ -108,7 +108,52 @@ record SystemMessage(
     String subtype,                 // Message subtype (e.g., "init")
     Map<String, Object> data        // Full raw message data
 ) implements Message {
-    String type();  // Returns "system"
+    String type();                  // Returns "system"
+    <T> T get(String key);          // Unchecked read from data
+    @Nullable SystemInitData initData();  // Typed view for subtype "init"; null otherwise
+}
+```
+
+## SystemInitData
+
+Vista tipada del `data` del mensaje de sistema `init`. No se valida: los campos omitidos
+y los valores de enum no reconocidos son `null`, y las claves desconocidas se ignoran.
+Consulta [Tipos de mensaje → El mensaje init](./feature-message-types.md#el-mensaje-init-systeminitdata)
+para ver todos los campos.
+
+```java
+record SystemInitData(
+    String type, String subtype, String uuid, String sessionId,
+    @Nullable List<String> agents,
+    String apiKeySource,
+    @Nullable List<String> betas,
+    String claudeCodeVersion, String cwd,
+    List<String> tools,
+    List<SystemInitMcpServer> mcpServers,
+    String model,
+    PermissionMode permissionMode,
+    List<String> slashCommands,
+    @Nullable List<String> terminalSlashCommands,
+    String outputStyle,
+    List<String> skills,
+    List<SystemInitPlugin> plugins,
+    @Nullable List<SystemInitPluginError> pluginErrors,
+    @Nullable FastModeState fastModeState,
+    @Nullable FastModeDisabledReason fastModeDisabledReason,
+    @Nullable List<String> capabilities
+) {
+    static final String SUBTYPE = "init";
+    static SystemInitData from(Map<String, Object> data);
+}
+
+record SystemInitMcpServer(String name, String status, @Nullable String source) {}
+record SystemInitPlugin(String name, String path, @Nullable String version) {}
+record SystemInitPluginError(String plugin, String type, String message, @Nullable String path) {}
+
+enum FastModeState { OFF, COOLDOWN, ON }
+enum FastModeDisabledReason {
+    FREE, PREFERENCE, EXTRA_USAGE_DISABLED, NETWORK_ERROR, UNKNOWN,
+    NOT_FIRST_PARTY, DISABLED_BY_ENV, MODEL_NOT_ALLOWED, SDK_OPT_IN_REQUIRED, PENDING
 }
 ```
 

@@ -688,6 +688,7 @@ Message (sealed interface)
     │               ├── DocumentBlock     - whole PDF
     │               └── UnknownBlock      - forward-compat fallback
     ├── SystemMessage (record)
+    │       └── initData() → SystemInitData (typed "init" payload)
     ├── ResultMessage (record)
     │       └── modelUsage: Map<String, ModelUsage>
     └── StreamEvent (record)
@@ -708,6 +709,7 @@ ClaudeAgentOptions
     ├── SdkBeta (enum)
     ├── SettingSource (enum)
     ├── SandboxSettings (record)
+    │       └── ignoreViolations: SandboxIgnoreViolations (command pattern → substrings)
     ├── ThinkingConfig (sealed interface)
     │       ├── ThinkingConfigAdaptive (record)
     │       ├── ThinkingConfigEnabled (record)
@@ -734,18 +736,31 @@ PermissionResult (sealed interface)
 ### 훅 타입
 
 ```
-HookInput (sealed interface)
+HookInput (sealed interface)          - every input: promptId, effort (HookEffort)
     ├── PreToolUseHookInput
-    ├── PostToolUseHookInput
-    ├── PostToolUseFailureHookInput
+    ├── PostToolUseHookInput             - durationMs
+    ├── PostToolUseFailureHookInput      - durationMs
     ├── UserPromptSubmitHookInput
-    ├── StopHookInput
-    ├── SubagentStopHookInput
+    ├── StopHookInput                    - backgroundTasks, sessionCrons
+    ├── SubagentStopHookInput            - backgroundTasks, sessionCrons
     ├── SubagentStartHookInput
     ├── PreCompactHookInput
     ├── NotificationHookInput
     └── PermissionRequestHookInput
+
+HookOutput (class, builder)
+    └── hookSpecificOutput: HookSpecificOutput (sealed interface, 21 records)
+            ├── one per HookEvent that takes event-specific output
+            │   (PreToolUse, PostToolUse, PostToolUseFailure, UserPromptSubmit,
+            │    Notification, SubagentStart, PermissionRequest, Stop, SubagentStop)
+            └── outputs for events HookEvent does not list yet
+                (SessionStart, UserPromptExpansion, PostToolBatch, PermissionDenied,
+                 Pre/PostModelSwitch, Elicitation, ElicitationResult, CwdChanged,
+                 FileChanged, WorktreeCreate, MessageDisplay)
 ```
+
+`HookSpecificOutput`은 `hookEventName`을 기준으로 다형적으로 직렬화됩니다. 콜백이 아직 등록할 수 없는
+이벤트의 레코드는 Python 및 TypeScript SDK와의 동등성을 위해 타입으로 정의되어 있습니다.
 
 ## 의존성
 

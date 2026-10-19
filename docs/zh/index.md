@@ -59,6 +59,7 @@ Claude Agent SDK for Java 是一个将 Claude AI 能力集成到 Java 应用中�
 
 - **[消息类型](./feature-message-types.md)** —— 理解消息类型系统
   - UserMessage、AssistantMessage、SystemMessage、ResultMessage、StreamEvent、RateLimitEvent
+  - `SystemInitData` —— `init` 消息的类型化视图（模型、工具、MCP 服务器、插件、能力）
   - 任务生命周期消息（TaskStartedMessage、TaskProgressMessage、TaskNotificationMessage、TaskUpdatedMessage）
   - HookEventMessage（启用 `includeHookEvents` 时）
   - ResultMessage 上的 DeferredToolUse；`apiErrorStatus` HTTP 状态字段
@@ -133,7 +134,9 @@ Claude Agent SDK for Java 是一个将 Claude AI 能力集成到 Java 应用中�
 
 - **[钩子系统](./feature-hooks.md)** —— 拦截并响应生命周期事件
   - 10 个钩子事件
-  - HookMatcher 与 HookOutput
+  - HookMatcher、HookCallback 与 HookOutput
+  - 类型化的钩子输入，包括 `promptId`、`effort`、工具的 `durationMs`，以及 Stop 时的后台任务和定时唤醒
+  - 全部 21 种钩子专属输出类型（例如 Stop 钩子的 `additionalContext` 会让模型继续工作）
   - PostToolUse 的 `updatedToolOutput`（替换任意工具的输出）与 `updatedMCPToolOutput`
   - `PermissionDecision.DEFER` 与 ResultMessage 上的 `DeferredToolUse`
   - `includeHookEvents` 与 HookEventMessage 消息流

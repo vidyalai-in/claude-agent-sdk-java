@@ -6,34 +6,42 @@
 
 ## 概览
 
-钩子让你可以在会话生命周期的特定节点执行自定义代码。共有 10 个可监听的钩子事件。
+钩子会在 agent 循环的特定节点运行你的代码。你为某个 `HookEvent` 注册一个回调；当 CLI 到达该节点时，
+它会向 SDK 发送一个钩子请求，SDK 以类型化的 `HookInput` 调用你的回调，而你的回调用一个 `HookOutput`
+作答，它可以放行、阻止，或添加上下文。
+
+共有 10 个可以注册回调的钩子事件。
 
 ## 钩子事件
 
-- **PRE_TOOL_USE** —— 工具执行之前
-- **POST_TOOL_USE** —— 工具成功执行之后
-- **POST_TOOL_USE_FAILURE** —— 工具执行失败之后
-- **USER_PROMPT_SUBMIT** —— 用户提交消息时
-- **STOP** —— 会话停止时
-- **SUBAGENT_START** —— 子 agent 启动时
-- **SUBAGENT_STOP** —— 子 agent 停止时
-- **PRE_COMPACT** —— 消息压缩之前
-- **NOTIFICATION** —— 发生通知事件时
-- **PERMISSION_REQUEST** —— 请求权限时
+`HookEvent`（包 `in.vidyalai.claude.sdk.types.hook`）：
+
+| 常量 | 事件名称 | 触发时机 | 输入类型 |
+|----------|------------|---------------|------------|
+| `PRE_TOOL_USE` | `PreToolUse` | 工具运行之前 | `PreToolUseHookInput` |
+| `POST_TOOL_USE` | `PostToolUse` | 工具成功执行之后 | `PostToolUseHookInput` |
+| `POST_TOOL_USE_FAILURE` | `PostToolUseFailure` | 工具执行失败之后 | `PostToolUseFailureHookInput` |
+| `USER_PROMPT_SUBMIT` | `UserPromptSubmit` | 提交提示词时 | `UserPromptSubmitHookInput` |
+| `STOP` | `Stop` | 会话即将停止时 | `StopHookInput` |
+| `SUBAGENT_START` | `SubagentStart` | 子 agent 启动时 | `SubagentStartHookInput` |
+| `SUBAGENT_STOP` | `SubagentStop` | 子 agent 停止时 | `SubagentStopHookInput` |
+| `PRE_COMPACT` | `PreCompact` | 上下文压缩之前 | `PreCompactHookInput` |
+| `NOTIFICATION` | `Notification` | 发生通知时 | `NotificationHookInput` |
+| `PERMISSION_REQUEST` | `PermissionRequest` | 请求权限时 | `PermissionRequestHookInput` |
 
 ## 基础用法
 
 ```java
+HookMatcher.HookCallback logReads = (input, context) -> {
+    if (input instanceof PreToolUseHookInput preToolUse) {
+        System.out.println("About to read: " + preToolUse.toolInput().get("file_path"));
+    }
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+
 var options = ClaudeAgentOptions.builder()
     .hooks(Map.of(
-        HookEvent.PRE_TOOL_USE, List.of(
-            new HookMatcher(null, "Read", context -> {
-                System.out.println("About to read: " + context.input());
-                return CompletableFuture.completedFuture(
-                    HookOutput.logs(List.of("Pre-tool log"))
-                );
-            })
-        )
+        HookEvent.PRE_TOOL_USE, List.of(new HookMatcher("Read", List.of(logReads)))
     ))
     .build();
 ```
@@ -41,20 +49,78 @@ var options = ClaudeAgentOptions.builder()
 ## HookMatcher
 
 ```java
-new HookMatcher(
-    String toolName,           // null for all tools
-    String matchPattern,       // Tool name pattern
-    Function<HookContext, CompletableFuture<HookOutput>> handler
+record HookMatcher(
+    @Nullable String matcher,        // which tools/events to match; null matches all
+    List<HookCallback> hooks,        // callbacks to run
+    @Nullable Double timeoutSeconds  // timeout for all hooks in this matcher (CLI default: 60)
+)
+
+new HookMatcher(List<HookCallback> hooks)                  // matcher = null
+new HookMatcher(String matcher, List<HookCallback> hooks)  // timeoutSeconds = null
+```
+
+对于工具事件，`matcher` 可以是一个工具名称（`"Bash"`）、用 `|` 连接的多个名称（`"Write|MultiEdit|Edit"`），
+或 `"*"`。各事件的 matcher 语法请参阅
+[Claude Code 钩子参考](https://docs.anthropic.com/en/docs/claude-code/hooks#structure)。
+
+回调是一个 `HookMatcher.HookCallback`：
+
+```java
+@FunctionalInterface
+interface HookCallback extends BiFunction<HookInput, HookContext, CompletableFuture<HookOutput>> {}
+```
+
+它接收类型化的输入以及一个 `HookContext`：
+
+```java
+record HookContext(
+    @Nullable String toolUseId,  // the tool use ID, for tool events
+    @Nullable Object signal      // reserved for future abort support; always null
 )
 ```
+
+SDK 会等待返回的 future 完成后再答复 CLI。对于同步的工作，返回 `CompletableFuture.completedFuture(...)` 即可。
 
 > **派发顺序：** 当同一事件上注册了多个 matcher 时，CLI 会**并发地**（并行）派发所有匹配的钩子
 > 回调，而不是顺序执行。请把每个钩子设计成彼此独立的 —— 不要依赖某一个先完成再开始另一个
 > （例如，不要串联那些假定存在门控顺序的限流钩子）。
 
-## 钩子输入字段
+## 钩子输入
 
-所有与工具相关的钩子输入（`PreToolUseHookInput`、`PostToolUseHookInput`、
+`HookInput` 是一个 sealed 接口；请用 `instanceof` 对具体的 record 进行分支。每种输入都带有以下字段：
+
+| 访问器 | 类型 | 说明 |
+|----------|------|-------------|
+| `hookEventName()` | `String` | 事件名称，例如 `"PreToolUse"` |
+| `sessionId()` | `String` | 会话 ID |
+| `transcriptPath()` | `String` | 会话记录的路径 |
+| `cwd()` | `String` | 工作目录 |
+| `permissionMode()` | `@Nullable String` | 当前权限模式 |
+| `promptId()` | `@Nullable String` | 正在处理的用户提示词的 UUID。与 OpenTelemetry 事件上的 `prompt.id` 属性一致。在首次用户输入之前为 null |
+| `effort()` | `@Nullable HookEffort` | 当前轮次生效的努力级别，形式为 `HookEffort(String level)`（例如 `"low"`、`"high"`、`"max"`，已计入针对所选模型的降级）。在支持努力级别的模型上、于工具使用上下文中触发的钩子会带有该字段 |
+
+事件专属字段：
+
+| 输入 | 字段 |
+|-------|--------|
+| `PreToolUseHookInput` | `toolName`、`toolInput`、`toolUseId`、`agentId`、`agentType` |
+| `PostToolUseHookInput` | `toolName`、`toolInput`、`toolResponse`、`toolUseId`、`agentId`、`agentType`、`durationMs` |
+| `PostToolUseFailureHookInput` | `toolName`、`toolInput`、`toolUseId`、`error`、`isInterrupt`、`agentId`、`agentType`、`durationMs` |
+| `PermissionRequestHookInput` | `toolName`、`toolInput`、`permissionSuggestions`、`agentId`、`agentType` |
+| `UserPromptSubmitHookInput` | `prompt` |
+| `StopHookInput` | `stopHookActive`、`lastAssistantMessage`、`backgroundTasks`、`sessionCrons` |
+| `SubagentStartHookInput` | `agentId`、`agentType` |
+| `SubagentStopHookInput` | `stopHookActive`、`agentId`、`agentTranscriptPath`、`agentType`、`lastAssistantMessage`、`backgroundTasks`、`sessionCrons` |
+| `PreCompactHookInput` | `trigger`（`CompactTriggerType`）、`customInstructions` |
+| `NotificationHookInput` | `message`、`title`、`notificationType` |
+
+CLI 可能省略的字段在缺失时为 `null`：`permissionMode`、`promptId`、`effort`、工具输入上的
+`agentId`/`agentType`、`isInterrupt`、`durationMs`、`lastAssistantMessage`、`backgroundTasks`、
+`sessionCrons`、`permissionSuggestions`、`title` 和 `customInstructions`。
+
+### 子 agent 上下文
+
+与工具相关的输入（`PreToolUseHookInput`、`PostToolUseHookInput`、
 `PostToolUseFailureHookInput`、`PermissionRequestHookInput`）都包含两个用于表示子 agent 上下文的
 可选字段：
 
@@ -64,38 +130,159 @@ new HookMatcher(
 | `agentType` | `@Nullable String` | agent 类型名称（例如 `"general-purpose"`）。在子 agent 内部，或以 `--agent` 启动的主线程上存在。 |
 
 ```java
-new HookMatcher(null, null, context -> {
-    PreToolUseHookInput input = (PreToolUseHookInput) context.input();
-    if (input.agentId() != null) {
-        System.out.println("Tool used inside sub-agent: " + input.agentId());
+HookMatcher.HookCallback subagentAware = (input, context) -> {
+    if (input instanceof PreToolUseHookInput preToolUse && preToolUse.agentId() != null) {
+        System.out.println("Tool used inside sub-agent: " + preToolUse.agentId());
     }
     return CompletableFuture.completedFuture(HookOutput.empty());
-})
+};
+```
+
+### 工具计时
+
+`PostToolUseHookInput.durationMs()` 和 `PostToolUseFailureHookInput.durationMs()`
+以毫秒为单位报告工具的执行时间，不含权限提示和钩子所花的时间。
+
+### Stop 与 SubagentStop 时的后台工作
+
+`StopHookInput` 和 `SubagentStopHookInput` 会报告会话（或子 agent）停止时仍在运行的内容：
+
+- `lastAssistantMessage` —— 停止前最后一条 assistant 消息的文本。
+- `backgroundTasks` —— 进行中的后台工作，以 `BackgroundTaskSummary` record 表示：`id`、`type`
+  （例如 `"shell"`、`"subagent"`、`"monitor"`、`"workflow"`）、`status`、`description`，以及
+  `command`（shell 任务）、`agentType`（子 agent 任务）、`server` 和 `tool`（monitor / MCP 任务）
+  和 `name`（workflow 任务）。没有进行中的工作时为空。
+- `sessionCrons` —— 会话范围内、稍后会恢复会话的定时唤醒，以 `SessionCronSummary` record 表示：
+  `id`、`schedule`（一个 cron 表达式）、`recurring`（一次性唤醒为 `false`）和 `prompt`。
+
+对于子 agent，这两个列表的范围都是其父会话。`description`、`command` 以及 cron 的 `prompt`
+上限为 1000 个字符；被截断的值会以字符串内的 `"… [+N chars]"` 标记结尾。
+
+```java
+HookMatcher.HookCallback onStop = (input, context) -> {
+    if (input instanceof StopHookInput stop && stop.backgroundTasks() != null) {
+        for (BackgroundTaskSummary task : stop.backgroundTasks()) {
+            System.out.printf("Still running: %s (%s, %s)%n", task.description(), task.type(), task.status());
+        }
+    }
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
 ```
 
 ## HookOutput
 
+回调返回一个 `HookOutput`（包 `in.vidyalai.claude.sdk.types.hook.output`），通过它的构建器构造：
+
 ```java
-// Empty output
-HookOutput.empty()
+HookOutput.empty()                 // no fields: the CLI proceeds as normal
+HookOutput.async(30_000)           // defer: {"async": true, "asyncTimeout": 30000}
 
-// With logs
-HookOutput.logs(List.of("Log message"))
-
-// With messages
-HookOutput.messages(List.of(
-    Map.of("role", "user", "content", "Message")
-))
-
-// With permission updates
-HookOutput.permissionUpdates(List.of(update))
-
-// Combined
 HookOutput.builder()
-    .logs(List.of("Log"))
-    .messages(List.of(message))
-    .build()
+    .shouldContinue(false)         // "continue": whether Claude proceeds after the hook
+    .stopReason("Budget exhausted")// shown when continue is false
+    .suppressOutput(true)          // hide stdout from transcript mode
+    .decision("block")             // "block" to indicate blocking behavior
+    .systemMessage("Heads up")     // warning displayed to the user
+    .reason("Blocked by policy")   // feedback for Claude about the decision
+    .hookSpecificOutput(specific)  // event-specific controls, see below
+    .build();
 ```
+
+只有你设置过的字段才会被发送。设置了 `async` 时，只发送 `async` 和 `asyncTimeout`。
+
+## 钩子专属输出
+
+`HookSpecificOutput` 是一个 sealed 接口，每个事件对应一个 record。每个 record 序列化时都带有它的
+`hookEventName`，以及你设置过的字段（为 `null` 的字段会被省略）：
+
+| Record | 字段 |
+|--------|--------|
+| `PreToolUseHookSpecificOutput` | `permissionDecision`（`PermissionDecision`）、`permissionDecisionReason`、`updatedInput`、`additionalContext` |
+| `PostToolUseHookSpecificOutput` | `additionalContext`、`updatedToolOutput`、`updatedMCPToolOutput` |
+| `PostToolUseFailureHookSpecificOutput` | `additionalContext` |
+| `UserPromptSubmitHookSpecificOutput` | `additionalContext`、`sessionTitle`、`suppressOriginalPrompt` |
+| `NotificationHookSpecificOutput` | `additionalContext` |
+| `SubagentStartHookSpecificOutput` | `additionalContext` |
+| `PermissionRequestHookSpecificOutput` | `decision`（一个 map） |
+| `StopHookSpecificOutput` | `additionalContext` |
+| `SubagentStopHookSpecificOutput` | `additionalContext` |
+| `SessionStartHookSpecificOutput` | `additionalContext`、`initialUserMessage`、`sessionTitle`、`watchPaths`、`reloadSkills` |
+| `UserPromptExpansionHookSpecificOutput` | `additionalContext`、`suppressOriginalPrompt` |
+| `PostToolBatchHookSpecificOutput` | `additionalContext` |
+| `PermissionDeniedHookSpecificOutput` | `retry` |
+| `PreModelSwitchHookSpecificOutput` | `permissionDecision`、`permissionDecisionReason` |
+| `PostModelSwitchHookSpecificOutput` | `additionalContext` |
+| `ElicitationHookSpecificOutput` | `action`（`ElicitationAction`）、`content` |
+| `ElicitationResultHookSpecificOutput` | `action`（`ElicitationAction`）、`content` |
+| `CwdChangedHookSpecificOutput` | `watchPaths` |
+| `FileChangedHookSpecificOutput` | `watchPaths` |
+| `WorktreeCreateHookSpecificOutput` | `worktreePath`（必填） |
+| `MessageDisplayHookSpecificOutput` | `displayContent` |
+
+> **回调能用到其中哪些。** SDK 回调只能为上面列出的 10 个 `HookEvent` 注册，因此只有前 9 个 record
+> 用于答复回调能够接收到的事件。其余的（从 `SessionStart` 到 `MessageDisplay`）描述的是 `HookEvent`
+> 尚未列出的事件的输出。定义这些类型是为了与 Python 和 TypeScript SDK 保持对等，它们定义了相同的结构。
+
+字段说明：
+
+- **`UserPromptSubmitHookSpecificOutput`** —— `sessionTitle` 设置会话标题。当输出的 `decision` 为
+  `"block"` 时，`suppressOriginalPrompt` 会在阻止消息中省略原始提示词。单参数构造函数
+  `(additionalContext)` 仍然保留。
+- **`StopHookSpecificOutput` / `SubagentStopHookSpecificOutput`** —— `additionalContext` 是传递给模型
+  （或子 agent）的非错误反馈；会话会继续进行，以便它据此采取行动。
+- **`SessionStartHookSpecificOutput`** —— `initialUserMessage` 会成为会话的第一条用户消息；当会话从
+  `clear` 或 `compact` 开始时，`sessionTitle` 会被忽略；`watchPaths` 是要监视 FileChanged 事件的
+  绝对路径；`reloadSkills` 会在 SessionStart 钩子完成后重新扫描技能和命令目录。
+- **`PermissionDeniedHookSpecificOutput`** —— `retry` 告诉模型它可以重试被拒绝的工具调用。对于没有
+  分类器裁定的拒绝，该字段会被忽略。
+- **`PreModelSwitchHookSpecificOutput`** —— `ALLOW` 继续切换，`DENY` 取消切换；在非交互式会话中，
+  `ASK` 会被视为拒绝。构造函数会拒绝 `PermissionDecision.DEFER`。
+- **`PostModelSwitchHookSpecificOutput`** —— `additionalContext` 会随新模型处理的下一个请求一起送达模型。
+- **`ElicitationHookSpecificOutput`** —— 接受、拒绝或取消一个 MCP elicitation 请求；`content` 存放
+  表单字段的值，且仅在 `ElicitationAction.ACCEPT` 时使用。`ElicitationResultHookSpecificOutput`
+  会在响应抵达 MCP 服务器之前覆盖其 action 或 content。
+- **`CwdChangedHookSpecificOutput` / `FileChangedHookSpecificOutput`** —— `watchPaths` 会替换当前的
+  动态监视列表。
+- **`MessageDisplayHookSpecificOutput`** —— 仅影响显示：`displayContent` 替换屏幕上的文本，但不会改变
+  已存储的消息或模型看到的内容。省略它则显示原文。
+
+### 阻止工具调用
+
+```java
+HookMatcher.HookCallback blockRm = (input, context) -> {
+    if (input instanceof PreToolUseHookInput preToolUse
+            && String.valueOf(preToolUse.toolInput().get("command")).contains("rm -rf")) {
+        return CompletableFuture.completedFuture(HookOutput.builder()
+            .hookSpecificOutput(new PreToolUseHookSpecificOutput(
+                PermissionDecision.DENY,
+                "rm -rf is not allowed",
+                null,   // updatedInput
+                null))  // additionalContext
+            .build());
+    }
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+
+var options = ClaudeAgentOptions.builder()
+    .hooks(Map.of(HookEvent.PRE_TOOL_USE, List.of(new HookMatcher("Bash", List.of(blockRm)))))
+    .build();
+```
+
+### 用 Stop 钩子让模型继续工作
+
+```java
+HookMatcher.HookCallback keepGoing = (input, context) -> {
+    if (input instanceof StopHookInput stop && !stop.stopHookActive()) {
+        return CompletableFuture.completedFuture(HookOutput.builder()
+            .hookSpecificOutput(new StopHookSpecificOutput("The test suite still fails; fix it before stopping."))
+            .build());
+    }
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+```
+
+检查 `stopHookActive()` 可以避免无休止地把模型送回去工作：当会话已经因为某个 Stop 钩子而在继续时，
+它为 `true`。
 
 ## PostToolUse 输出替换
 
@@ -118,21 +305,23 @@ record PostToolUseHookSpecificOutput(
   `(additionalContext, updatedMCPToolOutput)`。
 
 ```java
-HookEvent.POST_TOOL_USE, List.of(
-    new HookMatcher(null, "Bash", context -> {
-        // Redact secrets from Bash output before the model sees it.
-        Map<String, Object> redacted = Map.of(
-            "stdout", "[redacted]",
-            "stderr", "",
-            "interrupted", false
-        );
-        return CompletableFuture.completedFuture(
-            HookOutput.builder()
-                .hookSpecificOutput(new PostToolUseHookSpecificOutput(null, redacted, null))
-                .build()
-        );
-    })
-)
+HookMatcher.HookCallback redact = (input, context) -> {
+    // Redact secrets from Bash output before the model sees it.
+    Map<String, Object> redacted = Map.of(
+        "stdout", "[redacted]",
+        "stderr", "",
+        "interrupted", false
+    );
+    return CompletableFuture.completedFuture(
+        HookOutput.builder()
+            .hookSpecificOutput(new PostToolUseHookSpecificOutput(null, redacted, null))
+            .build()
+    );
+};
+
+var options = ClaudeAgentOptions.builder()
+    .hooks(Map.of(HookEvent.POST_TOOL_USE, List.of(new HookMatcher("Bash", List.of(redact)))))
+    .build();
 ```
 
 ## 权限决策 `"defer"`
@@ -142,23 +331,20 @@ HookEvent.POST_TOOL_USE, List.of(
 调用呈现在 `ResultMessage.deferredToolUse` 上，供 SDK 使用方检查并决定是否继续。
 
 ```java
-HookEvent.PRE_TOOL_USE, List.of(
-    new HookMatcher(null, "Bash", context -> {
-        PreToolUseHookInput input = (PreToolUseHookInput) context.input();
-        if (looksDangerous(input.toolInput())) {
-            return CompletableFuture.completedFuture(
-                HookOutput.builder()
-                    .hookSpecificOutput(new PreToolUseHookSpecificOutput(
-                        PermissionDecision.DEFER,
-                        "Needs operator review",
-                        null,
-                        null))
-                    .build()
-            );
-        }
-        return CompletableFuture.completedFuture(HookOutput.empty());
-    })
-)
+HookMatcher.HookCallback deferRisky = (input, context) -> {
+    if (input instanceof PreToolUseHookInput preToolUse && looksDangerous(preToolUse.toolInput())) {
+        return CompletableFuture.completedFuture(
+            HookOutput.builder()
+                .hookSpecificOutput(new PreToolUseHookSpecificOutput(
+                    PermissionDecision.DEFER,
+                    "Needs operator review",
+                    null,
+                    null))
+                .build()
+        );
+    }
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
 
 // Caller side — inspect the deferred call from the result message.
 for (Message msg : ClaudeSDK.query(prompt, options)) {
@@ -176,7 +362,7 @@ for (Message msg : ClaudeSDK.query(prompt, options)) {
 
 在 `ClaudeAgentOptions` 上设置 `includeHookEvents(true)`，即可在消息流中额外接收到作为
 `HookEventMessage` 对象的钩子生命周期事件。这对可观测性很有用（记录每一次钩子触发），而无需为每个
-想观察的事件都注册一个钩子。
+想观察的事件都注册一个钩子。无论此设置如何，CLI 都会发出 `SessionStart` 和 `Setup` 钩子事件。
 
 ```java
 var options = ClaudeAgentOptions.builder()
@@ -216,43 +402,35 @@ for (Message msg : ClaudeSDK.query(prompt, options)) {
 ```java
 public class HooksExample {
     public static void main(String[] args) {
+        // Log every tool call before it runs
+        HookMatcher.HookCallback logPre = (input, context) -> {
+            if (input instanceof PreToolUseHookInput pre) {
+                System.out.println("Tool: " + pre.toolName());
+            }
+            return CompletableFuture.completedFuture(HookOutput.empty());
+        };
+
+        // Track tool results and timing
+        HookMatcher.HookCallback logPost = (input, context) -> {
+            if (input instanceof PostToolUseHookInput post) {
+                System.out.println("Result: " + post.toolResponse() + " in " + post.durationMs() + "ms");
+            }
+            return CompletableFuture.completedFuture(HookOutput.empty());
+        };
+
+        // Handle errors
+        HookMatcher.HookCallback logFailure = (input, context) -> {
+            if (input instanceof PostToolUseFailureHookInput failure) {
+                System.err.println("Error: " + failure.error());
+            }
+            return CompletableFuture.completedFuture(HookOutput.empty());
+        };
+
         var options = ClaudeAgentOptions.builder()
             .hooks(Map.of(
-                // Log all tool uses
-                HookEvent.PRE_TOOL_USE, List.of(
-                    new HookMatcher(null, null, context -> {
-                        PreToolUseHookInput input = (PreToolUseHookInput) context.input();
-                        System.out.println("Tool: " + input.toolName());
-                        return CompletableFuture.completedFuture(
-                            HookOutput.logs(List.of(
-                                "Executing: " + input.toolName()
-                            ))
-                        );
-                    })
-                ),
-                
-                // Track tool results
-                HookEvent.POST_TOOL_USE, List.of(
-                    new HookMatcher(null, null, context -> {
-                        PostToolUseHookInput input = (PostToolUseHookInput) context.input();
-                        System.out.println("Result: " + input.result());
-                        return CompletableFuture.completedFuture(
-                            HookOutput.empty()
-                        );
-                    })
-                ),
-                
-                // Handle errors
-                HookEvent.POST_TOOL_USE_FAILURE, List.of(
-                    new HookMatcher(null, null, context -> {
-                        PostToolUseFailureHookInput input = 
-                            (PostToolUseFailureHookInput) context.input();
-                        System.err.println("Error: " + input.error());
-                        return CompletableFuture.completedFuture(
-                            HookOutput.logs(List.of("Tool failed"))
-                        );
-                    })
-                )
+                HookEvent.PRE_TOOL_USE, List.of(new HookMatcher("*", List.of(logPre))),
+                HookEvent.POST_TOOL_USE, List.of(new HookMatcher("*", List.of(logPost))),
+                HookEvent.POST_TOOL_USE_FAILURE, List.of(new HookMatcher("*", List.of(logFailure)))
             ))
             .build();
 
@@ -272,4 +450,5 @@ public class HooksExample {
 
 ## 另见
 - [配置选项](./feature-configuration-options.md#钩子)
+- [权限](./feature-permissions.md)
 - [Hooks 示例](../../examples/src/main/java/examples/Hooks.java)

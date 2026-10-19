@@ -233,6 +233,60 @@ if (msg instanceof SystemMessage system) {
 }
 ```
 
+### `init` 消息：`SystemInitData`
+
+每一轮开始时，CLI 会发送一条 subtype 为 `"init"` 的 `SystemMessage`，用来描述当前会话。`initData()`
+返回它的类型化视图；对其他任何 subtype 则返回 `null`：
+
+```java
+if (msg instanceof SystemMessage system) {
+    SystemInitData init = system.initData();
+    if (init != null) {
+        System.out.println("Model: " + init.model() + ", CLI " + init.claudeCodeVersion());
+        System.out.println("Tools: " + init.tools());
+        for (SystemInitMcpServer server : init.mcpServers()) {
+            System.out.println("MCP " + server.name() + ": " + server.status());
+        }
+        // Feature-detect instead of comparing versions; ignore values you don't recognize
+        if (init.capabilities() != null && init.capabilities().contains("interrupt_receipt_v1")) {
+            System.out.println("CLI supports interrupt receipts");
+        }
+    }
+}
+```
+
+`SystemInitData` 的字段，以及 CLI 发送的对应 JSON 键：
+
+| 访问器 | JSON 键 | 类型 | 说明 |
+|----------|----------|------|-------|
+| `type()` / `subtype()` | `type` / `subtype` | `String` | 始终为 `"system"` / `"init"` |
+| `uuid()` | `uuid` | `String` | |
+| `sessionId()` | `session_id` | `String` | |
+| `agents()` | `agents` | `@Nullable List<String>` | |
+| `apiKeySource()` | `apiKeySource` | `String` | `"ANTHROPIC_API_KEY"`、`"apiKeyHelper"`、`"/login managed key"` 或 `"none"`（例如使用 claude.ai 登录或第三方云服务商时） |
+| `betas()` | `betas` | `@Nullable List<String>` | |
+| `claudeCodeVersion()` | `claude_code_version` | `String` | |
+| `cwd()` | `cwd` | `String` | |
+| `tools()` | `tools` | `List<String>` | |
+| `mcpServers()` | `mcp_servers` | `List<SystemInitMcpServer>` | `name`、`status` 和 `source`（`"sdk"`、`"plugin"`，或 `"user"` 之类的配置作用域；旧版 CLI 上为 null） |
+| `model()` | `model` | `String` | |
+| `permissionMode()` | `permissionMode` | `PermissionMode` | |
+| `slashCommands()` | `slash_commands` | `List<String>` | |
+| `terminalSlashCommands()` | `terminal_slash_commands` | `@Nullable List<String>` | `slashCommands` 中绑定到本地终端的条目（例如 `exit`）；仅在非空时出现 |
+| `outputStyle()` | `output_style` | `String` | |
+| `skills()` | `skills` | `List<String>` | |
+| `plugins()` | `plugins` | `List<SystemInitPlugin>` | `name`、`path` 和 `version`（来自插件清单；未声明时为 null） |
+| `pluginErrors()` | `plugin_errors` | `@Nullable List<SystemInitPluginError>` | `plugin`、`type`、`message`、`path`。没有加载失败时省略；但缺少该键本身并不能证明加载无误：旧版 CLI 和部分托管会话从不发送它 |
+| `fastModeState()` | `fast_mode_state` | `@Nullable FastModeState` | `OFF`、`COOLDOWN`、`ON` |
+| `fastModeDisabledReason()` | `fast_mode_disabled_reason` | `@Nullable FastModeDisabledReason` | 当有检查阻止快速模式时，指出是哪一项检查 |
+| `capabilities()` | `capabilities` | `@Nullable List<String>` | 用于特性检测的协议能力。开放集合。2.1.205 之前的 CLI 上不存在 |
+
+该负载按 CLI 发送的原样读取，不做校验。CLI 省略的字段为 `null`，未知的键会被忽略，本 SDK
+无法识别的枚举值（例如更新的快速模式禁用原因）读出为 `null`；原始值仍保留在 `data()` 中。只有当某个字段的
+JSON 形状不对时，`initData()` 才会抛出 `IllegalArgumentException`。`SystemInitData.from(Map)`
+可读取你已持有的负载。解析器本身对 `init` 仍返回普通的 `SystemMessage`，因此读取 `data()` 或
+`get(...)` 的现有代码不受影响。
+
 ## 任务消息
 
 任务消息是在子 agent 任务生命周期事件中发出的、有类型的系统消息子类。它们直接实现 `Message`，且 `type()` 返回 `"system"`。现有的 `instanceof SystemMessage` 检查**不会**匹配它们 —— 请使用具体类型。

@@ -233,6 +233,63 @@ if (msg instanceof SystemMessage system) {
 }
 ```
 
+### El mensaje `init`: `SystemInitData`
+
+Al comienzo de cada turno, la CLI envía un `SystemMessage` con subtipo
+`"init"` que describe la sesión. `initData()` devuelve una vista tipada de él, y
+`null` para cualquier otro subtipo:
+
+```java
+if (msg instanceof SystemMessage system) {
+    SystemInitData init = system.initData();
+    if (init != null) {
+        System.out.println("Model: " + init.model() + ", CLI " + init.claudeCodeVersion());
+        System.out.println("Tools: " + init.tools());
+        for (SystemInitMcpServer server : init.mcpServers()) {
+            System.out.println("MCP " + server.name() + ": " + server.status());
+        }
+        // Feature-detect instead of comparing versions; ignore values you don't recognize
+        if (init.capabilities() != null && init.capabilities().contains("interrupt_receipt_v1")) {
+            System.out.println("CLI supports interrupt receipts");
+        }
+    }
+}
+```
+
+Campos de `SystemInitData`, con las claves JSON que envía la CLI:
+
+| Accesor | Clave JSON | Tipo | Notas |
+|----------|----------|------|-------|
+| `type()` / `subtype()` | `type` / `subtype` | `String` | Siempre `"system"` / `"init"` |
+| `uuid()` | `uuid` | `String` | |
+| `sessionId()` | `session_id` | `String` | |
+| `agents()` | `agents` | `@Nullable List<String>` | |
+| `apiKeySource()` | `apiKeySource` | `String` | `"ANTHROPIC_API_KEY"`, `"apiKeyHelper"`, `"/login managed key"` o `"none"` (por ejemplo, un inicio de sesión en claude.ai o un proveedor de nube de terceros) |
+| `betas()` | `betas` | `@Nullable List<String>` | |
+| `claudeCodeVersion()` | `claude_code_version` | `String` | |
+| `cwd()` | `cwd` | `String` | |
+| `tools()` | `tools` | `List<String>` | |
+| `mcpServers()` | `mcp_servers` | `List<SystemInitMcpServer>` | `name`, `status` y `source` (`"sdk"`, `"plugin"` o un ámbito de configuración como `"user"`; null en CLI antiguas) |
+| `model()` | `model` | `String` | |
+| `permissionMode()` | `permissionMode` | `PermissionMode` | |
+| `slashCommands()` | `slash_commands` | `List<String>` | |
+| `terminalSlashCommands()` | `terminal_slash_commands` | `@Nullable List<String>` | Entradas de `slashCommands` vinculadas a la terminal local (por ejemplo, `exit`); solo aparece cuando no está vacía |
+| `outputStyle()` | `output_style` | `String` | |
+| `skills()` | `skills` | `List<String>` | |
+| `plugins()` | `plugins` | `List<SystemInitPlugin>` | `name`, `path` y `version` (del manifiesto del plugin; null cuando no declara ninguna) |
+| `pluginErrors()` | `plugin_errors` | `@Nullable List<SystemInitPluginError>` | `plugin`, `type`, `message`, `path`. Se omite cuando nada ha fallado, pero que falte la clave no demuestra por sí solo que la carga fuera limpia: las CLI antiguas y algunas sesiones alojadas nunca la envían |
+| `fastModeState()` | `fast_mode_state` | `@Nullable FastModeState` | `OFF`, `COOLDOWN`, `ON` |
+| `fastModeDisabledReason()` | `fast_mode_disabled_reason` | `@Nullable FastModeDisabledReason` | Indica la comprobación que bloquea el modo rápido, cuando alguna lo hace |
+| `capabilities()` | `capabilities` | `@Nullable List<String>` | Capacidades del protocolo para la detección de funciones. Conjunto abierto. Ausente en las CLI anteriores a la 2.1.205 |
+
+El payload se lee tal como lo envió la CLI, sin validarlo. Un campo que la CLI omite
+es `null`, las claves desconocidas se ignoran y un valor de enum que este SDK no
+reconoce (por ejemplo, un motivo de modo rápido más reciente) se lee como `null`; el valor en bruto se conserva
+en `data()`. `initData()` lanza `IllegalArgumentException` solo si un campo
+tiene una forma JSON incorrecta. `SystemInitData.from(Map)` lee un payload que
+ya tienes. El propio parser sigue devolviendo un `SystemMessage` simple para
+`init`, por lo que el código existente que lee `data()` o `get(...)` no se ve afectado.
+
 ## Mensajes de tarea
 
 Los mensajes de tarea son subtipos tipados de mensajes de sistema que se emiten durante los eventos del ciclo de vida de las tareas de subagentes. Implementan `Message` directamente y `type()` devuelve `"system"`. Las comprobaciones existentes de `instanceof SystemMessage` **no** coinciden con ellos: usa el tipo concreto.

@@ -665,17 +665,18 @@ CLI의 stderr 출력을 받습니다. CLI가 내보내는 stderr 한 줄마다 �
 수명 주기 이벤트에 훅 콜백을 등록합니다.
 
 ```java
+HookMatcher.HookCallback beforeRead = (input, context) -> {
+    System.out.println("About to read file");
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+
 .hooks(Map.of(
-    HookEvent.PRE_TOOL_USE, List.of(
-        new HookMatcher(null, "Read", (context) -> {
-            System.out.println("About to read file");
-            return CompletableFuture.completedFuture(
-                HookOutput.empty()
-            );
-        })
-    )
+    HookEvent.PRE_TOOL_USE, List.of(new HookMatcher("Read", List.of(beforeRead)))
 ))
 ```
+
+콜백은 타입 지정된 `HookInput`과 `HookContext`를 받아 `CompletableFuture<HookOutput>`을 반환합니다. 입력,
+출력, 훅별 출력은 [훅](./feature-hooks.md)을 참고하세요.
 
 **사용 가능한 이벤트**:
 - `PRE_TOOL_USE` — 도구 실행 전
@@ -859,6 +860,21 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
+`ignoreViolations`는 `SandboxIgnoreViolations`를 받습니다: 명령 패턴(모든 명령은 `"*"`)에서 위반 텍스트의
+부분 문자열로 가는 Map입니다. 명령의 텍스트가 패턴을 포함하고 위반의 텍스트가 그 문자열 중 하나를 포함하면
+해당 위반은 보고되지 않습니다. 두 검사 모두 glob이 아닌 단순 부분 문자열 일치이며, 이 설정은 샌드박스가
+무엇을 차단하는지가 아니라 어떤 위반이 보고되는지를 바꿉니다. 직렬화하면 Map 그대로가 됩니다:
+
+```java
+SandboxIgnoreViolations.forAllCommands(List.of("/etc/hosts"))   // {"*": ["/etc/hosts"]}
+
+SandboxIgnoreViolations.of(Map.of(
+    SandboxIgnoreViolations.ALL_COMMANDS, List.of("/etc/hosts"),
+    "npm test", List.of("registry.npmjs.org")))
+```
+
+0.2.4 이전의 deprecated된 `(file, network)` 생성자는 두 목록을 모두 `"*"` 아래에 넣습니다.
+
 `SandboxNetworkConfig` 필드:
 
 - `allowedDomains` — 샌드박스 프로세스가 접근할 수 있는 도메인.
@@ -982,20 +998,18 @@ var options = ClaudeAgentOptions.builder()
     .allowedTools(List.of("mcp__tools__process"))
     .hooks(Map.of(
         HookEvent.PRE_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
-                log("Processing: " + context.input());
-                return CompletableFuture.completedFuture(
-                    HookOutput.logs(List.of("Started processing"))
-                );
-            })
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
+                if (input instanceof PreToolUseHookInput pre) {
+                    log("Processing: " + pre.toolInput());
+                }
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         ),
         HookEvent.POST_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
                 log("Completed processing");
-                return CompletableFuture.completedFuture(
-                    HookOutput.empty()
-                );
-            })
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         )
     ))
     .build();

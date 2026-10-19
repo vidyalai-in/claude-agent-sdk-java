@@ -94,7 +94,7 @@ options.toBuilder()
 
 ### Hooks
 - `hooks(Map<HookEvent, List<HookMatcher>>)` — callbacks de hook
-- `includeHookEvents(boolean)` — quando `true`, o CLI envia os eventos de ciclo de vida dos hooks (`PreToolUse`, `PostToolUse`, `Stop`, …) para o fluxo de mensagens como objetos `HookEventMessage`. Corresponde a `--include-hook-events`. Veja [Hooks → Eventos de ciclo de vida no fluxo](./feature-hooks.md#eventos-de-ciclo-de-vida-dos-hooks-no-fluxo).
+- `includeHookEvents(boolean)` — quando `true`, o CLI envia os eventos de ciclo de vida dos hooks (`PreToolUse`, `PostToolUse`, `Stop`, …) para o fluxo de mensagens como objetos `HookEventMessage`. Os eventos de hook `SessionStart` e `Setup` são emitidos de qualquer forma. Corresponde a `--include-hook-events`. Veja [Hooks → Eventos de ciclo de vida no fluxo](./feature-hooks.md#eventos-de-ciclo-de-vida-dos-hooks-no-fluxo).
 
 ### Avançado
 - `user(String)` — identidade do usuário

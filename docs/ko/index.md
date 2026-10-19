@@ -61,6 +61,7 @@ Claude Agent SDK for Java는 Claude AI 기능을 Java 애플리케이션에 통�
 
 - **[메시지 타입](./feature-message-types.md)** — 메시지 타입 시스템 이해하기
   - UserMessage, AssistantMessage, SystemMessage, ResultMessage, StreamEvent, RateLimitEvent
+  - `SystemInitData` — `init` 메시지의 타입 지정 뷰 (모델, 도구, MCP 서버, 플러그인, 기능)
   - 작업 수명 주기 메시지 (TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage, TaskUpdatedMessage)
   - HookEventMessage (`includeHookEvents`가 켜진 경우)
   - ResultMessage의 DeferredToolUse, `apiErrorStatus` HTTP 상태 필드
@@ -135,7 +136,9 @@ Claude Agent SDK for Java는 Claude AI 기능을 Java 애플리케이션에 통�
 
 - **[훅 시스템](./feature-hooks.md)** — 수명 주기 이벤트 가로채기 및 응답
   - 10가지 훅 이벤트
-  - HookMatcher와 HookOutput
+  - HookMatcher, HookCallback, HookOutput
+  - `promptId`, `effort`, 도구 `durationMs`, 그리고 Stop의 백그라운드 작업과 예약된 깨우기를 포함한 타입 지정 훅 입력
+  - 21가지 훅별 출력 타입 전체 (예: Stop 훅의 `additionalContext`는 모델이 계속 진행하게 함)
   - PostToolUse의 `updatedToolOutput` (모든 도구의 출력 교체)과 `updatedMCPToolOutput`
   - `PermissionDecision.DEFER`와 ResultMessage의 `DeferredToolUse`
   - `includeHookEvents`와 HookEventMessage 스트림

@@ -64,23 +64,27 @@ examples/src/main/java/examples/plugins/demo-plugin/
 
 ## 验证插件已加载
 
-CLI 会在 `init` 系统消息的 `plugins` 字段中报告已加载的插件，它是一个由包含 `name` 和 `path` 的 map 组成的列表：
+CLI 会在 `init` 系统消息中报告已加载的插件。请通过 `SystemMessage.initData()` 读取它们，其中还会列出加载失败的插件：
 
 ```java
 for (Message msg : ClaudeSDK.query("Hello!", options)) {
-    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
-        @SuppressWarnings("unchecked")
-        List<Object> plugins = (List<Object>) system.get("plugins");
-        if (plugins != null) {
-            for (Object p : plugins) {
-                if (p instanceof Map<?, ?> plugin) {
-                    System.out.println(plugin.get("name") + " (" + plugin.get("path") + ")");
-                }
+    if (msg instanceof SystemMessage system && system.initData() != null) {
+        SystemInitData init = system.initData();
+        for (SystemInitPlugin plugin : init.plugins()) {
+            System.out.println(plugin.name() + " (" + plugin.path() + ")");
+        }
+        if (init.pluginErrors() != null) {
+            for (SystemInitPluginError error : init.pluginErrors()) {
+                System.out.println("Failed: " + error.plugin() + " - " + error.type() + ": " + error.message());
             }
         }
     }
 }
 ```
+
+`SystemInitPlugin.version()` 是插件清单中声明的版本；若未声明则为 `null`。对于完全没有加载成功的插件目录，
+`SystemInitPluginError.plugin()` 可能是 `inline[0]` 这样的位置标签，而 `path()` 是该条目相对于 cwd 解析后的路径。
+参见[消息类型 → init 消息](./feature-message-types.md#init-消息systeminitdata)。
 
 ## 另见
 - [配置选项](./feature-configuration-options.md#plugins) —— plugins 选项

@@ -233,6 +233,60 @@ if (msg instanceof SystemMessage system) {
 }
 ```
 
+### `init` メッセージ：`SystemInitData`
+
+各ターンの開始時に、CLI はセッションを説明する subtype `"init"` の `SystemMessage` を送ります。`initData()` は
+その型付きビューを返し、それ以外の subtype では `null` を返します：
+
+```java
+if (msg instanceof SystemMessage system) {
+    SystemInitData init = system.initData();
+    if (init != null) {
+        System.out.println("Model: " + init.model() + ", CLI " + init.claudeCodeVersion());
+        System.out.println("Tools: " + init.tools());
+        for (SystemInitMcpServer server : init.mcpServers()) {
+            System.out.println("MCP " + server.name() + ": " + server.status());
+        }
+        // Feature-detect instead of comparing versions; ignore values you don't recognize
+        if (init.capabilities() != null && init.capabilities().contains("interrupt_receipt_v1")) {
+            System.out.println("CLI supports interrupt receipts");
+        }
+    }
+}
+```
+
+`SystemInitData` のフィールドと、CLI が送る JSON キー：
+
+| アクセサ | JSON キー | 型 | 備考 |
+|----------|----------|------|-------|
+| `type()` / `subtype()` | `type` / `subtype` | `String` | 常に `"system"` / `"init"` |
+| `uuid()` | `uuid` | `String` | |
+| `sessionId()` | `session_id` | `String` | |
+| `agents()` | `agents` | `@Nullable List<String>` | |
+| `apiKeySource()` | `apiKeySource` | `String` | `"ANTHROPIC_API_KEY"`、`"apiKeyHelper"`、`"/login managed key"`、または `"none"`（例：claude.ai ログインやサードパーティのクラウドプロバイダー） |
+| `betas()` | `betas` | `@Nullable List<String>` | |
+| `claudeCodeVersion()` | `claude_code_version` | `String` | |
+| `cwd()` | `cwd` | `String` | |
+| `tools()` | `tools` | `List<String>` | |
+| `mcpServers()` | `mcp_servers` | `List<SystemInitMcpServer>` | `name`、`status`、`source`（`"sdk"`、`"plugin"`、または `"user"` のような設定スコープ。古い CLI では null） |
+| `model()` | `model` | `String` | |
+| `permissionMode()` | `permissionMode` | `PermissionMode` | |
+| `slashCommands()` | `slash_commands` | `List<String>` | |
+| `terminalSlashCommands()` | `terminal_slash_commands` | `@Nullable List<String>` | `slashCommands` のうちローカルの端末に結び付いたエントリ（例：`exit`）。空でない場合にのみ存在 |
+| `outputStyle()` | `output_style` | `String` | |
+| `skills()` | `skills` | `List<String>` | |
+| `plugins()` | `plugins` | `List<SystemInitPlugin>` | `name`、`path`、`version`（プラグインのマニフェストから。宣言がない場合は null） |
+| `pluginErrors()` | `plugin_errors` | `@Nullable List<SystemInitPluginError>` | `plugin`、`type`、`message`、`path`。失敗がなければ省略されますが、キーが省略されていること自体はクリーンな読み込みの証明になりません：古い CLI や一部のホスト型セッションはこのキーを一切送りません |
+| `fastModeState()` | `fast_mode_state` | `@Nullable FastModeState` | `OFF`、`COOLDOWN`、`ON` |
+| `fastModeDisabledReason()` | `fast_mode_disabled_reason` | `@Nullable FastModeDisabledReason` | 高速モードを妨げているチェックがあれば、その名前 |
+| `capabilities()` | `capabilities` | `@Nullable List<String>` | 機能検出のためのプロトコルケイパビリティ。開いた集合です。2.1.205 より前の CLI には存在しません |
+
+ペイロードは CLI が送ったとおりに読み取られ、検証はされません。CLI が省略したフィールドは `null` になり、未知の
+キーは無視され、この SDK が認識しない enum 値（たとえば新しい高速モードの理由）は `null` として読み取られます。生の
+値は `data()` に残ります。`initData()` が `IllegalArgumentException` を投げるのは、フィールドの JSON の形が誤って
+いる場合だけです。`SystemInitData.from(Map)` は手元にあるペイロードを読み取ります。パーサ自体は `init` に対して
+引き続き通常の `SystemMessage` を返すため、`data()` や `get(...)` を読む既存のコードは影響を受けません。
+
 ## タスクメッセージ
 
 タスクメッセージは、サブエージェントのタスクライフサイクルイベント中に出力される、型付けされたシステムメッセージのサブタイプです。これらは `Message` を直接実装し、`type()` は `"system"` を返します。既存の `instanceof SystemMessage` チェックはこれらに**マッチしません** — 具体的な型を使ってください。

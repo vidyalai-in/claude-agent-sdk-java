@@ -94,7 +94,7 @@ options.toBuilder()
 
 ### フック
 - `hooks(Map<HookEvent, List<HookMatcher>>)` —— フックのコールバック
-- `includeHookEvents(boolean)` —— `true` の場合、CLI はフックのライフサイクルイベント（`PreToolUse`、`PostToolUse`、`Stop` など）を `HookEventMessage` オブジェクトとしてメッセージストリームに流します。`--include-hook-events` に対応します。[フック → ストリーム上のフックライフサイクルイベント](./feature-hooks.md#ストリーム上のフックライフサイクルイベント)を参照してください。
+- `includeHookEvents(boolean)` —— `true` の場合、CLI はフックのライフサイクルイベント（`PreToolUse`、`PostToolUse`、`Stop` など）を `HookEventMessage` オブジェクトとしてメッセージストリームに流します。`SessionStart` と `Setup` のフックイベントはこの設定にかかわらず送出されます。`--include-hook-events` に対応します。[フック → ストリーム上のフックライフサイクルイベント](./feature-hooks.md#ストリーム上のフックライフサイクルイベント)を参照してください。
 
 ### 高度な設定
 - `user(String)` —— ユーザー識別子

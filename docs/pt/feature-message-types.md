@@ -233,6 +233,55 @@ if (msg instanceof SystemMessage system) {
 }
 ```
 
+### A mensagem `init`: `SystemInitData`
+
+No início de cada turno, o CLI envia uma `SystemMessage` com subtipo `"init"` descrevendo a sessão. `initData()` devolve uma visão tipada dela, e `null` para qualquer outro subtipo:
+
+```java
+if (msg instanceof SystemMessage system) {
+    SystemInitData init = system.initData();
+    if (init != null) {
+        System.out.println("Model: " + init.model() + ", CLI " + init.claudeCodeVersion());
+        System.out.println("Tools: " + init.tools());
+        for (SystemInitMcpServer server : init.mcpServers()) {
+            System.out.println("MCP " + server.name() + ": " + server.status());
+        }
+        // Feature-detect instead of comparing versions; ignore values you don't recognize
+        if (init.capabilities() != null && init.capabilities().contains("interrupt_receipt_v1")) {
+            System.out.println("CLI supports interrupt receipts");
+        }
+    }
+}
+```
+
+Campos de `SystemInitData`, com as chaves JSON que o CLI envia:
+
+| Acessor | Chave JSON | Tipo | Observações |
+|----------|----------|------|-------|
+| `type()` / `subtype()` | `type` / `subtype` | `String` | Sempre `"system"` / `"init"` |
+| `uuid()` | `uuid` | `String` | |
+| `sessionId()` | `session_id` | `String` | |
+| `agents()` | `agents` | `@Nullable List<String>` | |
+| `apiKeySource()` | `apiKeySource` | `String` | `"ANTHROPIC_API_KEY"`, `"apiKeyHelper"`, `"/login managed key"` ou `"none"` (por exemplo, um login do claude.ai ou um provedor de nuvem de terceiros) |
+| `betas()` | `betas` | `@Nullable List<String>` | |
+| `claudeCodeVersion()` | `claude_code_version` | `String` | |
+| `cwd()` | `cwd` | `String` | |
+| `tools()` | `tools` | `List<String>` | |
+| `mcpServers()` | `mcp_servers` | `List<SystemInitMcpServer>` | `name`, `status` e `source` (`"sdk"`, `"plugin"` ou um escopo de configuração como `"user"`; null em CLIs mais antigos) |
+| `model()` | `model` | `String` | |
+| `permissionMode()` | `permissionMode` | `PermissionMode` | |
+| `slashCommands()` | `slash_commands` | `List<String>` | |
+| `terminalSlashCommands()` | `terminal_slash_commands` | `@Nullable List<String>` | Entradas de `slashCommands` vinculadas ao terminal local (por exemplo, `exit`); presente apenas quando não está vazio |
+| `outputStyle()` | `output_style` | `String` | |
+| `skills()` | `skills` | `List<String>` | |
+| `plugins()` | `plugins` | `List<SystemInitPlugin>` | `name`, `path` e `version` (do manifesto do plugin; null quando ele não declara nenhuma) |
+| `pluginErrors()` | `plugin_errors` | `@Nullable List<SystemInitPluginError>` | `plugin`, `type`, `message`, `path`. Omitido quando nada falhou, mas a ausência da chave, por si só, não prova que o carregamento foi limpo: CLIs mais antigos e algumas sessões hospedadas nunca a enviam |
+| `fastModeState()` | `fast_mode_state` | `@Nullable FastModeState` | `OFF`, `COOLDOWN`, `ON` |
+| `fastModeDisabledReason()` | `fast_mode_disabled_reason` | `@Nullable FastModeDisabledReason` | Indica a verificação que bloqueia o fast mode, quando alguma bloqueia |
+| `capabilities()` | `capabilities` | `@Nullable List<String>` | Capacidades do protocolo para detecção de recursos. Conjunto aberto. Ausente em CLIs anteriores à 2.1.205 |
+
+O payload é lido como o CLI o enviou, sem validação. Um campo que o CLI omite fica `null`, chaves desconhecidas são ignoradas e um valor de enum que este SDK não reconhece (um novo motivo de fast mode, por exemplo) é lido como `null`; o valor bruto continua em `data()`. `initData()` lança `IllegalArgumentException` apenas se um campo tiver o formato JSON errado. `SystemInitData.from(Map)` lê um payload que você já tem em mãos. O próprio parser continua devolvendo uma `SystemMessage` comum para `init`, então o código existente que lê `data()` ou `get(...)` não é afetado.
+
 ## Mensagens de tarefa
 
 Mensagens de tarefa são subtipos tipados de mensagens de sistema emitidos durante os eventos do ciclo de vida das tarefas de subagentes. Elas implementam `Message` diretamente e `type()` devolve `"system"`. Verificações `instanceof SystemMessage` já existentes **não** correspondem a elas — use o tipo específico.

@@ -61,6 +61,7 @@ Claude Agent SDK for Java は、Claude の AI 機能を Java アプリケーシ�
 
 - **[メッセージ型](./feature-message-types.md)** —— メッセージ型システムの理解
   - UserMessage、AssistantMessage、SystemMessage、ResultMessage、StreamEvent、RateLimitEvent
+  - `SystemInitData` —— `init` メッセージの型付きビュー（モデル、ツール、MCP サーバー、プラグイン、ケイパビリティ）
   - タスクのライフサイクルメッセージ（TaskStartedMessage、TaskProgressMessage、TaskNotificationMessage、TaskUpdatedMessage）
   - HookEventMessage（`includeHookEvents` が有効な場合）
   - ResultMessage 上の DeferredToolUse、`apiErrorStatus` HTTP ステータスフィールド
@@ -135,7 +136,9 @@ Claude Agent SDK for Java は、Claude の AI 機能を Java アプリケーシ�
 
 - **[フックシステム](./feature-hooks.md)** —— ライフサイクルイベントの傍受と応答
   - 10 のフックイベント
-  - HookMatcher と HookOutput
+  - HookMatcher、HookCallback と HookOutput
+  - 型付きのフック入力（`promptId`、`effort`、ツールの `durationMs`、Stop 時のバックグラウンドタスクとスケジュール済みウェイクアップを含む）
+  - 21 種類すべてのフック固有出力型（例：Stop フックの `additionalContext` でモデルに処理を続けさせる）
   - PostToolUse の `updatedToolOutput`（任意のツールの出力を置き換え）と `updatedMCPToolOutput`
   - `PermissionDecision.DEFER` と ResultMessage 上の `DeferredToolUse`
   - `includeHookEvents` と HookEventMessage ストリーム

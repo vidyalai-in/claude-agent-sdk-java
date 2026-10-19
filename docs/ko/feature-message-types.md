@@ -233,6 +233,61 @@ if (msg instanceof SystemMessage system) {
 }
 ```
 
+### `init` 메시지: `SystemInitData`
+
+각 턴이 시작될 때 CLI는 세션을 설명하는 subtype `"init"`의 `SystemMessage`를 보냅니다. `initData()`는
+그 메시지의 타입 지정 뷰를 반환하며, 다른 모든 subtype에 대해서는 `null`을 반환합니다:
+
+```java
+if (msg instanceof SystemMessage system) {
+    SystemInitData init = system.initData();
+    if (init != null) {
+        System.out.println("Model: " + init.model() + ", CLI " + init.claudeCodeVersion());
+        System.out.println("Tools: " + init.tools());
+        for (SystemInitMcpServer server : init.mcpServers()) {
+            System.out.println("MCP " + server.name() + ": " + server.status());
+        }
+        // Feature-detect instead of comparing versions; ignore values you don't recognize
+        if (init.capabilities() != null && init.capabilities().contains("interrupt_receipt_v1")) {
+            System.out.println("CLI supports interrupt receipts");
+        }
+    }
+}
+```
+
+CLI가 보내는 JSON 키와 함께 정리한 `SystemInitData` 필드:
+
+| 접근자 | JSON 키 | 타입 | 비고 |
+|----------|----------|------|-------|
+| `type()` / `subtype()` | `type` / `subtype` | `String` | 항상 `"system"` / `"init"` |
+| `uuid()` | `uuid` | `String` | |
+| `sessionId()` | `session_id` | `String` | |
+| `agents()` | `agents` | `@Nullable List<String>` | |
+| `apiKeySource()` | `apiKeySource` | `String` | `"ANTHROPIC_API_KEY"`, `"apiKeyHelper"`, `"/login managed key"` 또는 `"none"`(예: claude.ai 로그인이나 서드파티 클라우드 제공자) |
+| `betas()` | `betas` | `@Nullable List<String>` | |
+| `claudeCodeVersion()` | `claude_code_version` | `String` | |
+| `cwd()` | `cwd` | `String` | |
+| `tools()` | `tools` | `List<String>` | |
+| `mcpServers()` | `mcp_servers` | `List<SystemInitMcpServer>` | `name`, `status`, 그리고 `source`(`"sdk"`, `"plugin"` 또는 `"user"` 같은 구성 범위. 오래된 CLI에서는 null) |
+| `model()` | `model` | `String` | |
+| `permissionMode()` | `permissionMode` | `PermissionMode` | |
+| `slashCommands()` | `slash_commands` | `List<String>` | |
+| `terminalSlashCommands()` | `terminal_slash_commands` | `@Nullable List<String>` | `slashCommands` 중 로컬 터미널에 묶인 항목(예: `exit`). 비어 있지 않을 때만 존재 |
+| `outputStyle()` | `output_style` | `String` | |
+| `skills()` | `skills` | `List<String>` | |
+| `plugins()` | `plugins` | `List<SystemInitPlugin>` | `name`, `path`, 그리고 `version`(플러그인 매니페스트에서 가져옴. 선언하지 않으면 null) |
+| `pluginErrors()` | `plugin_errors` | `@Nullable List<SystemInitPluginError>` | `plugin`, `type`, `message`, `path`. 실패한 것이 없으면 생략되지만, 키가 생략되었다는 사실만으로 깔끔하게 로드되었다고 볼 수는 없습니다: 오래된 CLI와 일부 호스팅 세션은 이 키를 아예 보내지 않습니다 |
+| `fastModeState()` | `fast_mode_state` | `@Nullable FastModeState` | `OFF`, `COOLDOWN`, `ON` |
+| `fastModeDisabledReason()` | `fast_mode_disabled_reason` | `@Nullable FastModeDisabledReason` | 빠른 모드를 막는 것이 있을 때, 그 검사의 이름 |
+| `capabilities()` | `capabilities` | `@Nullable List<String>` | 기능 감지를 위한 프로토콜 기능 목록. 열린 집합입니다. 2.1.205 이전 CLI에는 없음 |
+
+페이로드는 CLI가 보낸 그대로 읽히며 검증되지 않습니다. CLI가 생략한 필드는 `null`이고, 알 수 없는 키는
+무시되며, 이 SDK가 인식하지 못하는 enum 값(예: 더 새로운 빠른 모드 비활성 사유)은 `null`로 읽힙니다. 원시
+값은 `data()`에 그대로 남습니다. `initData()`는 필드의 JSON 형태가 잘못된 경우에만
+`IllegalArgumentException`을 던집니다. `SystemInitData.from(Map)`은 이미 가지고 있는 페이로드를 읽습니다.
+파서 자체는 여전히 `init`에 대해 일반 `SystemMessage`를 반환하므로, `data()`나 `get(...)`을 읽는 기존
+코드는 영향을 받지 않습니다.
+
 ## 태스크 메시지
 
 태스크 메시지는 서브에이전트 태스크의 수명 주기 이벤트 중에 나오는, 타입이 지정된 시스템 메시지 하위 유형입니다. `Message`를 직접 구현하며 `type()`은 `"system"`을 반환합니다. 기존의 `instanceof SystemMessage` 검사는 이들과 **일치하지 않습니다** — 구체적인 타입을 사용하세요.

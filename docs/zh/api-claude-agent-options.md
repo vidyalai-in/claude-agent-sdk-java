@@ -94,7 +94,7 @@ options.toBuilder()
 
 ### 钩子
 - `hooks(Map<HookEvent, List<HookMatcher>>)` —— 钩子回调
-- `includeHookEvents(boolean)` —— 为 `true` 时，CLI 会把钩子的生命周期事件（`PreToolUse`、`PostToolUse`、`Stop` 等）作为 `HookEventMessage` 对象推送到消息流中。对应 `--include-hook-events`。参见[钩子 → 消息流上的钩子生命周期事件](./feature-hooks.md#消息流上的钩子生命周期事件)。
+- `includeHookEvents(boolean)` —— 为 `true` 时，CLI 会把钩子的生命周期事件（`PreToolUse`、`PostToolUse`、`Stop` 等）作为 `HookEventMessage` 对象推送到消息流中。`SessionStart` 和 `Setup` 钩子事件无论如何都会发出。对应 `--include-hook-events`。参见[钩子 → 消息流上的钩子生命周期事件](./feature-hooks.md#消息流上的钩子生命周期事件)。
 
 ### 高级
 - `user(String)` —— 用户身份

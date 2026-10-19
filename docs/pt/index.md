@@ -62,6 +62,7 @@ complexas de múltiplos turnos.
 
 - **[Tipos de mensagem](./feature-message-types.md)** — entendendo o sistema de tipos de mensagem
   - UserMessage, AssistantMessage, SystemMessage, ResultMessage, StreamEvent, RateLimitEvent
+  - `SystemInitData` — visão tipada da mensagem `init` (modelo, ferramentas, servidores MCP, plugins, capacidades)
   - Mensagens do ciclo de vida de tarefas (TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage, TaskUpdatedMessage)
   - HookEventMessage (quando `includeHookEvents` está habilitado)
   - DeferredToolUse em ResultMessage; campo de status HTTP `apiErrorStatus`
@@ -136,7 +137,9 @@ complexas de múltiplos turnos.
 
 - **[Sistema de hooks](./feature-hooks.md)** — interceptando e respondendo a eventos do ciclo de vida
   - 10 eventos de hook
-  - HookMatcher e HookOutput
+  - HookMatcher, HookCallback e HookOutput
+  - Entradas de hook tipadas, incluindo `promptId`, `effort`, `durationMs` da ferramenta e, no Stop, tarefas em segundo plano e despertares agendados
+  - Todos os 21 tipos de saída específica de hook (por exemplo, o `additionalContext` de um hook Stop mantém o modelo trabalhando)
   - `updatedToolOutput` do PostToolUse (substitui a saída de qualquer ferramenta) e `updatedMCPToolOutput`
   - `PermissionDecision.DEFER` + `DeferredToolUse` em ResultMessage
   - `includeHookEvents` + fluxo de HookEventMessage

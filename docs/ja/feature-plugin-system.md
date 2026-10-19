@@ -70,24 +70,29 @@ examples/src/main/java/examples/plugins/demo-plugin/
 
 ## プラグインが読み込まれたことの確認
 
-CLI は、読み込んだプラグインを `init` システムメッセージの `plugins` フィールドで報告します。これは
-`name` と `path` を持つ Map のリストです：
+CLI は、読み込んだプラグインを `init` システムメッセージで報告します。`SystemMessage.initData()` を通じて
+読み取ってください。読み込みに失敗したプラグインも一覧に含まれます：
 
 ```java
 for (Message msg : ClaudeSDK.query("Hello!", options)) {
-    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
-        @SuppressWarnings("unchecked")
-        List<Object> plugins = (List<Object>) system.get("plugins");
-        if (plugins != null) {
-            for (Object p : plugins) {
-                if (p instanceof Map<?, ?> plugin) {
-                    System.out.println(plugin.get("name") + " (" + plugin.get("path") + ")");
-                }
+    if (msg instanceof SystemMessage system && system.initData() != null) {
+        SystemInitData init = system.initData();
+        for (SystemInitPlugin plugin : init.plugins()) {
+            System.out.println(plugin.name() + " (" + plugin.path() + ")");
+        }
+        if (init.pluginErrors() != null) {
+            for (SystemInitPluginError error : init.pluginErrors()) {
+                System.out.println("Failed: " + error.plugin() + " - " + error.type() + ": " + error.message());
             }
         }
     }
 }
 ```
+
+`SystemInitPlugin.version()` はプラグインのマニフェストで宣言されたバージョンで、宣言がない場合は `null` です。
+まったく読み込まれなかったプラグインディレクトリについては、`SystemInitPluginError.plugin()` が `inline[0]` の
+ような位置を表すタグになることがあり、`path()` はそのエントリのパスを cwd に対して解決したものです。
+[メッセージ型 → init メッセージ](./feature-message-types.md#init-メッセージsysteminitdata)を参照してください。
 
 ## 関連項目
 - [設定オプション](./feature-configuration-options.md#plugins) —— plugins オプション
