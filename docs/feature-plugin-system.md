@@ -68,24 +68,30 @@ plugin documentation for the full directory layout.
 
 ## Verifying a Plugin Loaded
 
-The CLI reports loaded plugins in the `init` system message's `plugins` field,
-a list of maps with `name` and `path`:
+The CLI reports loaded plugins in the `init` system message. Read them through
+`SystemMessage.initData()`, which also lists plugins that failed to load:
 
 ```java
 for (Message msg : ClaudeSDK.query("Hello!", options)) {
-    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
-        @SuppressWarnings("unchecked")
-        List<Object> plugins = (List<Object>) system.get("plugins");
-        if (plugins != null) {
-            for (Object p : plugins) {
-                if (p instanceof Map<?, ?> plugin) {
-                    System.out.println(plugin.get("name") + " (" + plugin.get("path") + ")");
-                }
+    if (msg instanceof SystemMessage system && system.initData() != null) {
+        SystemInitData init = system.initData();
+        for (SystemInitPlugin plugin : init.plugins()) {
+            System.out.println(plugin.name() + " (" + plugin.path() + ")");
+        }
+        if (init.pluginErrors() != null) {
+            for (SystemInitPluginError error : init.pluginErrors()) {
+                System.out.println("Failed: " + error.plugin() + " - " + error.type() + ": " + error.message());
             }
         }
     }
 }
 ```
+
+`SystemInitPlugin.version()` is the version declared in the plugin's manifest,
+or `null` when it declares none. For a plugin directory that did not load at
+all, `SystemInitPluginError.plugin()` may be a positional tag such as
+`inline[0]`, and `path()` is that entry's path resolved against the cwd. See
+[Message Types → The init message](./feature-message-types.md#the-init-message-systeminitdata).
 
 ## See Also
 - [Configuration Options](./feature-configuration-options.md#plugins) - plugins option

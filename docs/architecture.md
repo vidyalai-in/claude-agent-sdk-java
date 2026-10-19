@@ -632,6 +632,7 @@ Message (sealed interface)
     │               ├── DocumentBlock     - whole PDF
     │               └── UnknownBlock      - forward-compat fallback
     ├── SystemMessage (record)
+    │       └── initData() → SystemInitData (typed "init" payload)
     ├── ResultMessage (record)
     │       └── modelUsage: Map<String, ModelUsage>
     └── StreamEvent (record)
@@ -649,6 +650,7 @@ ClaudeAgentOptions
     ├── SdkBeta (enum)
     ├── SettingSource (enum)
     ├── SandboxSettings (record)
+    │       └── ignoreViolations: SandboxIgnoreViolations (command pattern → substrings)
     ├── ThinkingConfig (sealed interface)
     │       ├── ThinkingConfigAdaptive (record)
     │       ├── ThinkingConfigEnabled (record)
@@ -675,18 +677,32 @@ PermissionResult (sealed interface)
 ### Hook Types
 
 ```
-HookInput (sealed interface)
+HookInput (sealed interface)          - every input: promptId, effort (HookEffort)
     ├── PreToolUseHookInput
-    ├── PostToolUseHookInput
-    ├── PostToolUseFailureHookInput
+    ├── PostToolUseHookInput             - durationMs
+    ├── PostToolUseFailureHookInput      - durationMs
     ├── UserPromptSubmitHookInput
-    ├── StopHookInput
-    ├── SubagentStopHookInput
+    ├── StopHookInput                    - backgroundTasks, sessionCrons
+    ├── SubagentStopHookInput            - backgroundTasks, sessionCrons
     ├── SubagentStartHookInput
     ├── PreCompactHookInput
     ├── NotificationHookInput
     └── PermissionRequestHookInput
+
+HookOutput (class, builder)
+    └── hookSpecificOutput: HookSpecificOutput (sealed interface, 21 records)
+            ├── one per HookEvent that takes event-specific output
+            │   (PreToolUse, PostToolUse, PostToolUseFailure, UserPromptSubmit,
+            │    Notification, SubagentStart, PermissionRequest, Stop, SubagentStop)
+            └── outputs for events HookEvent does not list yet
+                (SessionStart, UserPromptExpansion, PostToolBatch, PermissionDenied,
+                 Pre/PostModelSwitch, Elicitation, ElicitationResult, CwdChanged,
+                 FileChanged, WorktreeCreate, MessageDisplay)
 ```
+
+`HookSpecificOutput` is serialized polymorphically on `hookEventName`. Records
+for events a callback cannot yet register for are typed for parity with the
+Python and TypeScript SDKs.
 
 ## Dependencies
 

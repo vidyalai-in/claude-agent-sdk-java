@@ -92,7 +92,7 @@ options.toBuilder()
 
 ### Hooks
 - `hooks(Map<HookEvent, List<HookMatcher>>)` - Hook callbacks
-- `includeHookEvents(boolean)` - When `true`, the CLI streams hook lifecycle events (`PreToolUse`, `PostToolUse`, `Stop`, …) into the message stream as `HookEventMessage` objects. Maps to `--include-hook-events`. See [Hooks → Hook Lifecycle Events on the Stream](./feature-hooks.md#hook-lifecycle-events-on-the-stream).
+- `includeHookEvents(boolean)` - When `true`, the CLI streams hook lifecycle events (`PreToolUse`, `PostToolUse`, `Stop`, …) into the message stream as `HookEventMessage` objects. The `SessionStart` and `Setup` hook events are emitted regardless. Maps to `--include-hook-events`. See [Hooks → Hook Lifecycle Events on the Stream](./feature-hooks.md#hook-lifecycle-events-on-the-stream).
 
 ### Advanced
 - `user(String)` - User identity

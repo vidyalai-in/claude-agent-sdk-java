@@ -185,9 +185,8 @@ You can verify which agents were loaded by checking the `SystemMessage` init eve
 
 ```java
 for (Message msg : client.receiveResponse()) {
-    if (msg instanceof SystemMessage system && "init".equals(system.subtype())) {
-        List<String> agents = system.get("agents");
-        System.out.println("Loaded agents: " + agents);
+    if (msg instanceof SystemMessage system && system.initData() != null) {
+        System.out.println("Loaded agents: " + system.initData().agents());
     }
 }
 ```

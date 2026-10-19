@@ -673,17 +673,19 @@ subsequent stderr line for the rest of the session.
 Register hook callbacks for lifecycle events.
 
 ```java
+HookMatcher.HookCallback beforeRead = (input, context) -> {
+    System.out.println("About to read file");
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+
 .hooks(Map.of(
-    HookEvent.PRE_TOOL_USE, List.of(
-        new HookMatcher(null, "Read", (context) -> {
-            System.out.println("About to read file");
-            return CompletableFuture.completedFuture(
-                HookOutput.empty()
-            );
-        })
-    )
+    HookEvent.PRE_TOOL_USE, List.of(new HookMatcher("Read", List.of(beforeRead)))
 ))
 ```
+
+A callback receives the typed `HookInput` and a `HookContext`, and returns a
+`CompletableFuture<HookOutput>`. See [Hooks](./feature-hooks.md) for the
+inputs, outputs and hook-specific outputs.
 
 **Available Events**:
 - `PRE_TOOL_USE` - Before tool execution
@@ -874,6 +876,24 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
     .build();
 ```
 
+`ignoreViolations` takes a `SandboxIgnoreViolations`: a map from a command
+pattern (`"*"` for every command) to substrings of the violation text. A
+violation is left unreported when the command's text contains the pattern and
+the violation's text contains one of the strings. Both checks are plain
+substring matches, not globs, and the setting changes which violations are
+reported, not what the sandbox blocks. It serializes as the bare map:
+
+```java
+SandboxIgnoreViolations.forAllCommands(List.of("/etc/hosts"))   // {"*": ["/etc/hosts"]}
+
+SandboxIgnoreViolations.of(Map.of(
+    SandboxIgnoreViolations.ALL_COMMANDS, List.of("/etc/hosts"),
+    "npm test", List.of("registry.npmjs.org")))
+```
+
+The deprecated `(file, network)` constructor from before 0.2.4 puts both lists
+under `"*"`.
+
 `SandboxNetworkConfig` fields:
 
 - `allowedDomains` — domains sandboxed processes can reach.
@@ -997,20 +1017,18 @@ var options = ClaudeAgentOptions.builder()
     .allowedTools(List.of("mcp__tools__process"))
     .hooks(Map.of(
         HookEvent.PRE_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
-                log("Processing: " + context.input());
-                return CompletableFuture.completedFuture(
-                    HookOutput.logs(List.of("Started processing"))
-                );
-            })
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
+                if (input instanceof PreToolUseHookInput pre) {
+                    log("Processing: " + pre.toolInput());
+                }
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         ),
         HookEvent.POST_TOOL_USE, List.of(
-            new HookMatcher(null, "mcp__tools__process", context -> {
+            new HookMatcher("mcp__tools__process", List.of((input, context) -> {
                 log("Completed processing");
-                return CompletableFuture.completedFuture(
-                    HookOutput.empty()
-                );
-            })
+                return CompletableFuture.completedFuture(HookOutput.empty());
+            }))
         )
     ))
     .build();

@@ -231,6 +231,63 @@ if (msg instanceof SystemMessage system) {
 }
 ```
 
+### The `init` message: `SystemInitData`
+
+At the start of each turn the CLI sends a `SystemMessage` with subtype
+`"init"` describing the session. `initData()` returns a typed view of it, and
+`null` for every other subtype:
+
+```java
+if (msg instanceof SystemMessage system) {
+    SystemInitData init = system.initData();
+    if (init != null) {
+        System.out.println("Model: " + init.model() + ", CLI " + init.claudeCodeVersion());
+        System.out.println("Tools: " + init.tools());
+        for (SystemInitMcpServer server : init.mcpServers()) {
+            System.out.println("MCP " + server.name() + ": " + server.status());
+        }
+        // Feature-detect instead of comparing versions; ignore values you don't recognize
+        if (init.capabilities() != null && init.capabilities().contains("interrupt_receipt_v1")) {
+            System.out.println("CLI supports interrupt receipts");
+        }
+    }
+}
+```
+
+`SystemInitData` fields, with the JSON keys the CLI sends:
+
+| Accessor | JSON key | Type | Notes |
+|----------|----------|------|-------|
+| `type()` / `subtype()` | `type` / `subtype` | `String` | Always `"system"` / `"init"` |
+| `uuid()` | `uuid` | `String` | |
+| `sessionId()` | `session_id` | `String` | |
+| `agents()` | `agents` | `@Nullable List<String>` | |
+| `apiKeySource()` | `apiKeySource` | `String` | `"ANTHROPIC_API_KEY"`, `"apiKeyHelper"`, `"/login managed key"`, or `"none"` (e.g. a claude.ai login or a third-party cloud provider) |
+| `betas()` | `betas` | `@Nullable List<String>` | |
+| `claudeCodeVersion()` | `claude_code_version` | `String` | |
+| `cwd()` | `cwd` | `String` | |
+| `tools()` | `tools` | `List<String>` | |
+| `mcpServers()` | `mcp_servers` | `List<SystemInitMcpServer>` | `name`, `status`, and `source` (`"sdk"`, `"plugin"`, or a config scope such as `"user"`; null on older CLIs) |
+| `model()` | `model` | `String` | |
+| `permissionMode()` | `permissionMode` | `PermissionMode` | |
+| `slashCommands()` | `slash_commands` | `List<String>` | |
+| `terminalSlashCommands()` | `terminal_slash_commands` | `@Nullable List<String>` | Entries of `slashCommands` bound to the local terminal (e.g. `exit`); present only when non-empty |
+| `outputStyle()` | `output_style` | `String` | |
+| `skills()` | `skills` | `List<String>` | |
+| `plugins()` | `plugins` | `List<SystemInitPlugin>` | `name`, `path`, and `version` (from the plugin manifest; null when it declares none) |
+| `pluginErrors()` | `plugin_errors` | `@Nullable List<SystemInitPluginError>` | `plugin`, `type`, `message`, `path`. Omitted when nothing failed, but an omitted key does not by itself prove a clean load: older CLIs and some hosted sessions never send it |
+| `fastModeState()` | `fast_mode_state` | `@Nullable FastModeState` | `OFF`, `COOLDOWN`, `ON` |
+| `fastModeDisabledReason()` | `fast_mode_disabled_reason` | `@Nullable FastModeDisabledReason` | Names the check that blocks fast mode, when something does |
+| `capabilities()` | `capabilities` | `@Nullable List<String>` | Protocol capabilities for feature detection. Open set. Absent on CLIs before 2.1.205 |
+
+The payload is read as the CLI sent it, not validated. A field the CLI omits
+is `null`, unknown keys are ignored, and an enum value this SDK does not
+recognize (a newer fast-mode reason, say) reads as `null`; the raw value stays
+in `data()`. `initData()` throws `IllegalArgumentException` only if a field
+has the wrong JSON shape. `SystemInitData.from(Map)` reads a payload you
+already hold. The parser itself still returns a plain `SystemMessage` for
+`init`, so existing code that reads `data()` or `get(...)` is unaffected.
+
 ## Task Messages
 
 Task messages are typed subtypes of system messages emitted during subagent task lifecycle events. They implement `Message` directly and have `type()` returning `"system"`. Existing `instanceof SystemMessage` checks do **not** match these — use the specific type.
