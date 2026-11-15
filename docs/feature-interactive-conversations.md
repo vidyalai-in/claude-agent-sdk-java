@@ -318,7 +318,7 @@ for (Message msg : client.receiveResponse()) {
             System.out.println("System: " + system.subtype());
 
         case StreamEvent event ->
-            System.out.println("Partial: " + event.delta());
+            System.out.println("Partial: " + event.event().get("delta"));
     }
 }
 ```
@@ -436,7 +436,9 @@ client.sendMessage("Analyze code.java", "session-1");
 client.sendMessage("Write tests", "session-2");
 
 // Receive from all sessions
-for (var msg : client.receiveMessages()) {
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    var msg = messages.next();
     // Process messages from any session
 }
 ```
@@ -521,7 +523,9 @@ try (var client = ClaudeSDK.createClient()) {
 
     // Dedicated receive thread
     Thread.ofVirtual().start(() -> {
-        for (var msg : client.receiveMessages()) {
+        Iterator<Message> messages = client.receiveMessages();
+        while (messages.hasNext()) {
+            var msg = messages.next();
             processMessage(msg);
         }
     });
@@ -679,7 +683,9 @@ public class MultiSession {
             client.sendMessage("Document api.java", "docs");
 
             // Process responses from all sessions
-            for (var msg : client.receiveMessages()) {
+            Iterator<Message> messages = client.receiveMessages();
+            while (messages.hasNext()) {
+                var msg = messages.next();
                 switch (msg) {
                     case AssistantMessage a ->
                         System.out.println("[Session] " + a.getTextContent());
@@ -776,7 +782,9 @@ for (var msg : client.receiveResponse()) {
 }
 
 // ❌ Bad: Manual ResultMessage checking
-for (var msg : client.receiveMessages()) {
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    var msg = messages.next();
     if (msg instanceof ResultMessage) break;
 }
 ```
