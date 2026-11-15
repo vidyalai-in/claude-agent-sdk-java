@@ -427,7 +427,9 @@ record TaskUsage(
 ### 예제: 태스크 메시지 처리하기
 
 ```java
-for (Message msg : client.receiveMessages()) {
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    Message msg = messages.next();
     switch (msg) {
         case TaskStartedMessage task ->
             System.out.println("Task started: " + task.taskId() + " - " + task.description());

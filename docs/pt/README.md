@@ -1069,7 +1069,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 try (var client = ClaudeSDK.createClient(options)) {
     client.connect("Write a long story");
 
-    for (Message msg : client.receiveMessages()) {
+    Iterator<Message> messages = client.receiveMessages();
+    while (messages.hasNext()) {
+        Message msg = messages.next();
         if (msg instanceof StreamEvent event) {
             // Process streaming delta
             System.out.print(event.event().get("delta"));
@@ -1322,7 +1324,9 @@ try (var client = ClaudeSDK.createClient()) {
 
     // Receive in background thread
     Thread receiveThread = Thread.startVirtualThread(() -> {
-        for (Message msg : client.receiveMessages()) {
+        Iterator<Message> messages = client.receiveMessages();
+        while (messages.hasNext()) {
+            Message msg = messages.next();
             if (msg instanceof ResultMessage) break;
             System.out.println("Received: " + msg);
         }

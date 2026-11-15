@@ -42,12 +42,14 @@ record StreamEvent(
 ## 스트림 이벤트 처리
 
 ```java
-for (Message msg : client.receiveMessages()) {
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    Message msg = messages.next();
     switch (msg) {
         case StreamEvent event -> {
             switch (event.eventType()) {
                 case "content_block_delta" -> {
-                    Map<String, Object> delta = (Map) event.delta();
+                    Map<String, Object> delta = (Map) event.event().get("delta");
                     String text = (String) delta.get("text");
                     if (text != null) {
                         System.out.print(text);  // Print as it arrives
@@ -87,11 +89,13 @@ public class StreamingExample {
 
             StringBuilder current = new StringBuilder();
 
-            for (Message msg : client.receiveMessages()) {
+            Iterator<Message> messages = client.receiveMessages();
+            while (messages.hasNext()) {
+                Message msg = messages.next();
                 switch (msg) {
                     case StreamEvent event -> {
                         if ("content_block_delta".equals(event.eventType())) {
-                            Map<String, Object> delta = (Map) event.delta();
+                            Map<String, Object> delta = (Map) event.event().get("delta");
                             String text = (String) delta.get("text");
                             if (text != null) {
                                 current.append(text);
@@ -122,11 +126,13 @@ public class StreamingExample {
 ```java
 JTextArea textArea = new JTextArea();
 
-for (Message msg : client.receiveMessages()) {
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    Message msg = messages.next();
     if (msg instanceof StreamEvent event &&
         "content_block_delta".equals(event.eventType())) {
         
-        Map<String, Object> delta = (Map) event.delta();
+        Map<String, Object> delta = (Map) event.event().get("delta");
         String text = (String) delta.get("text");
         
         if (text != null) {
@@ -143,11 +149,13 @@ for (Message msg : client.receiveMessages()) {
 ```java
 TextArea textArea = new TextArea();
 
-for (Message msg : client.receiveMessages()) {
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    Message msg = messages.next();
     if (msg instanceof StreamEvent event &&
         "content_block_delta".equals(event.eventType())) {
         
-        Map<String, Object> delta = (Map) event.delta();
+        Map<String, Object> delta = (Map) event.event().get("delta");
         String text = (String) delta.get("text");
         
         if (text != null) {
