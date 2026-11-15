@@ -80,18 +80,19 @@ options.toBuilder()
 
 ### Environment
 - `cwd(Path)` - Working directory
-- `cliPath(Path)` - Custom CLI path (a Windows `.bat`/`.cmd` path is refused; see below)
-- `allowUnsafeWindowsBatchCli(boolean)` - Waive the Windows batch-script refusal; also requires `-Djdk.lang.Process.allowAmbiguousCommands=false` and rejects cmd.exe metacharacters in every argument (default `false`)
-- `settings(String)` - Settings file path or inline JSON string; passed as-is to `--settings`, or merged with `sandbox` into one JSON string when a sandbox is set
+- `cliPath(Path)` - Custom CLI path (a Windows `.bat`/`.cmd` path is refused; see below). When unset, the SDK searches for the CLI; on Windows it finds only `claude.exe`, in absolute `PATH` entries, then `~/.local/bin/claude.exe`
+- `allowUnsafeWindowsBatchCli(boolean)` - Waive the Windows batch-script refusal; also requires `-Djdk.lang.Process.allowAmbiguousCommands=false` and rejects cmd.exe metacharacters in every argument (default `false`). Also lets CLI discovery return a `claude.cmd`/`claude.bat` shim when no `claude.exe` exists
+- `settings(String)` - Settings file path or inline JSON string; passed as-is to `--settings`, or merged with `sandbox` into one JSON string when a sandbox is set. A relative path resolves against `cwd`; settings that can't be loaded for that merge fail `connect()` with `CLIConnectionException`
 - `addDirs(List<Path>)` - Additional context dirs
-- `env(Map<String, String>)` - Environment variables, merged over the inherited environment. The SDK also sets `CLAUDE_CODE_ENTRYPOINT` (overridable), `CLAUDE_AGENT_SDK_VERSION`, and `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` unless already named; see [env()](./feature-configuration-options.md#env)
+- `env(Map<String, String>)` - Environment variables, merged over the inherited environment. The SDK also sets `CLAUDE_CODE_ENTRYPOINT` (overridable), `CLAUDE_AGENT_SDK_VERSION`, and `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` unless already named, and drops an inherited `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP`; see [env()](./feature-configuration-options.md#env)
+- `clientApp(String)` - Your app/library identifier (e.g. `"my-app/1.0.0"`), sent on API requests as `CLAUDE_AGENT_SDK_CLIENT_APP`; wins over `env` and the inherited value, `""` sends none. See [clientApp()](./feature-configuration-options.md#clientapp)
 - `extraArgs(Map<String, String>)` - Extra CLI flags; keys without the leading `--`, blank value for a bare flag
 
 ### Callbacks
 - `stderrCallback(Consumer<String>)` - Stderr callback
 
 ### Hooks
-- `hooks(Map<HookEvent, List<HookMatcher>>)` - Hook callbacks
+- `hooks(Map<HookEvent, List<HookMatcher>>)` - Hook callbacks. A `HookMatcher` can set `timeoutSeconds` and an `onFailure` policy (`HookOnFailure.CONTINUE` or `BLOCK`); see [Hooks → Failure policy](./feature-hooks.md#failure-policy-onfailure)
 - `includeHookEvents(boolean)` - When `true`, the CLI streams hook lifecycle events (`PreToolUse`, `PostToolUse`, `Stop`, …) into the message stream as `HookEventMessage` objects. The `SessionStart` and `Setup` hook events are emitted regardless. Maps to `--include-hook-events`. See [Hooks → Hook Lifecycle Events on the Stream](./feature-hooks.md#hook-lifecycle-events-on-the-stream).
 
 ### Advanced
@@ -100,7 +101,7 @@ options.toBuilder()
 - `verbatimPrompts(boolean)` - Mark every user message the SDK sends `client_composed`, so Claude Code delivers it as written: no `@path` expansion, no slash-command dispatch. Overwrites any per-message value while on. Requires Claude Code 2.1.248+ (the SDK warns on older CLIs). See [verbatimPrompts()](./feature-configuration-options.md#verbatimprompts)
 - `forwardSubagentText(boolean)` - When `true`, subagent text and thinking blocks are forwarded into the message stream alongside the `tool_use` / `tool_result` blocks that are always forwarded. Sent on the `initialize` control request (no CLI flag). See [Agents → Observing a subagent's output](./feature-agents.md#observing-a-subagents-output).
 - `agents(Map<String, AgentDefinition>)` - Custom agents
-- `settingSources(List<SettingSource>)` - Settings sources (empty list disables all sources via `--setting-sources=`; omitted keeps CLI defaults)
+- `settingSources(List<SettingSource>)` - Settings sources (empty list disables all sources via `--setting-sources=`, isolating the session from filesystem settings; omitted keeps CLI defaults, which load every source)
 - `skills(List<String>)` - Skills allowlist (auto-injects `Skill(name)` into `allowedTools` and defaults `settingSources` to user/project). Names must be exact — wildcards, rule delimiters, and surrounding whitespace throw `IllegalArgumentException` at `connect()`
 - `skillsAll()` - Enable every discovered skill (auto-injects bare `Skill` tool)
 - `sandbox(SandboxSettings)` - Sandbox config for bash commands; its `network` key configures the sandbox's own network isolation (tool-level restrictions stay in permission rules)

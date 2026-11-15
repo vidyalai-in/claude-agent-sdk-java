@@ -318,6 +318,11 @@ List<SessionMessage> subAgent =
 String spawnedBy = subAgent.get(0).parentToolUseId();
 ```
 
+`getSessionMessagesFromStore` rebuilds the conversation exactly as the local
+reader does, including a turn with parallel tool calls, and both message readers
+page offset first (`limit` of `null` or `0` = no limit); see
+[Session History → How the conversation is rebuilt](./feature-session-history.md#how-the-conversation-is-rebuilt).
+
 `listSessionsFromStore` has a fast path when the store implements `listSessionSummaries`: one batch summary call plus a cheap `listSessions` enumeration to gap-fill any sessions missing or stale sidecars. When `listSessionSummaries` isn't implemented, it falls back to one `loadAsync()` per session, **bounded at 16 concurrent calls** (matching the Python SDK), so large project listings don't exhaust adapter connection pools.
 
 If `listSessions` and `listSessionSummaries` are both unimplemented, the call throws `IllegalStateException`. Adapter `loadAsync` failures degrade individual rows to empty-summary entries instead of failing the whole list.

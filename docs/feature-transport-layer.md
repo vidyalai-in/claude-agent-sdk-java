@@ -38,7 +38,8 @@ Transport transport = new SubprocessCLITransport(options);
 - Graceful shutdown with grace period (waits for subprocess to flush session file after stdin EOF before sending SIGTERM)
 - Sets `CLAUDE_CODE_ENTRYPOINT=sdk-java` by default (overridable via `ClaudeAgentOptions.env()`)
 - Sets `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` unless the caller's `env()` or the inherited environment already names it (any letter case), so the CLI reports `session_state_changed` frames marked `sdk_host_only`; `QueryHandler` reads them to decide when stdin can close and drops them before the consumer. See [Architecture → Stdin Lifecycle](./architecture.md#stdin-lifecycle-and-the-end-of-a-run). The full list of variables the transport sets is in [Configuration Options → env()](./feature-configuration-options.md#env).
-- Warns at connect time (log `WARNING`) when the CLI is older than 2.0.0, and when `verbatimPrompts` is on but the CLI is older than 2.1.248, which ignores `client_composed`. The version check runs `<cli> -v` and is skipped when `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` is set.
+- Checks the CLI version from the `claude_code_version` field of the first `system`/`init` message, once per transport, so `cliPath` is executed only to start the session (there is no separate `<cli> -v` probe). It logs a `WARNING` when the CLI reports no version: versions below 2.0.0, and the first 2.0 releases, don't send one. It also warns when `verbatimPrompts` is on and the CLI is older than 2.1.248 (which ignores `client_composed`) or reports no version, shown as `unknown`. Setting `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` turns the check off.
+- Merges `settings` with `sandbox` into one `--settings` value when both are set, and fails `connect()` with `CLIConnectionException` when the settings can't be loaded, rather than dropping them. See [Configuration Options → settings()](./feature-configuration-options.md#settings).
 
 ### CLI flag forwarding
 
@@ -66,7 +67,7 @@ Windows has no shebang mechanism. When the CLI path names a `.bat` or `.cmd` fil
 
 The `--flag=value` form from 0.1.19 does not help on this path: once cmd.exe re-parses the string there is no argv boundary left to protect. Reliable escaping for cmd.exe does not exist (`%VAR%` expands even inside double quotes), so **refusing is the only robust remediation** — the same one Node.js shipped for this vulnerability class (CVE-2024-27980, "BatBadBut").
 
-`connect()` validates the resolved path before anything is spawned with it, so the check covers every route to the executable: PATH discovery, an explicit `ClaudeAgentOptions.cliPath(...)`, and the version probe that runs before the main process.
+`connect()` validates the resolved path before anything is spawned with it, so the check covers every route to the executable: PATH discovery and an explicit `ClaudeAgentOptions.cliPath(...)`.
 
 ```java
 // On Windows, with cliPath pointing at npm's shim:
@@ -101,13 +102,14 @@ The check is deliberately plain string logic rather than `java.nio.file.Path`: p
 
 ### Windows: CLI discovery order (0.1.21)
 
-Discovery prefers a native executable, because an extensionless `claude` on Windows is a git-bash / WSL wrapper script the OS cannot run directly:
+On Windows, discovery finds only a native `claude.exe` (since 0.2.5). An extensionless `claude` is a git-bash / WSL wrapper script the OS cannot run directly, and npm's `claude.cmd` shim is refused by `connect()`:
 
-1. Sweep the **whole** `PATH` for `claude.exe` first. PATH is walked directory-major, so without this a wrapper script in an early directory would shadow a real `claude.exe` installed in a later one.
-2. Otherwise fall back to `~/.local/bin/claude.exe`. The POSIX-shaped locations are deliberately **not** probed on Windows: an extensionless match there would preempt the explanatory refusal with an opaque spawn failure, and a rooted-but-driveless `/usr/local/bin/claude` resolves against the current drive — a location another local user can create, making it a binary-planting probe.
-3. Otherwise return a `claude.cmd` / `claude.bat` shim if one is on `PATH`, specifically so `connect()` raises the batch-script refusal *with its remediation* rather than a bare not-found error.
-4. Otherwise return a non-native `PATH` hit so the spawn error names what is actually installed.
-5. Otherwise throw `CLINotFoundException` with a Windows-specific message pointing at the native installer. It does not recommend `npm install -g @anthropic-ai/claude-code`, because that produces the very shim this SDK refuses.
+1. Look for `claude.exe` in each **absolute** `PATH` entry, in order. Relative entries (`""`, `.`, `tools`) are skipped: they resolve against the working directory, which another local user may control, so probing them would be a binary-planting risk. Only the exact name is probed, with no `PATHEXT` resolution, so a shim or wrapper in an early directory never shadows a `claude.exe` in a later one.
+2. Otherwise fall back to `~/.local/bin/claude.exe`. The POSIX-shaped locations are deliberately **not** probed on Windows: a rooted-but-driveless `/usr/local/bin/claude` resolves against the current drive, which is another binary-planting probe, and an extensionless match is not runnable.
+3. Otherwise, **only with [`allowUnsafeWindowsBatchCli(true)`](#windows-batch-cli-opt-in-0122)**, return a `claude.cmd`, then a `claude.bat`, from an absolute `PATH` entry, so callers who accepted that risk keep auto-discovery. The Python SDK has no such opt-in and never returns a shim.
+4. Otherwise throw `CLINotFoundException` with a Windows-specific message pointing at the native installer. It does not recommend `npm install -g @anthropic-ai/claude-code`, because that produces the very shim this SDK refuses, and it says so.
+
+Before 0.2.5, discovery also searched relative `PATH` entries, and without the opt-in it returned a `claude.cmd` shim or a wrapper script as a last resort, so `connect()` failed with the batch-script refusal or a spawn error. Such a machine now gets `CLINotFoundException` when the transport is built. A path passed with `cliPath(...)` is used as given, and still goes through the refusal above.
 
 POSIX discovery is unchanged: `PATH`, then `~/.npm-global/bin`, `/usr/local/bin`, `~/.local/bin`, `~/node_modules/.bin`, `~/.yarn/bin`, `~/.claude/local`.
 

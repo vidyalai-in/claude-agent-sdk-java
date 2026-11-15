@@ -147,11 +147,13 @@ record AssistantMessage(
     @Nullable String messageId,              // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,             // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,              // Session ID this message belongs to
-    @Nullable String uuid                    // Unique identifier in the session transcript
+    @Nullable String uuid,                   // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
-The `usage` map contains per-turn API token consumption data when available, including keys like `input_tokens`, `output_tokens`, and cache-related fields. The `messageId`, `stopReason`, `sessionId`, and `uuid` fields capture API-level identifiers. These are nullable and absent for partial/streaming messages. Backwards-compatible constructors without the newer fields are also available.
+The `usage` map contains per-turn API token consumption data when available, including keys like `input_tokens`, `output_tokens`, and cache-related fields. The `messageId`, `stopReason`, `sessionId`, and `uuid` fields capture API-level identifiers. These are nullable and absent for partial/streaming messages. `userMessageUuid` and `userMessageUuids` are set only on the first top-level assistant message after their value is set or changes; see [Matching a result to your prompt](#matching-a-result-to-your-prompt). Backwards-compatible constructors without the newer fields are also available.
 
 ### Methods
 
@@ -552,7 +554,10 @@ record ResultMessage(
     @Nullable List<String> errors,                // Error messages from the CLI
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
-    @Nullable String terminalReason               // Why the query loop terminated
+    @Nullable String terminalReason,              // Why the query loop terminated
+    @Nullable MessageOrigin origin,               // What started the turn (see Message Origin)
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message
 ```
 
@@ -633,7 +638,9 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
@@ -795,9 +802,8 @@ for (Message msg : client.receiveResponse()) {
 initiated. In streaming-input mode one connection interleaves the turns your
 application sends with turns the session injects on its own — background-task
 notifications, fired scheduled-task prompts, MCP channel messages, messages
-relayed from peer sessions. On a `ResultMessage` the field reports the origin of
-the message that *triggered* that turn, which is what lets you tell "this
-answers my prompt" from "this answers a background task".
+relayed from peer sessions. On a `ResultMessage` the field reports what
+*started* that turn, such as a background-task notification.
 
 ```java
 MessageOrigin origin = result.origin();
@@ -825,6 +831,41 @@ client.query(List.of(message).iterator());
 
 Only the `human` kind is honored from an SDK host, and it requires Claude Code
 >= 2.1.210. Tool-result user messages never carry an origin.
+
+### Matching a result to your prompt
+
+`origin` does not tell you whether a result covers *your* prompt: a prompt sent
+while an injected turn is running can be answered inside that turn, and the
+result then carries the injected turn's origin. To find the result for a
+prompt, put a fresh top-level `uuid` on the message map you send, and look for
+it in `userMessageUuid()` / `userMessageUuids()`:
+
+```java
+String myUuid = UUID.randomUUID().toString();
+message.put("uuid", myUuid);
+client.query(List.of(message).iterator());
+
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    if (messages.next() instanceof ResultMessage result) {
+        List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+        if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+            // this turn took in the prompt sent with myUuid
+            break;
+        }
+    }
+}
+```
+
+Read with `receiveMessages()`: `receiveResponse()` stops at the first result,
+which can be an injected turn's. Use a new uuid for every message, as the CLI
+can skip one whose uuid it has already seen. Error results carry the uuid too,
+so check `isError()` and `terminalReason()` before treating the prompt as
+answered. `userMessageUuids()` is an empty list on an interrupted turn and null
+on older CLIs. Prompts sent as a plain string have no uuid; for those, an
+`origin` that is null or `HUMAN` is only a best effort. `MessageOriginExample`
+runs this round trip. Field details:
+[ResultMessage → userMessageUuid and userMessageUuids](./api-message-types.md#usermessageuuid-and-usermessageuuids).
 
 Unrecognized kinds stay visible rather than becoming errors: `kind()` is null
 while `kindValue()` holds the wire string, and `isHuman()` is false — so

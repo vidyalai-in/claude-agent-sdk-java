@@ -69,6 +69,37 @@ record SessionMessage(
 
 Only top-level conversation messages are returned — tool-use sidechain messages, meta messages, and subagent messages are filtered out.
 
+### How the conversation is rebuilt
+
+A transcript is a tree: each entry names its parent in `parentUuid`, and a
+resumed or edited conversation leaves branches. `getSessionMessages()` and
+`getSessionMessagesFromStore()` rebuild the conversation the same way, matching
+the Python SDK:
+
+1. **Pick the leaf.** Each entry nothing points back to is walked back to its
+   nearest user or assistant entry, which becomes a candidate leaf. The latest
+   main-chain candidate (not a sidechain, meta or team entry) wins. Only when
+   there is none does the latest candidate of any kind win. The `isSidechain`,
+   `isMeta` and `teamName` flags are read the way Python reads truthiness, so an
+   empty `teamName` is no team.
+2. **Walk back** from the leaf through `parentUuid` to the root. An entry whose
+   `uuid` is not a string is skipped, and a `parentUuid` that is not a non-empty
+   string counts as no parent.
+3. **Put parallel tool calls back.** The CLI writes a response with several
+   parallel tool calls as one assistant entry per call, sharing `message.id`,
+   and writes each result under its own call's entry. The transcript forks
+   there, and the walk keeps only the branch the next turn continued from. The
+   calls and results it skipped are put back right after the response's last
+   entry on the chain: calls in timestamp order, then results in the order they
+   completed. A result is matched to its call through its parent,
+   `sourceToolAssistantUUID` or `tool_use_id`, never across agents, and never a
+   second time for a call the chain already answers.
+
+So a turn with parallel tool calls reads back whole: every call, and every
+result after its call. `ParallelToolSessionReadsExample` runs such a turn
+against the live CLI and checks both readers. Subagent transcripts are linear
+and need none of this.
+
 `parentToolUseId` and `parentAgentId` are always null for `getSessionMessages()` / `getSessionMessagesFromStore()` results. They are populated for `getSubagentMessages()` / `getSubagentMessagesFromStore()`: `parentToolUseId` is the id of the Agent `tool_use` block in the parent session that spawned the subagent, and `parentAgentId` names the spawning subagent when one subagent spawned another. Both come from the subagent's `agent-<agentId>.meta.json` sidecar (or, for store reads, the `agent_metadata` entry that stands in for it), so both are null when that metadata is missing or unusable. Every message in a given subagent transcript carries the same pair.
 
 ### Accessing Message Content
@@ -197,6 +228,12 @@ List<SessionMessage> page = ClaudeSDK.getSessionMessages(
     20       // offset
 );
 ```
+
+Paging is applied to the rebuilt conversation, offset first: the result is
+messages `offset` to `offset + limit - 1`. A `limit` that is `null`, `0` or
+negative means no limit. Every session and subagent reader, on disk and from a
+`SessionStore`, pages this way, and messages put back from a parallel tool turn
+count toward the limit.
 
 ## Renaming Sessions
 

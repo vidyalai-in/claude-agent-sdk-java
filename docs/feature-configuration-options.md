@@ -524,7 +524,10 @@ Custom path to Claude Code CLI.
 .cliPath(Path.of("/custom/path/to/claude"))
 ```
 
-Default: Searches system PATH.
+Default: searches for the CLI. On POSIX that is `PATH`, then a few common
+install locations. On Windows only a native `claude.exe` is found, and only in
+absolute `PATH` entries, then `~/.local/bin/claude.exe`; see [Transport Layer →
+Windows CLI discovery](./feature-transport-layer.md#windows-cli-discovery-order-0121).
 
 **Windows:** a `.bat`/`.cmd` path (npm's `claude.cmd` shim) is refused — the OS would run it through `cmd.exe`, which re-parses the command line. Point this at a `claude.exe`, or see `allowUnsafeWindowsBatchCli()` below.
 
@@ -543,6 +546,10 @@ This is **not** a plain bypass — a bare waiver would restore the full `cmd.exe
 2. **Rejects `& | < > ^ % ! "` and CR/LF in every CLI argument**, throwing `IllegalArgumentException` naming the offending option. `%` and `!` are absent from the JDK's escape set and quoting does not stop `%VAR%` expansion.
 3. **Logs a `WARNING`** naming the accepted risk.
 
+The opt-in also lets CLI discovery return npm's `claude.cmd` shim (or a
+`claude.bat`) from an absolute `PATH` entry when no `claude.exe` exists, so
+`cliPath()` can be left unset. Without it, discovery never returns a shim.
+
 **Residual risk:** cmd.exe still expands `%VAR%` from the environment. Use only where the CLI path and every argument value are administrator-controlled. Ignored on POSIX. See [Transport Layer → batch-CLI opt-in](./feature-transport-layer.md#windows-batch-cli-opt-in-0122).
 
 ### settings()
@@ -557,9 +564,18 @@ Path to an additional settings JSON file, or an inline JSON string.
 Without `sandbox()`, the value is passed as-is to `--settings`. With
 `sandbox()` also set, the two are merged into one JSON string: a value that
 starts with `{` and ends with `}` is parsed as JSON, anything else is read as a
-file path (a missing or unreadable file is logged and only the sandbox settings
-are passed). These load into the CLI's "flag settings" layer, the highest
-priority among user-controlled settings.
+file path. A relative path is resolved against `cwd()` when it is set, as the
+CLI resolves it, and a UTF-8 byte-order mark is stripped. These load into the
+CLI's "flag settings" layer, the highest priority among user-controlled
+settings.
+
+When the settings can't be merged, `connect()` fails with
+`CLIConnectionException("Failed to load settings: ...")` rather than launching
+the CLI with only the sandbox settings, which would silently drop your
+permission rules and hooks. That covers a missing or unreadable file, a
+directory, invalid JSON (inline or in a file), JSON that is not an object, and
+content after the object. The message gives the line and column of a JSON
+error but never quotes the settings text, which can hold secrets.
 
 ### addDirs()
 
@@ -587,13 +603,15 @@ Set environment variables for CLI process.
 ```
 
 The map is merged over the parent process's environment: entries here override
-inherited values, and `CLAUDECODE` is dropped from the inherited set. The
-transport also sets:
+inherited values. `CLAUDECODE` is dropped from the inherited set, and
+`CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP` is always dropped, since one inherited
+from an outer SDK session names that session's app. The transport also sets:
 
 | Variable | When | Overridable here |
 |----------|------|------------------|
 | `CLAUDE_CODE_ENTRYPOINT=sdk-java` | always | yes |
 | `CLAUDE_AGENT_SDK_VERSION` | always | no |
+| `CLAUDE_AGENT_SDK_CLIENT_APP` | `clientApp(...)` is set (see [clientApp()](#clientapp)) | no: `clientApp()` wins |
 | `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` | unless this map or the inherited environment already names it (in any letter case) | yes |
 | `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` | `enableFileCheckpointing(true)` | — |
 | `PWD` | `cwd(...)` is set | — |
@@ -603,9 +621,24 @@ Two variables here tune how long a one-shot query keeps stdin open for hooks
 and SDK MCP calls (see [Architecture → Stdin Lifecycle](./architecture.md#stdin-lifecycle-and-the-end-of-a-run)):
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` bounds the wait between turns (default
 `600000`, `0` for no limit), and `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` opts
-you in to the CLI's `session_state_changed` frames. Set
-`CLAUDE_AGENT_SDK_CLIENT_APP` (e.g. `"my-app/1.0.0"`) to identify your
-application in the User-Agent header.
+you in to the CLI's `session_state_changed` frames.
+
+### clientApp()
+
+Your app or library identifier, sent on requests to the API.
+
+```java
+.clientApp("my-app/1.0.0")
+```
+
+Sets `CLAUDE_AGENT_SDK_CLIENT_APP` for the CLI subprocess. It wins over a value
+for that variable in `env()` or the inherited environment. Pass `""` to send no
+identifier; `null` (the default) leaves the environment as it is. The value
+must be valid in an HTTP header: a character above U+00FF stops every request.
+
+Unlike the Python SDK, this SDK never derives a default identifier. Python
+derives one only for the CLI bundled in its wheel, and this SDK ships no
+bundled CLI.
 
 ### extraArgs()
 
@@ -686,6 +719,16 @@ HookMatcher.HookCallback beforeRead = (input, context) -> {
 A callback receives the typed `HookInput` and a `HookContext`, and returns a
 `CompletableFuture<HookOutput>`. See [Hooks](./feature-hooks.md) for the
 inputs, outputs and hook-specific outputs.
+
+A matcher can also set a timeout and an `onFailure` policy. With
+`HookOnFailure.BLOCK`, a callback that fails blocks the action instead of
+letting it run:
+
+```java
+new HookMatcher("Bash", List.of(guard), null, HookOnFailure.BLOCK)
+```
+
+See [Hooks → Failure policy](./feature-hooks.md#failure-policy-onfailure).
 
 **Available Events**:
 - `PRE_TOOL_USE` - Before tool execution
@@ -799,7 +842,9 @@ Control which settings files to load.
 ))
 ```
 
-**Empty list disables all sources.** Pass `List.of()` to send `--setting-sources=` (empty) to the CLI, which suppresses every filesystem settings source. When the option is **omitted entirely** (the default), no `--setting-sources` flag is added and the CLI applies its own defaults.
+**Empty list disables all sources.** Pass `List.of()` to send `--setting-sources=` (empty) to the CLI, which suppresses every filesystem settings source. When the option is **omitted entirely** (the default), no `--setting-sources` flag is added and the CLI applies its own defaults, which load every source.
+
+Use `List.of()` to isolate a session from filesystem settings, for example when `cwd` may be untrusted: project settings can run hooks. Include `SettingSource.PROJECT` to load `CLAUDE.md` files.
 
 ### skills() / skillsAll()
 

@@ -690,6 +690,10 @@ never appears in the tool's published schema.
 Disconnecting has the same effect: closing the client abandons the calls still
 in flight, so a shutdown is not held up by a tool nothing can interrupt.
 
+So does a `control_cancel_request` for the control request that carried the
+call: the context is cancelled, and no response is sent. See
+[Architecture → Cancelled Control Requests](./architecture.md#cancelled-control-requests).
+
 A handler failure is also logged locally at `WARNING` with its stack trace, so
 a crashing tool is debuggable without the model's transcript being the only
 record.

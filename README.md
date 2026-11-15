@@ -583,6 +583,17 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+By default a hook that fails (throws, or completes exceptionally) counts as no
+decision, so the command would run. For a guard that must not fail open, give
+the matcher the `HookOnFailure.BLOCK` policy:
+
+```java
+HookMatcher bashMatcher = new HookMatcher("Bash", List.of(checkBashCommand), null, HookOnFailure.BLOCK);
+```
+
+`connect()` then throws `CLIConnectionException` if the CLI is too old to honor
+the policy. See [Hooks → Failure policy](docs/feature-hooks.md#failure-policy-onfailure).
+
 ### Example: Logging All Tool Uses
 
 ```java
@@ -918,6 +929,12 @@ on the streamed message map yourself — only the `human` kind is honored from a
 SDK host. A kind newer than this SDK models leaves `kind()` null with the wire
 string still readable from `kindValue()`, and never counts as human.
 
+`origin()` says what started a turn, not whether it answers your prompt: a
+prompt sent while an injected turn runs can be answered inside that turn. To
+find the result for a prompt, send it with a fresh top-level `uuid` and look for
+that uuid in `result.userMessageUuid()` or `result.userMessageUuids()`. See
+[Message Types → Matching a result to your prompt](docs/feature-message-types.md#matching-a-result-to-your-prompt).
+
 ### Content Blocks
 
 ```java
@@ -1133,6 +1150,8 @@ See the `examples/` module for complete working examples:
 - `LargeAgentsExample.java` - Large agent definitions (260KB+) via initialize request
 - `SystemPromptExample.java` - Custom system prompt usage
 - `IncludePartialMessagesExample.java` - Streaming with partial message updates
+- `MessageOriginExample.java` - Message provenance, matching a result to its prompt by uuid, and conversation resets
+- `ParallelToolSessionReadsExample.java` - Reading back a turn with parallel tool calls, checked against the live CLI
 
 ### Running Examples
 

@@ -67,7 +67,9 @@ record AssistantMessage(
     @Nullable String messageId,                   // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,                  // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,                   // Session ID this message belongs to
-    @Nullable String uuid                         // Unique identifier in the session transcript
+    @Nullable String uuid,                        // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,             // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids       // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
@@ -81,6 +83,11 @@ Backwards-compatible constructors are also available for code that does not need
 new AssistantMessage(content, model, parentToolUseId, error)  // usage and all later fields default to null
 new AssistantMessage(content, model, parentToolUseId, error, usage)  // messageId and later fields default to null
 ```
+
+The 9-parameter constructor (without `userMessageUuid` and `userMessageUuids`)
+is kept too. Both are set only on the first top-level assistant message after
+the value is set or changes, which can be partway through a turn, and are null
+on all others. See [Matching a result to your prompt](#matching-a-result-to-your-prompt).
 
 ### AssistantMessageError
 
@@ -176,7 +183,9 @@ record ResultMessage(
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
     @Nullable String terminalReason,              // Why the query loop terminated
-    @Nullable MessageOrigin origin                // Origin of the triggering user message
+    @Nullable MessageOrigin origin,               // What started the turn
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message {
     String type();  // Returns "result"
 }
@@ -186,7 +195,14 @@ When a run ends in a terminal error result the CLI also exits non-zero, and the 
 
 **Parsing note on `errors`:** the CLI sends a list of strings here. A bare string is tolerated and kept as a single-element list, and any other shape is ignored rather than rejecting the whole result frame; the Python SDK performs no type check on this field at all, so a malformed value must not cost the caller the entire result.
 
-Backwards-compatible constructors are also available for code that does not need the newer fields. The original 11-parameter constructor (without `modelUsage`, `permissionDenials`, `deferredToolUse`, `errors`, `apiErrorStatus`, `uuid`, `terminalReason`, and `origin`) continues to work; 15-parameter (without `deferredToolUse`, `apiErrorStatus`, `terminalReason`, `origin`), 17-parameter (without `terminalReason`, `origin`) and 18-parameter (without `origin`) overloads are also available for callers written against the earlier shapes.
+Backwards-compatible constructors are also available for code that does not need the newer fields. The original 11-parameter constructor (without `modelUsage`, `permissionDenials`, `deferredToolUse`, `errors`, `apiErrorStatus`, `uuid`, `terminalReason`, `origin`, `userMessageUuid` and `userMessageUuids`) continues to work; 15-parameter (without `deferredToolUse`, `apiErrorStatus`, `terminalReason` and later), 17-parameter (without `terminalReason` and later), 18-parameter (without `origin` and later) and 19-parameter (without `userMessageUuid` and `userMessageUuids`) overloads are also available for callers written against the earlier shapes.
+
+### userMessageUuid and userMessageUuids
+
+- **`userMessageUuid`** is the `uuid` of the user message that started this turn (the last one, if several were merged to start it). On an injected turn it is the last user message taken in while the turn was running.
+- **`userMessageUuids`** lists the `uuid` of every user message the turn took in, in order: those that started it, then any sent while it was running. The CLI lists at most 64, so a uuid missing from a full list may still have been taken in. It can be empty on an interrupted turn, which stays distinct from `null`.
+
+Both cover only messages sent as maps with a top-level `uuid` string; prompts passed as a plain string have none. Use a new uuid for every message, as the CLI can skip one whose uuid it has already seen. Both are null when the turn took in no such message, and on older CLIs; `userMessageUuids` is also null on some error results and on CLIs that report only `userMessageUuid`. They are set on error results too, so check `isError` and `terminalReason` before treating your prompt as answered. Non-string entries in the list are dropped rather than failing the frame. See [Matching a result to your prompt](#matching-a-result-to-your-prompt).
 
 ### terminalReason
 
@@ -258,12 +274,18 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "stream_event"
     @Nullable String eventType(); // Returns event.get("type"), or null
 }
 ```
+
+The 4-parameter constructor is kept. `userMessageUuid` and `userMessageUuids`
+are set only on the first top-level non-ping event after the value is set or
+changes, and are null on all others.
 
 ## Content Blocks
 
@@ -491,7 +513,7 @@ record MessageOrigin(
 In streaming-input mode one connection interleaves the turns your application
 sends with turns the session injects on its own — background-task
 notifications, fired scheduled-task prompts, MCP channel messages, messages
-relayed from peer sessions. `origin` tells them apart:
+relayed from peer sessions. `origin` tells you what started a turn:
 
 ```java
 MessageOrigin origin = result.origin();
@@ -501,6 +523,29 @@ if (origin == null || origin.isHuman()) {
     // follow-up turn driven by a background task
 }
 ```
+
+It does not tell you whether a result covers *your* prompt: a prompt sent while
+an injected turn is running can be answered inside that turn, and the result
+then carries the injected turn's origin. To find the result for a prompt, match
+its uuid (next section).
+
+### Matching a result to your prompt
+
+Send each prompt as a message map with a fresh top-level `uuid` through
+`ClaudeSDKClient.query(Iterator)`, and look for that uuid on the results:
+
+```java
+List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+    // this turn took in the prompt sent with myUuid
+}
+```
+
+Read with `receiveMessages()`: `receiveResponse()` stops at the first result,
+which can be an injected turn's. Prompts sent as a plain string carry no uuid;
+for those, `origin` being null or `HUMAN` is only a best effort.
+`MessageOriginExample` sends a prompt this way and checks for its uuid on the
+result.
 
 A null `origin` means the CLI did not attribute the message. Prompts sent
 through `ClaudeSDK.query()` or `ClaudeSDKClient.query(String)` arrive that way

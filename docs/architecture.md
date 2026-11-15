@@ -521,6 +521,28 @@ This is not theoretical. A stale IDE-compiled class carrying an "unresolved
 compilation problem" `Error` made every SDK MCP control request hang silently
 until this catch was widened.
 
+### Cancelled Control Requests
+
+The CLI can abandon a control request it sent, for example when a turn is
+interrupted, by sending `control_cancel_request` with the same `request_id`.
+`QueryHandler` keeps each handler it submits in a map keyed by `request_id`;
+the handler removes its own entry when it finishes, so a cancel that arrives
+late, or names an unknown id, does nothing. On a cancel it:
+
+1. cancels the `CompletableFuture` the user callback returned (hook,
+   `canUseTool`, or the SDK MCP server's response), so code composed on it can
+   stop. For an SDK MCP tool call, `SdkMcpServer` reacts to that by cancelling
+   the call's `ToolCallContext`, as `notifications/cancelled` does;
+2. interrupts the handler thread, which also reaches a callback that blocks its
+   own thread; and
+3. writes no `control_response`: the CLI is no longer waiting for one.
+
+A request ends exactly one way, answered or cancelled, settled by one
+compare-and-set. A handler that loses the race drops its response, and a cancel
+that loses it does nothing, so a cancel never interrupts a response halfway
+through being written to stdin. This matches the Python SDK, which cancels the
+handler's task and skips the response.
+
 ### Stdin Lifecycle and the End of a Run
 
 > **`controlExecutor` must stay thread-per-task.** An SDK MCP tool call parks

@@ -285,7 +285,9 @@ The SDK includes 30+ runnable examples covering:
 - Basic queries and conversations
 - Custom MCP tools
 - Permission callbacks
-- Hook system, including hooks served in a background subagent's follow-up turn (`BackgroundAgentHooksExample`)
+- Hook system, including a guard that blocks when it fails (`Hooks`, `HookOnFailure.BLOCK`) and hooks served in a background subagent's follow-up turn (`BackgroundAgentHooksExample`)
+- Matching a result to the prompt that started it by uuid (`MessageOriginExample`)
+- Reading back a turn with parallel tool calls from disk and from a `SessionStore` (`ParallelToolSessionReadsExample`)
 - Streaming events
 - Error handling
 - System prompts, including `snapshot` (`SystemPromptExample`)

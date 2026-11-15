@@ -49,13 +49,15 @@ var options = ClaudeAgentOptions.builder()
 
 ```java
 record HookMatcher(
-    @Nullable String matcher,        // which tools/events to match; null matches all
-    List<HookCallback> hooks,        // callbacks to run
-    @Nullable Double timeoutSeconds  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable String matcher,         // which tools/events to match; null matches all
+    List<HookCallback> hooks,         // callbacks to run
+    @Nullable Double timeoutSeconds,  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable HookOnFailure onFailure // what a failing callback does; null = CONTINUE
 )
 
 new HookMatcher(List<HookCallback> hooks)                  // matcher = null
 new HookMatcher(String matcher, List<HookCallback> hooks)  // timeoutSeconds = null
+new HookMatcher(String matcher, List<HookCallback> hooks, Double timeoutSeconds)  // onFailure = null
 ```
 
 For tool events, `matcher` is a tool name (`"Bash"`), several names joined
@@ -81,6 +83,53 @@ record HookContext(
 
 The SDK waits for the returned future before answering the CLI. Return
 `CompletableFuture.completedFuture(...)` for synchronous work.
+
+A callback that throws, returns a future that completes exceptionally,
+completes with `null` or returns a `null` future is answered with an error. A
+callback with no opinion returns `HookOutput.empty()`, never `null`. Whether an
+error lets the action go ahead depends on the matcher's
+[failure policy](#failure-policy-onfailure).
+
+If the CLI abandons the hook call (it sends a `control_cancel_request`, for
+example when the turn is interrupted), the SDK cancels the future the callback
+returned, interrupts the thread waiting on it, and sends no answer. A callback
+that blocks its thread sees an `InterruptedException`; one that hands work to
+another thread can react to the cancelled future.
+
+### Failure policy (`onFailure`)
+
+`HookOnFailure` decides what a failing callback does to the action it was
+called for:
+
+| Value | A failing callback |
+|-------|--------------------|
+| `CONTINUE` (and `null`, the default) | counts as no decision: the action goes ahead as if the hook had not run |
+| `BLOCK` | blocks the action |
+
+A callback fails when it is answered with an error (see above) or returns a
+value the CLI rejects, such as a `permissionDecision` it does not recognize.
+Unrecognized keys are not a failure. Use `BLOCK` for a guard that must not fail
+open:
+
+```java
+HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), null, HookOnFailure.BLOCK);
+```
+
+`Stop` and `SubagentStop` ignore the option. A `PermissionRequest` block counts
+only if it lands before `canUseTool` answers.
+
+The policy is sent on the initialize request as `onFailure`. When any matcher
+uses `BLOCK`, `initialize()` (and so `connect()`) checks the CLI's reply, and
+closes the transport and throws `CLIConnectionException` when:
+
+- the reply does not report `hook_on_failure_supported`: the CLI is too old to
+  honor the policy, so the guard would fail open; or
+- the reply reports `hooks_applied: false`: an already-running session did not
+  register the hooks, so the guard would never run.
+
+`CONTINUE` needs no CLI support, since it is how an older CLI behaves anyway.
+`Hooks.java` uses `BLOCK` for its dangerous-command guard and shows how to
+handle the refusal.
 
 > **Dispatch order:** when multiple matchers are registered on the same event,
 > the CLI dispatches all matching hook callbacks **concurrently** (in parallel),

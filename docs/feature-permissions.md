@@ -43,6 +43,11 @@ combined with `permissionPromptToolName`:
 })
 ```
 
+If the CLI abandons the permission request before the callback answers (it
+sends a `control_cancel_request`, for example when the turn is interrupted),
+the SDK cancels the future the callback returned, interrupts the thread waiting
+on it, and sends no answer.
+
 > **`canUseTool` only fires for `"ask"` decisions.** This callback is the SDK replacement for the interactive permission prompt — it runs only when the CLI's permission rules evaluate to `"ask"`. It is **not** invoked for tool calls already permitted by `allowedTools`, `permissionMode` (e.g. `ACCEPT_EDITS`, `BYPASS_PERMISSIONS`), or `permissions.allow` rules in settings — those never reach a prompt. To observe or gate **every** tool call regardless of permission rules, register a `PreToolUse` hook via `hooks(...)` instead.
 
 ### Shadowing Warning

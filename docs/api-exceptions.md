@@ -42,6 +42,8 @@ public class CLIConnectionException extends ClaudeSDKException {
 - Process failed to start
 - Connection timeout
 - Network issues (remote transport)
+- `settings` that can't be loaded for merging with `sandbox` (`"Failed to load settings: ..."`): a missing or unreadable file, invalid JSON, or JSON that is not an object. See [settings()](./feature-configuration-options.md#settings)
+- A `HookOnFailure.BLOCK` matcher on a CLI that does not report `hook_on_failure_supported`, or that reports `hooks_applied: false`. See [Hooks → Failure policy](./feature-hooks.md#failure-policy-onfailure)
 
 ## CLINotFoundException
 
@@ -53,8 +55,13 @@ public class CLINotFoundException extends ClaudeSDKException {
 }
 ```
 
+Thrown when the transport is built, before anything is spawned, if no CLI is
+found. On Windows only a native `claude.exe` in an absolute `PATH` entry, or
+`~/.local/bin/claude.exe`, is found; npm's `claude.cmd` shim is found only with
+`allowUnsafeWindowsBatchCli(true)`, and the message says so.
+
 **Solution**:
-- Install Claude Code CLI
+- Install Claude Code CLI (on Windows, the native installer)
 - Specify custom path with `.cliPath()`
 
 ## ProcessException
