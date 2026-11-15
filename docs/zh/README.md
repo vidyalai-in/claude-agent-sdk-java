@@ -35,7 +35,7 @@ ClaudeAgentOptions.builder()
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.2.2</version>
+    <version>0.2.5</version>
 </dependency>
 ```
 
@@ -47,7 +47,7 @@ repositories {
 }
 
 dependencies {
-    implementation("in.vidyalai:claude-agent-sdk-java:0.2.2")
+    implementation("in.vidyalai:claude-agent-sdk-java:0.2.5")
 }
 ```
 
@@ -1205,7 +1205,7 @@ java -cp target/classes:target/dependency/* examples.QuickStart
 3. 按方式一或方式二运行示例。
 
 **注意：** 你也可以把 `examples/pom.xml` 中依赖的 `<version>` 设为某个已发布版本
-（例如 `0.2.2`），从而将 examples 模块固定到该版本。它会从 Maven Central 解析，因此无需
+（例如 `0.2.5`），从而将 examples 模块固定到该版本。它会从 Maven Central 解析，因此无需
 任何仓库或身份认证配置。
 
 ## 线程安全
