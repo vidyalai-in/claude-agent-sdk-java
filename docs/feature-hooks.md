@@ -96,6 +96,12 @@ returned, interrupts the thread waiting on it, and sends no answer. A callback
 that blocks its thread sees an `InterruptedException`; one that hands work to
 another thread can react to the cancelled future.
 
+> **Dispatch order:** when multiple matchers are registered on the same event,
+> the CLI dispatches all matching hook callbacks **concurrently** (in parallel),
+> not sequentially. Design each hook to be independent — do not rely on one
+> completing before another starts (e.g. don't chain rate-limiter hooks that
+> assume a gating order).
+
 ### Failure policy (`onFailure`)
 
 `HookOnFailure` decides what a failing callback does to the action it was
@@ -130,12 +136,6 @@ closes the transport and throws `CLIConnectionException` when:
 `CONTINUE` needs no CLI support, since it is how an older CLI behaves anyway.
 `Hooks.java` uses `BLOCK` for its dangerous-command guard and shows how to
 handle the refusal.
-
-> **Dispatch order:** when multiple matchers are registered on the same event,
-> the CLI dispatches all matching hook callbacks **concurrently** (in parallel),
-> not sequentially. Design each hook to be independent — do not rely on one
-> completing before another starts (e.g. don't chain rate-limiter hooks that
-> assume a gating order).
 
 ## Hook Inputs
 
