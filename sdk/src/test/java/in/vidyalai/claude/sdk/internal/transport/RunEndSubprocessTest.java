@@ -82,7 +82,7 @@ class RunEndSubprocessTest {
         };
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .cliPath(writeFakeCli("2.1.999"))
-                .hooks(Map.of(HookEvent.PRE_TOOL_USE, List.of(new HookMatcher(null, List.of(hook)))))
+                .hooks(Map.of(HookEvent.PRE_TOOL_USE, List.<HookMatcher>of(new HookMatcher(null, List.of(hook)))))
                 .env(env)
                 .build();
         List<Message> messages = streamed
@@ -184,8 +184,9 @@ class RunEndSubprocessTest {
         assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)).isGreaterThanOrEqualTo(300);
     }
 
-    // --- verbatimPrompts older-CLI warning, through the real version check ---
+    // --- version check, read from the CLI's init message ---------------------
 
+    /** Connects to the stand-in, reads its first message, and returns the warnings logged. */
     private List<String> warningsConnectingTo(String version, boolean verbatimPrompts) throws IOException {
         org.junit.jupiter.api.Assumptions.assumeTrue(
                 System.getenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK") == null,
@@ -215,19 +216,25 @@ class RunEndSubprocessTest {
                 .build());
         try {
             transport.connect();
+            Map<String, Object> first = transport.readMessages().next();
+            assertThat(first).containsEntry("subtype", "init");
         } finally {
             transport.close();
             logger.removeHandler(capture);
         }
+        return List.copyOf(warnings);
+    }
+
+    private static List<String> verbatim(List<String> warnings) {
         return warnings.stream().filter(w -> w.contains("verbatimPrompts")).toList();
     }
 
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     void warnsWhenCliPredatesClientComposed() throws Exception {
-        assertThat(warningsConnectingTo("2.1.247", true))
-                .singleElement()
-                .satisfies(w -> assertThat(w).contains("2.1.247").contains("2.1.248"));
+        List<String> warnings = verbatim(warningsConnectingTo("2.1.247", true));
+        assertThat(warnings).hasSize(1);
+        assertThat(warnings.get(0)).contains("2.1.247", "2.1.248");
     }
 
     @Test
@@ -240,5 +247,13 @@ class RunEndSubprocessTest {
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     void noWarningWhenOptionIsOff() throws Exception {
         assertThat(warningsConnectingTo("2.1.100", false)).isEmpty();
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    void cliTooOldToReportItsVersionIsLogged() throws Exception {
+        List<String> warnings = warningsConnectingTo("none", false);
+        assertThat(warnings).hasSize(1);
+        assertThat(warnings.get(0)).contains("too old to report its version", "2.0.0");
     }
 }

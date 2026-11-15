@@ -414,6 +414,7 @@ class AdditionalTypesTest {
         assertThat(sandbox.ignoreViolations().patterns()).containsExactly(Map.entry("*", List.of("/tmp")));
     }
 
+    @SuppressWarnings("null")
     @Test
     void testSandboxIgnoreViolationsIsCommandPatternMapOnTheWire() throws Exception {
         // ignoreViolations matches the CLI schema: command pattern -> substrings

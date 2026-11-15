@@ -1144,7 +1144,7 @@ class SubprocessCLITransportTest {
         transport.close();
     }
 
-    @SuppressWarnings({ "removal", "null" })
+    @SuppressWarnings("removal")
     @Test
     void testSandboxIgnoreViolationsLegacyConstructorAppliesToAllCommands() {
         // The pre-0.2.4 file/network shape now lands under "*" instead of

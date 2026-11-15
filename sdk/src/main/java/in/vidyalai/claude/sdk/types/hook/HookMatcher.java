@@ -29,11 +29,39 @@ import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
  * @param hooks          list of hook callback functions
  * @param timeoutSeconds timeout in seconds for all hooks in this matcher
  *                       (default: 60)
+ * @param onFailure      what happens when a callback in this matcher fails.
+ *                       With {@link HookOnFailure#BLOCK}, a callback whose
+ *                       future completes exceptionally, completes with
+ *                       {@code null}, or returns a value the CLI rejects
+ *                       blocks the action, so a callback with no opinion must
+ *                       return an empty {@code HookOutput}. Unrecognized keys
+ *                       are not a failure. Stop and SubagentStop ignore this
+ *                       option (so do the CLI's TaskCompleted and TeammateIdle
+ *                       events, which {@link HookEvent} does not model). A
+ *                       PermissionRequest block counts only if it lands before
+ *                       {@code canUseTool} answers. Null or
+ *                       {@link HookOnFailure#CONTINUE} counts a failure as no
+ *                       decision. With {@code BLOCK}, connecting to a CLI too
+ *                       old to honor it raises
+ *                       {@link in.vidyalai.claude.sdk.exceptions.CLIConnectionException}.
  */
 public record HookMatcher(
         @Nullable String matcher,
         List<HookCallback> hooks,
-        @Nullable Double timeoutSeconds) {
+        @Nullable Double timeoutSeconds,
+        @Nullable HookOnFailure onFailure) {
+
+    /**
+     * Creates a hook matcher without an {@code onFailure} policy.
+     *
+     * @param matcher        the pattern to match, or null for all
+     * @param hooks          the hook callbacks
+     * @param timeoutSeconds timeout in seconds for all hooks in this matcher,
+     *                       or null for the CLI default
+     */
+    public HookMatcher(@Nullable String matcher, List<HookCallback> hooks, @Nullable Double timeoutSeconds) {
+        this(matcher, hooks, timeoutSeconds, null);
+    }
 
     /**
      * Creates a hook matcher with just a list of hooks.
@@ -41,7 +69,7 @@ public record HookMatcher(
      * @param hooks the hook callbacks
      */
     public HookMatcher(List<HookCallback> hooks) {
-        this(null, hooks, null);
+        this(null, hooks, null, null);
     }
 
     /**
@@ -51,7 +79,7 @@ public record HookMatcher(
      * @param hooks   the hook callbacks
      */
     public HookMatcher(String matcher, List<HookCallback> hooks) {
-        this(matcher, hooks, null);
+        this(matcher, hooks, null, null);
     }
 
     /**

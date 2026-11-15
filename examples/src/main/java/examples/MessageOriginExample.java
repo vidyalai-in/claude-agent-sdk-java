@@ -3,6 +3,7 @@ package examples;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDK;
@@ -22,16 +23,20 @@ import in.vidyalai.claude.sdk.types.message.ResultMessage;
  * notifications, fired scheduled-task prompts, MCP channel messages, messages
  * relayed from peer sessions. {@link MessageOrigin} — exposed as
  * {@code origin()} on {@link in.vidyalai.claude.sdk.types.message.UserMessage}
- * and {@link ResultMessage} — tells them apart, so you can decide whether a
- * result answers <i>your</i> prompt:
+ * and {@link ResultMessage} — tells you what <i>started</i> a turn.
+ * </p>
+ *
+ * <p>
+ * It does not tell you whether a result covers <i>your</i> prompt: a prompt
+ * sent while an injected turn is running can be answered inside that turn, and
+ * the result then carries the injected turn's origin. To match a result to a
+ * prompt, send the prompt with a {@code uuid} and look for it on the result:
  * </p>
  *
  * <pre>{@code
- * MessageOrigin origin = result.origin();
- * if (origin == null || origin.isHuman()) {
- *     // a turn this application submitted
- * } else if (origin.kind() == MessageOriginKind.TASK_NOTIFICATION) {
- *     // follow-up turn driven by a background task
+ * List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+ * if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+ *     // this turn took in the prompt sent with myUuid
  * }
  * }</pre>
  *
@@ -39,12 +44,15 @@ import in.vidyalai.claude.sdk.types.message.ResultMessage;
  * This example streams three turns through one connection:
  * </p>
  * <ol>
- * <li>a user message stamped {@code "origin": {"kind": "human"}} — the CLI
- * echoes that attribution back on the turn's result (requires Claude Code
- * &gt;= 2.1.210; only the {@code human} kind is honored from an SDK host);</li>
- * <li>an unstamped user message — its result carries a null {@code origin()},
- * because the CLI did not attribute the turn. This is what prompts sent through
- * {@code query()} and {@code sendMessage()} look like;</li>
+ * <li>a user message stamped {@code "origin": {"kind": "human"}} and a fresh
+ * {@code uuid} — the CLI echoes both back on the turn's result, the uuid as
+ * {@link ResultMessage#userMessageUuid()} and in
+ * {@link ResultMessage#userMessageUuids()} (requires Claude Code &gt;= 2.1.210
+ * for the origin; only the {@code human} kind is honored from an SDK host);</li>
+ * <li>an unstamped user message — its result carries a null {@code origin()}
+ * and no user-message uuid, because the CLI did not attribute the turn. This is
+ * what prompts sent through {@code query()} and {@code sendMessage()} look
+ * like;</li>
  * <li>{@code /clear}, which discards the transcript mid-session and makes the
  * CLI emit a {@link ConversationResetMessage}. A reset zeroes the running
  * totals reported on subsequent results, so snapshot them when it arrives —
@@ -68,14 +76,17 @@ public class MessageOriginExample {
         try (ClaudeSDKClient client = ClaudeSDK.createClient(options)) {
             client.connect();
 
-            // 1. A prompt this application explicitly attributes to a human.
+            // 1. A prompt this application explicitly attributes to a human,
+            //    sent with a uuid so its result can be found. Use a new uuid for
+            //    every message: the CLI can skip one whose uuid it has seen.
+            String promptUuid = UUID.randomUUID().toString();
             client.query(List.of(
-                    userMessage("Reply with exactly: one", Map.of("kind", "human"))).iterator());
+                    userMessage("Reply with exactly: one", Map.of("kind", "human"), promptUuid)).iterator());
             ResultMessage stamped = drain(client, "stamped prompt");
 
             // 2. The same thing unstamped — the CLI does not attribute it.
             client.query(List.of(
-                    userMessage("Reply with exactly: two", null)).iterator());
+                    userMessage("Reply with exactly: two", null, null)).iterator());
             ResultMessage unstamped = drain(client, "unstamped prompt");
 
             // 3. /clear discards the transcript without ending the connection.
@@ -86,6 +97,10 @@ public class MessageOriginExample {
             if ((stamped != null) && (unstamped != null)) {
                 System.out.printf("stamped result origin:   %s%n", format(stamped.origin()));
                 System.out.printf("unstamped result origin: %s%n", format(unstamped.origin()));
+                System.out.printf("stamped result answers our prompt uuid: %s  (uuids=%s)%n",
+                        answers(stamped, promptUuid), stamped.userMessageUuids());
+                System.out.printf("unstamped result user message uuid:     %s%n",
+                        unstamped.userMessageUuid());
             }
             if ((stamped != null) && (afterClear != null)) {
                 System.out.printf("session before /clear: %s%n", stamped.sessionId());
@@ -120,6 +135,16 @@ public class MessageOriginExample {
         return result;
     }
 
+    /**
+     * Whether a result took in the prompt sent with {@code uuid}. Check
+     * {@code isError()} and {@code terminalReason()} too before treating the
+     * prompt as answered: error results carry the uuid as well.
+     */
+    private static boolean answers(ResultMessage result, String uuid) {
+        List<String> uuids = result.userMessageUuids();
+        return uuid.equals(result.userMessageUuid()) || ((uuids != null) && uuids.contains(uuid));
+    }
+
     /** Renders an origin the way a consumer would branch on it. */
     private static String format(MessageOrigin origin) {
         if (origin == null) {
@@ -138,10 +163,12 @@ public class MessageOriginExample {
     }
 
     /**
-     * A streaming-input user message. {@code origin} is stamped only when
-     * supplied; the CLI honors just the {@code human} kind from an SDK host.
+     * A streaming-input user message. {@code origin} and {@code uuid} are
+     * stamped only when supplied; the CLI honors just the {@code human} origin
+     * kind from an SDK host, and echoes a top-level {@code uuid} back on the
+     * turn's messages as {@code userMessageUuid}.
      */
-    private static Map<String, Object> userMessage(String text, Map<String, Object> origin) {
+    private static Map<String, Object> userMessage(String text, Map<String, Object> origin, String uuid) {
         Map<String, Object> message = new HashMap<>();
         message.put("type", "user");
         message.put("message", Map.of("role", "user", "content", text));
@@ -149,6 +176,9 @@ public class MessageOriginExample {
         message.put("session_id", "default");
         if (origin != null) {
             message.put("origin", origin);
+        }
+        if (uuid != null) {
+            message.put("uuid", uuid);
         }
         return message;
     }

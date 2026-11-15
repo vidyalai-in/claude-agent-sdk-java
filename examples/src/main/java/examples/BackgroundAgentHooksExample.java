@@ -83,7 +83,7 @@ public class BackgroundAgentHooksExample {
                 .tools(List.of("Agent", "Write"))
                 .agents(Map.of("worker", worker))
                 .hooks(Map.of(HookEvent.PRE_TOOL_USE,
-                        List.of(new HookMatcher("Write", List.of(allowAndRecord)))))
+                        List.<HookMatcher>of(new HookMatcher("Write", List.of(allowAndRecord)))))
                 .build();
 
         String prompt = "Step 1: call the Agent tool once with subagent_type `worker`, "

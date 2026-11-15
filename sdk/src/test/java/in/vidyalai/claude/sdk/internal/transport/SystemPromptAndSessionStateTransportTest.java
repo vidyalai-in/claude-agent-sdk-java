@@ -84,6 +84,7 @@ class SystemPromptAndSessionStateTransportTest {
 
     private static final ClaudeAgentOptions VERBATIM = ClaudeAgentOptions.builder().verbatimPrompts(true).build();
 
+    @SuppressWarnings("null")
     @ParameterizedTest
     @ValueSource(strings = { "2.1.247", "2.0.0" })
     void warnsWhenCliPredatesClientComposed(String version) {

@@ -7,10 +7,12 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -26,11 +28,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
@@ -185,6 +189,19 @@ public class SubprocessCLITransport implements Transport {
      * messages, which {@link ClaudeAgentOptions#verbatimPrompts()} relies on.
      */
     static final String VERBATIM_PROMPTS_MINIMUM_CLAUDE_CODE_VERSION = "2.1.248";
+
+    /** The app label a developer sets, via {@link ClaudeAgentOptions#clientApp()} or the environment. */
+    static final String EXPLICIT_CLIENT_APP_ENV = "CLAUDE_AGENT_SDK_CLIENT_APP";
+
+    /**
+     * The app label the Python SDK derives and passes apart from
+     * {@link #EXPLICIT_CLIENT_APP_ENV}. This SDK never sets it, and drops an
+     * inherited one.
+     */
+    static final String DERIVED_CLIENT_APP_ENV = "CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP";
+
+    /** A dotted version prefix, as the CLI reports it in {@code claude_code_version}. */
+    private static final Pattern CLI_VERSION = Pattern.compile("(\\d{1,9})\\.(\\d{1,9})\\.(\\d{1,9})");
     /**
      * Asks the CLI for {@code session_state_changed} frames marked
      * {@code sdk_host_only}, which QueryHandler reads to tell when the run is
@@ -253,6 +270,10 @@ public class SubprocessCLITransport implements Transport {
     private final AtomicBoolean iteratorCreated = new AtomicBoolean(false);
     private final AtomicBoolean ready = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
+    // Set once the version in the first init message has been checked; starts
+    // set when CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK disables the check.
+    private final AtomicBoolean versionChecked = new AtomicBoolean(
+            System.getenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK") != null);
 
     // Executor services for background tasks with named virtual threads
     private final ExecutorService stderrExecutor;
@@ -277,7 +298,8 @@ public class SubprocessCLITransport implements Transport {
     public SubprocessCLITransport(ClaudeAgentOptions options) {
         this.options = options;
         Path path = options.cliPath();
-        this.cliPath = ((path != null) ? path.toString() : findCli());
+        this.cliPath = ((path != null) ? path.toString()
+                : findCli(System.getenv("PATH"), options.allowUnsafeWindowsBatchCli()));
         this.cwd = options.cwd();
         Integer buffSize = options.maxBufferSize();
         this.maxBufferSize = ((buffSize != null) ? buffSize : DEFAULT_MAX_BUFFER_SIZE);
@@ -292,10 +314,6 @@ public class SubprocessCLITransport implements Transport {
         this.messageReaderExecutor = Threads.newSingleThreadExecutor("SPCTransport-MsgReader-");
     }
 
-    private String findCli() {
-        return findCli(System.getenv("PATH"));
-    }
-
     /**
      * Resolves the CLI path against the supplied {@code PATH} value.
      *
@@ -304,36 +322,53 @@ public class SubprocessCLITransport implements Transport {
      * discovery order can be tested; the production caller passes
      * {@code System.getenv("PATH")}.
      *
-     * @param pathEnv the {@code PATH} environment value, or null
+     * <p>
+     * On Windows only a native {@code claude.exe} is found, unless the caller
+     * opted in with
+     * {@link ClaudeAgentOptions.Builder#allowUnsafeWindowsBatchCli(boolean)}:
+     * then, with no {@code claude.exe} anywhere, npm's {@code claude.cmd} (or a
+     * {@code claude.bat}) shim is returned as a last resort. The Python SDK has
+     * no such opt-in and never finds a shim; this keeps auto-discovery working
+     * for Java callers who accepted that risk. The shim is looked up in
+     * absolute {@code PATH} entries only, like {@code claude.exe}.
+     *
+     * @param pathEnv          the {@code PATH} environment value, or null
+     * @param allowBatchShim   whether a Windows batch shim may be returned
      * @return the resolved CLI path
      * @throws CLINotFoundException if no CLI could be located
      */
-    static String findCli(@Nullable String pathEnv) {
+    static String findCli(@Nullable String pathEnv, boolean allowBatchShim) {
         boolean windows = isWindows();
 
-        // Check PATH
-        String pathCli = findInPath(CLAUDE_CLI_NAME, pathEnv);
-        if (pathCli != null && (!windows || isWindowsNativeExe(pathCli))) {
-            return pathCli;
+        List<Path> locations;
+        if (windows) {
+            // Only a native claude.exe: CreateProcess can't run an extensionless
+            // wrapper script, and connect() refuses npm's claude.cmd shim. And
+            // only in absolute PATH entries: a relative entry ("", ".", "tools")
+            // names a directory under the working directory, which another
+            // local user may control — a binary-planting probe.
+            String exe = findInAbsoluteWindowsPath(CLAUDE_CLI_NAME + ".exe", pathEnv);
+            if (exe != null) {
+                return exe;
+            }
+            // The POSIX-shaped locations are deliberately not probed: a
+            // rooted-but-driveless "/usr/local/bin/claude" resolves against
+            // the current drive, and an extensionless match is not runnable.
+            locations = List.of(Path.of(System.getProperty("user.home"), ".local", "bin",
+                    CLAUDE_CLI_NAME + ".exe"));
+        } else {
+            String pathCli = findInPath(CLAUDE_CLI_NAME, pathEnv);
+            if (pathCli != null) {
+                return pathCli;
+            }
+            locations = List.of(
+                    Path.of(System.getProperty("user.home"), ".npm-global", "bin", CLAUDE_CLI_NAME),
+                    Path.of("/usr/local/bin/" + CLAUDE_CLI_NAME),
+                    Path.of(System.getProperty("user.home"), ".local", "bin", CLAUDE_CLI_NAME),
+                    Path.of(System.getProperty("user.home"), "node_modules", ".bin", CLAUDE_CLI_NAME),
+                    Path.of(System.getProperty("user.home"), ".yarn", "bin", CLAUDE_CLI_NAME),
+                    Path.of(System.getProperty("user.home"), ".claude", "local", CLAUDE_CLI_NAME));
         }
-
-        // Check common locations. On Windows only the native installer's
-        // claude.exe is probed: an extensionless match (a WSL / git-bash script
-        // artifact under ~/.local/bin) would preempt the explanatory
-        // batch-script refusal with an opaque spawn failure, and a
-        // rooted-but-driveless "/usr/local/bin/claude" resolves against the
-        // current drive (C: followed by that same path), a location another
-        // local user can create — a binary-planting probe.
-        List<Path> locations = windows
-                ? List.of(Path.of(System.getProperty("user.home"), ".local", "bin",
-                        CLAUDE_CLI_NAME + ".exe"))
-                : List.of(
-                        Path.of(System.getProperty("user.home"), ".npm-global", "bin", CLAUDE_CLI_NAME),
-                        Path.of("/usr/local/bin/" + CLAUDE_CLI_NAME),
-                        Path.of(System.getProperty("user.home"), ".local", "bin", CLAUDE_CLI_NAME),
-                        Path.of(System.getProperty("user.home"), "node_modules", ".bin", CLAUDE_CLI_NAME),
-                        Path.of(System.getProperty("user.home"), ".yarn", "bin", CLAUDE_CLI_NAME),
-                        Path.of(System.getProperty("user.home"), ".claude", "local", CLAUDE_CLI_NAME));
 
         for (Path path : locations) {
             if (Files.exists(path) && Files.isRegularFile(path)) {
@@ -341,33 +376,22 @@ public class SubprocessCLITransport implements Transport {
             }
         }
 
-        if (windows) {
-            // No native executable was discoverable anywhere. Prefer the npm
-            // batch shim over an extensionless wrapper script: connect() turns
-            // the shim into the explanatory batch-script refusal, whereas the
-            // wrapper only reaches an opaque "not a valid Win32 application"
-            // spawn failure. Windows itself resolves .CMD/.BAT ahead of an
-            // extensionless name via PATHEXT, so this also matches what the
-            // shell would have run.
-            String shim = findInPath(CLAUDE_CLI_NAME + ".cmd", pathEnv);
-            if (shim == null) {
-                shim = findInPath(CLAUDE_CLI_NAME + ".bat", pathEnv);
+        if (windows && allowBatchShim) {
+            // Opted in to running a batch CLI: with no native executable
+            // anywhere, fall back to npm's shim. connect() still enforces the
+            // opt-in's conditions (enforceWindowsBatchCliPolicy).
+            for (String shimName : List.of(CLAUDE_CLI_NAME + ".cmd", CLAUDE_CLI_NAME + ".bat")) {
+                String shim = findInAbsoluteWindowsPath(shimName, pathEnv);
+                if (shim != null) {
+                    return shim;
+                }
             }
-            if (shim != null) {
-                return shim;
-            }
-        }
-
-        if (pathCli != null) {
-            // A non-native PATH hit (an extensionless git-bash / WSL wrapper).
-            // Returned so connect() surfaces the spawn error for it rather than
-            // a bare not-found error that hides what is actually installed.
-            return pathCli;
         }
 
         if (windows) {
             // npm's Windows install is a claude.cmd shim, which connect()
-            // refuses (rejectWindowsBatchCli), so do not recommend it.
+            // refuses (rejectWindowsBatchCli) without the opt-in, so do not
+            // recommend it.
             throw new CLINotFoundException("""
                     Claude Code not found. Install the native claude.exe with (PowerShell):
                       irm https://claude.ai/install.ps1 | iex
@@ -385,41 +409,58 @@ public class SubprocessCLITransport implements Transport {
                 """);
     }
 
+    /**
+     * The first {@code fileName} in an absolute {@code PATH} entry, for
+     * Windows discovery.
+     *
+     * <p>
+     * Relative entries are skipped because they resolve against the working
+     * directory. Only the exact name is probed (no {@code PATHEXT}
+     * resolution), so npm's {@code claude.cmd} shim and an extensionless
+     * git-bash / WSL wrapper never shadow a native executable in a later
+     * directory.
+     */
+    @Nullable
+    private static String findInAbsoluteWindowsPath(String fileName, @Nullable String pathEnv) {
+        if (pathEnv == null) {
+            return null;
+        }
+        for (String entry : pathEnv.split(";")) {
+            if (entry.isEmpty()) {
+                continue;
+            }
+            Path dir;
+            try {
+                dir = Path.of(entry);
+            } catch (InvalidPathException e) {
+                continue;
+            }
+            if (!dir.isAbsolute()) {
+                continue;
+            }
+            Path candidate = dir.resolve(fileName);
+            if (Files.isRegularFile(candidate)) {
+                return candidate.toString();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Finds {@code executable} in a POSIX {@code PATH} value, the way a shell
+     * would: the first directory holding a regular, executable file of that
+     * name wins.
+     */
     @Nullable
     static String findInPath(String executable, @Nullable String pathEnv) {
         if (pathEnv == null) {
             return null;
         }
-
-        boolean windows = isWindows();
-        String pathSeparator = windows ? ";" : ":";
-        String[] dirs = pathEnv.split(pathSeparator);
-
-        // Only an extensionless name gets the .exe treatment; an explicit
-        // "claude.cmd" probe must not go looking for "claude.cmd.exe".
-        boolean tryExeSuffix = windows && executable.indexOf('.') < 0;
-
-        // On Windows, sweep the whole PATH for the native executable before
-        // considering any extensionless entry. PATH is walked directory-major,
-        // so a git-bash / WSL wrapper script named "claude" in an early
-        // directory would otherwise shadow a real claude.exe installed in a
-        // later one — and the wrapper is not something the OS can run directly.
-        if (tryExeSuffix) {
-            String exe = firstExecutableIn(dirs, executable + ".exe");
-            if (exe != null) {
-                return exe;
-            }
-        }
-        return firstExecutableIn(dirs, executable);
-    }
-
-    @Nullable
-    private static String firstExecutableIn(String[] dirs, String fileName) {
-        for (String dir : dirs) {
+        for (String dir : pathEnv.split(":")) {
             if (dir.isEmpty()) {
                 continue;
             }
-            Path path = Path.of(dir, fileName);
+            Path path = Path.of(dir, executable);
             if (Files.exists(path) && Files.isRegularFile(path) && Files.isExecutable(path)) {
                 return path.toString();
             }
@@ -436,22 +477,6 @@ public class SubprocessCLITransport implements Transport {
      */
     static boolean isWindows() {
         return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
-    }
-
-    /**
-     * Whether {@code cliPath}'s final component names an image the OS runs
-     * directly ({@code .exe} / {@code .com}).
-     *
-     * <p>
-     * Used only to decide which discovery result to prefer. It is not a
-     * security gate: every returned path still passes
-     * {@link #rejectWindowsBatchCli} before anything is spawned.
-     */
-    static boolean isWindowsNativeExe(String cliPath) {
-        String name = cliPath.replace('\\', '/');
-        name = name.substring(name.lastIndexOf('/') + 1);
-        name = stripTrailingDotsAndSpaces(name).toLowerCase(Locale.ROOT);
-        return name.endsWith(".exe") || name.endsWith(".com");
     }
 
     /**
@@ -529,8 +554,11 @@ public class SubprocessCLITransport implements Transport {
      * (CVE-2024-27980, "BatBadBut").
      *
      * <p>
-     * In practice this refuses npm's {@code claude.cmd} shim. The alternatives
-     * in the error message avoid cmd.exe entirely.
+     * Without the {@code allowUnsafeWindowsBatchCli} opt-in, {@link #findCli}
+     * never returns one on Windows, so this applies to an explicit
+     * {@link ClaudeAgentOptions#cliPath()}, such as npm's {@code claude.cmd}
+     * shim. The alternatives in the error message avoid
+     * cmd.exe entirely.
      *
      * <p>
      * A caller who cannot migrate off the shim can opt in with
@@ -716,72 +744,75 @@ public class SubprocessCLITransport implements Transport {
     }
 
     /**
-     * Build settings value, merging sandbox settings if provided.
-     * 
-     * Returns the settings value as either:
-     * - A JSON string (if sandbox is provided or settings is JSON)
-     * - A file path (if only settings path is provided without sandbox)
-     * - Null if neither settings nor sandbox is provided or in case of exception
+     * Builds the {@code --settings} value, merging sandbox settings in if
+     * provided.
+     *
+     * <p>
+     * Without a sandbox the settings value passes through as-is. With one, the
+     * settings are parsed (inline JSON) or read (a path, relative to
+     * {@code cwd} as the CLI reads it, with or without a BOM) and merged with
+     * the sandbox into one JSON object. Settings that can't be loaded throw:
+     * launching without them would drop the caller's permission rules and
+     * hooks.
+     *
+     * @throws CLIConnectionException if the settings cannot be loaded
      */
-    @SuppressWarnings("null")
     @Nullable
     private String buildSettingsValue() {
-        boolean hasSettings = (options.settings() != null);
-        boolean hasSandbox = (options.sandbox() != null);
-
-        if (!(hasSettings || hasSandbox)) {
-            return null;
+        String settings = options.settings();
+        if (options.sandbox() == null) {
+            return settings;
         }
 
-        // If only settings path and no sandbox, pass through as-is
-        if (hasSettings && (!hasSandbox)) {
-            return options.settings();
-        }
-
-        // If we have sandbox settings, merge into JSON
-        Map<String, Object> settingsObj = new HashMap<>();
-
-        if (hasSettings) {
-            String settingsStr = options.settings().trim();
-            if (settingsStr.startsWith("{") && settingsStr.endsWith("}")) {
-                try {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> parsed = MAPPER.readValue(settingsStr, Map.class);
-                    settingsObj.putAll(parsed);
-                } catch (JsonProcessingException e) {
-                    // If parsing fails, try as file path
-                    settingsObj = readSettingsFile(settingsStr);
-                }
-            } else {
-                settingsObj = readSettingsFile(settingsStr);
+        Map<String, Object> settingsObj = new LinkedHashMap<>();
+        if (settings != null) {
+            String json = settings.trim();
+            if (!(json.startsWith("{") && json.endsWith("}"))) {
+                json = readSettingsFile(json);
+            }
+            Object parsed;
+            try {
+                // Trailing content after the object fails, as Python's
+                // json.loads does, rather than being silently dropped.
+                parsed = MAPPER.readerFor(Object.class)
+                        .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                        .readValue(json);
+            } catch (JsonProcessingException e) {
+                // Not e.getMessage() and no cause: Jackson quotes the offending
+                // source, and inline settings can hold secrets.
+                throw new CLIConnectionException("Failed to load settings: not valid JSON"
+                        + ((e.getLocation() != null)
+                                ? (" (line " + e.getLocation().getLineNr()
+                                        + ", column " + e.getLocation().getColumnNr() + ")")
+                                : ""));
+            }
+            if (!(parsed instanceof Map<?, ?> map)) {
+                throw new CLIConnectionException("Failed to load settings: expected a JSON object, got "
+                        + ((parsed == null) ? "null" : parsed.getClass().getSimpleName()));
+            }
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                settingsObj.put(String.valueOf(entry.getKey()), entry.getValue());
             }
         }
-
-        if (hasSandbox) {
-            settingsObj.put("sandbox", options.sandbox());
-        }
+        settingsObj.put("sandbox", options.sandbox());
 
         try {
             return MAPPER.writeValueAsString(settingsObj);
         } catch (JsonProcessingException e) {
-            logger.warning("Failed to serialize settings: " + e.getMessage());
-            return null;
+            throw new CLIConnectionException("Failed to serialize settings: " + e.getOriginalMessage());
         }
     }
 
-    private Map<String, Object> readSettingsFile(String path) {
+    /** Reads a settings file as the CLI does: relative to its cwd, BOM stripped. */
+    private String readSettingsFile(String settingsPath) {
         try {
-            Path settingsPath = Path.of(path);
-            if (Files.exists(settingsPath)) {
-                String content = Files.readString(settingsPath);
-                @SuppressWarnings({ "unchecked", "null" })
-                Map<String, Object> parsed = MAPPER.readValue(content, Map.class);
-                return parsed;
-            }
-        } catch (Exception e) {
-            logger.warning("Settings file not found or invalid: " + path);
+            Path path = (cwd != null) ? cwd.resolve(settingsPath) : Path.of(settingsPath);
+            String content = Files.readString(path, StandardCharsets.UTF_8);
+            return (content.startsWith("\uFEFF") ? content.substring(1) : content);
+        } catch (IOException | InvalidPathException e) {
+            throw new CLIConnectionException("Failed to load settings: cannot read " + settingsPath
+                    + " (" + e.getClass().getSimpleName() + ")", e);
         }
-        return new HashMap<>();
     }
 
     record McpConfigPayload(Map<String, McpServerConfig> mcpServers) {
@@ -806,6 +837,16 @@ public class SubprocessCLITransport implements Transport {
         env.put("CLAUDE_CODE_ENTRYPOINT", "sdk-java");
         env.putAll(options.env());
         env.put("CLAUDE_AGENT_SDK_VERSION", SdkVersion.VERSION);
+
+        // A derived label from an outer SDK session names that session's app,
+        // so it is never passed on. This SDK derives none of its own (see
+        // ClaudeAgentOptions.Builder#clientApp). An explicit clientApp wins over
+        // options.env and the inherited value; set counts even when empty,
+        // which is how a developer opts out.
+        env.remove(DERIVED_CLIENT_APP_ENV);
+        if (options.clientApp() != null) {
+            env.put(EXPLICIT_CLIENT_APP_ENV, options.clientApp());
+        }
 
         // QueryHandler waits for the CLI's session_state_changed "idle" before
         // closing stdin on a run that serves control requests. Ask for the
@@ -1416,24 +1457,17 @@ public class SubprocessCLITransport implements Transport {
             return;
         }
 
-        // Validate the resolved CLI before anything is spawned with it. This
-        // guards the version probe below as well as the main spawn, and covers
-        // every route to the executable path: PATH discovery, an explicit
+        // Validate the resolved CLI before spawning it. This covers every route
+        // to the executable path: PATH discovery, an explicit
         // ClaudeAgentOptions.cliPath, and the bundled-location fallbacks.
         // Refuses a Windows batch script unless the caller opted in, in which
-        // case it enforces the conditions that opt-in carries.
+        // case it enforces the conditions that opt-in carries. Nothing else
+        // runs the CLI: its version is read from its first init message.
         enforceWindowsBatchCliPolicy(cliPath);
-
-        // Check version (unless skipped)
-        if (System.getenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK") == null) {
-            checkClaudeVersion();
-        }
 
         List<String> cmd = buildCommand();
         // Second half of the batch-CLI opt-in: no argument may carry a cmd.exe
-        // metacharacter. Deferred to here because it needs the built argv; the
-        // version probe above spawns only a fixed "--version", so nothing
-        // caller-supplied reaches cmd.exe ahead of this check.
+        // metacharacter. Deferred to here because it needs the built argv.
         rejectCmdMetacharactersInArgv(cliPath, cmd);
         logger.fine("Launching Claude Code with: %s".formatted(String.join(" ", cmd)));
         try {
@@ -1515,65 +1549,87 @@ public class SubprocessCLITransport implements Transport {
     /**
      * The warning for {@link ClaudeAgentOptions#verbatimPrompts()} on a CLI too
      * old to honor {@code client_composed}, or {@code null} when none applies.
+     * A CLI that reports no version counts as too old.
      *
      * <p>
      * Package-private for testing.
+     *
+     * @param version the dotted version the CLI reported, or null if none
      */
     @Nullable
-    static String verbatimPromptsWarning(ClaudeAgentOptions options, String version, String cliPath) {
-        if (!options.verbatimPrompts() || version.isEmpty()
-                || compareVersions(version, VERBATIM_PROMPTS_MINIMUM_CLAUDE_CODE_VERSION) >= 0) {
+    static String verbatimPromptsWarning(ClaudeAgentOptions options, @Nullable String version, String cliPath) {
+        if (!options.verbatimPrompts()
+                || ((version != null)
+                        && (compareVersions(version, VERBATIM_PROMPTS_MINIMUM_CLAUDE_CODE_VERSION) >= 0))) {
             return null;
         }
         return String.format(
                 "verbatimPrompts is enabled, but Claude Code version %s at %s ignores it: prompts will "
                         + "still have @path mentions expanded and slash commands dispatched. "
                         + "Claude Code %s or later is required.",
-                version, cliPath, VERBATIM_PROMPTS_MINIMUM_CLAUDE_CODE_VERSION);
+                ((version != null) ? version : "unknown"), cliPath, VERBATIM_PROMPTS_MINIMUM_CLAUDE_CODE_VERSION);
     }
 
-    private void checkClaudeVersion() {
-        Process versionProcess = null;
-        try {
-            versionProcess = new ProcessBuilder(cliPath, "-v")
-                    .redirectErrorStream(true)
-                    .start();
+    /**
+     * The warning for a CLI whose init message reports no version, or
+     * {@code null} when it reports one. Versions below the minimum, and the
+     * first 2.0 releases, don't send {@code claude_code_version}.
+     *
+     * <p>
+     * Package-private for testing.
+     */
+    @Nullable
+    static String unsupportedVersionWarning(@Nullable String version, String cliPath) {
+        if (version != null) {
+            return null;
+        }
+        return String.format(
+                "Claude Code at %s is too old to report its version, and may be unsupported in the "
+                        + "Agent SDK. Minimum required version is %s. Some features may not work correctly.",
+                cliPath, MINIMUM_CLAUDE_CODE_VERSION);
+    }
 
-            boolean completed = versionProcess.waitFor(2, TimeUnit.SECONDS);
-            if (!completed) {
-                versionProcess.destroyForcibly();
-                return;
-            }
+    /**
+     * The dotted version in an init frame's {@code claude_code_version}, or
+     * null when absent or unparseable.
+     */
+    @Nullable
+    static String reportedCliVersion(Map<String, Object> initFrame) {
+        Object raw = initFrame.get("claude_code_version");
+        if (raw == null) {
+            return null;
+        }
+        Matcher m = CLI_VERSION.matcher(String.valueOf(raw));
+        return m.lookingAt() ? (m.group(1) + "." + m.group(2) + "." + m.group(3)) : null;
+    }
 
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(versionProcess.getInputStream()))) {
-                String versionOutput = reader.readLine();
-                if (versionOutput != null) {
-                    String version = versionOutput.replaceAll("[^0-9.].*", "");
-                    if ((!version.isEmpty()) && (compareVersions(version, MINIMUM_CLAUDE_CODE_VERSION) < 0)) {
-                        String warning = String.format(
-                                "Warning: Claude Code version %s is unsupported. Minimum required: %s",
-                                version, MINIMUM_CLAUDE_CODE_VERSION);
-                        logger.warning(warning);
-                        System.err.println(warning);
-                    }
-                    String verbatimWarning = verbatimPromptsWarning(options, version, cliPath);
-                    if (verbatimWarning != null) {
-                        logger.warning(verbatimWarning);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            // Ignore version check errors
-        } finally {
-            if ((versionProcess != null) && versionProcess.isAlive()) {
-                versionProcess.destroyForcibly();
-                try {
-                    versionProcess.waitFor(1, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
+    /**
+     * Warns, once per transport, if the CLI's first init message shows it is an
+     * old version.
+     *
+     * <p>
+     * The version comes from the running CLI rather than from a separate
+     * {@code cliPath -v}, so {@code cliPath} is only ever executed by
+     * {@link #connect()}. The CLI sends an init message per turn; only the
+     * first is checked. Skipped entirely when
+     * {@code CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK} is set.
+     *
+     * <p>
+     * Package-private for testing.
+     */
+    void checkClaudeVersion(Map<String, Object> data) {
+        if (!"system".equals(data.get("type")) || !"init".equals(data.get("subtype"))
+                || !versionChecked.compareAndSet(false, true)) {
+            return;
+        }
+        String version = reportedCliVersion(data);
+        String warning = unsupportedVersionWarning(version, cliPath);
+        if (warning != null) {
+            logger.warning(warning);
+        }
+        String verbatimWarning = verbatimPromptsWarning(options, version, cliPath);
+        if (verbatimWarning != null) {
+            logger.warning(verbatimWarning);
         }
     }
 
@@ -1837,6 +1893,7 @@ public class SubprocessCLITransport implements Transport {
                         Map<String, Object> data = MAPPER.readValue(json, Map.class);
                         logger.fine("Received message from CLI: " + json);
                         jsonBuffer.setLength(0);
+                        checkClaudeVersion(data);
                         // Use offer() with timeout instead of put() to avoid indefinite blocking
                         if (!queue.offer(data, 5, TimeUnit.SECONDS)) {
                             logger.warning("Failed to enqueue message - consumer may have stopped consuming");

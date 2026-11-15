@@ -26,8 +26,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * on stdin, so the second result proves stdin was still open.
  *
  * <p>
- * {@code -v} prints the version given by the {@code fake.cli.version} system
- * property. {@code FAKE_CLI_SCENARIO=stuck} leaves the background agent
+ * Its init message reports the version given by the {@code fake.cli.version}
+ * system property as {@code claude_code_version}, or none when that property is
+ * {@code none}, as a CLI too old to report one. It does not answer {@code -v}:
+ * the SDK never runs the CLI except to start a session.
+ * {@code FAKE_CLI_SCENARIO=stuck} leaves the background agent
  * running forever, so the state stays "running" until stdin closes.
  */
 public final class FakeSessionStateCli {
@@ -39,14 +42,8 @@ public final class FakeSessionStateCli {
     private FakeSessionStateCli() {
     }
 
+    @SuppressWarnings("null")
     public static void main(String[] args) throws Exception {
-        for (String arg : args) {
-            if ("-v".equals(arg) || "--version".equals(arg)) {
-                System.out.println(System.getProperty("fake.cli.version", "2.1.999") + " (Claude Code)");
-                return;
-            }
-        }
-
         String scenario = System.getenv().getOrDefault("FAKE_CLI_SCENARIO", "wake");
         Map<String, Object> fakeEnv = new LinkedHashMap<>();
         fakeEnv.put(SDK_READS, System.getenv(SDK_READS));
@@ -62,6 +59,10 @@ public final class FakeSessionStateCli {
         init.put("permissionMode", "default");
         init.put("apiKeySource", "none");
         init.put("fake_env", fakeEnv);
+        String version = System.getProperty("fake.cli.version", "2.1.999");
+        if (!"none".equals(version)) {
+            init.put("claude_code_version", version);
+        }
         emit(init);
 
         String hookId = null;
@@ -80,10 +81,14 @@ public final class FakeSessionStateCli {
                 Map<String, Object> request = (Map<String, Object>) msg.get("request");
                 if ("initialize".equals(request.get("subtype")) && request.get("hooks") instanceof Map<?, ?> hooks) {
                     for (Object matchers : hooks.values()) {
-                        for (Object matcher : (List<?>) matchers) {
-                            Object ids = ((Map<?, ?>) matcher).get("hookCallbackIds");
-                            if (hookId == null) {
-                                hookId = (String) ((List<?>) ids).get(0);
+                        if (!(matchers instanceof List<?> matcherList)) {
+                            continue;
+                        }
+                        for (Object matcher : matcherList) {
+                            if ((hookId == null) && (matcher instanceof Map<?, ?> matcherMap)
+                                    && (matcherMap.get("hookCallbackIds") instanceof List<?> ids)
+                                    && !ids.isEmpty()) {
+                                hookId = (String) ids.get(0);
                             }
                         }
                     }

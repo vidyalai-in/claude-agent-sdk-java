@@ -7,8 +7,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDK;
+import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
+import in.vidyalai.claude.sdk.types.hook.HookOnFailure;
 import in.vidyalai.claude.sdk.types.hook.input.PostToolUseHookInput;
 import in.vidyalai.claude.sdk.types.hook.input.PreToolUseHookInput;
 import in.vidyalai.claude.sdk.types.hook.input.StopHookInput;
@@ -26,10 +28,21 @@ import in.vidyalai.claude.sdk.types.permission.PermissionMode;
  */
 public class Hooks {
 
+    // On Windows the model can run a shell command with PowerShell instead of
+    // Bash, so the guard below covers both (as the Python e2e tests do).
+    private static final List<String> SHELL_TOOLS = List.of("Bash", "PowerShell");
+
     public static void main(String[] args) {
         // Example 1: PreToolUse hook for blocking commands
         System.out.println("=== PreToolUse: Block Dangerous Commands ===");
-        blockDangerousCommands();
+        try {
+            blockDangerousCommands();
+        } catch (CLIConnectionException e) {
+            // The guard is set to fail closed (HookOnFailure.BLOCK), so a CLI
+            // that cannot honor that is refused at connect() instead of
+            // running the commands unguarded.
+            System.out.println("[HOOK] Guard not started: " + e.getMessage());
+        }
 
         // Example 2: PostToolUse hook for logging
         System.out.println("\n=== PostToolUse: Logging ===");
@@ -45,7 +58,7 @@ public class Hooks {
     }
 
     /**
-     * PreToolUse hook to block dangerous bash commands.
+     * PreToolUse hook to block dangerous shell commands.
      */
     static void blockDangerousCommands() {
         // Define dangerous patterns
@@ -59,7 +72,7 @@ public class Hooks {
 
         HookMatcher.HookCallback blockDangerous = (input, context) -> {
             if (input instanceof PreToolUseHookInput preToolUse) {
-                if ("Bash".equals(preToolUse.toolName())) {
+                if (SHELL_TOOLS.contains(preToolUse.toolName())) {
                     String command = String.valueOf(preToolUse.toolInput().get("command"));
 
                     for (String pattern : dangerousPatterns) {
@@ -81,11 +94,17 @@ public class Hooks {
             return CompletableFuture.completedFuture(HookOutput.empty());
         };
 
-        HookMatcher bashMatcher = new HookMatcher("Bash", List.of(blockDangerous));
+        // A security guard should fail closed: with HookOnFailure.BLOCK, a hook
+        // that throws or completes with null blocks the command instead of
+        // letting it run. That is why the "no opinion" path above returns
+        // HookOutput.empty(), never null. Connecting to a CLI too old to honor
+        // onFailure throws CLIConnectionException rather than fail open.
+        HookMatcher shellMatcher = new HookMatcher(String.join("|", SHELL_TOOLS), List.of(blockDangerous), null,
+                HookOnFailure.BLOCK);
 
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
-                .allowedTools(List.of("Bash"))
-                .hooks(Map.of(HookEvent.PRE_TOOL_USE, List.of(bashMatcher)))
+                .allowedTools(SHELL_TOOLS)
+                .hooks(Map.of(HookEvent.PRE_TOOL_USE, List.of(shellMatcher)))
                 .maxTurns(5)
                 .build();
 

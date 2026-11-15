@@ -226,6 +226,7 @@ class QueryHandlerRunEndTest {
     @Nested
     class StdinStaysOpenUntilIdle {
 
+        @SuppressWarnings("null")
         @Test
         void taskSettledBeforeResult_keepsStdinOpenUntilIdle() throws Exception {
             ScriptedTransport transport = startOnePrompt();
@@ -279,6 +280,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).isTrue();
         }
 
+        @SuppressWarnings("null")
         @Test
         void idleJustBeforeResult_endsTheRunAtTheResult() throws Exception {
             ScriptedTransport transport = startOnePrompt();
@@ -304,6 +306,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).isTrue();
         }
 
+        @SuppressWarnings("null")
         @Test
         void idleWithATrackedTaskInFlight_keepsStdinOpen() throws Exception {
             // A CLI that reports "idle" at every turn end still defers to the
@@ -323,6 +326,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).as("closed after task settled").isTrue();
         }
 
+        @SuppressWarnings("null")
         @Test
         void streamLastPrompt_waitsForItsOwnRun() throws Exception {
             // A prompt written after an earlier prompt's run ended owes a run
@@ -350,6 +354,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).as("closed at second idle").isTrue();
         }
 
+        @SuppressWarnings("null")
         @ParameterizedTest
         @ValueSource(strings = { "running", "requires_action" })
         void streamReopensForWorkTheCliTakesUpAfterIdle(String wakeState) throws Exception {
@@ -381,6 +386,7 @@ class QueryHandlerRunEndTest {
     @Nested
     class RunEndCeiling {
 
+        @SuppressWarnings("null")
         @Test
         void ceilingEndsTheRunWithNoIdle() throws Exception {
             ScriptedTransport transport = startOnePrompt(CEILING_MS);
@@ -397,6 +403,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.endInputCount()).isEqualTo(1);
         }
 
+        @SuppressWarnings("null")
         @Test
         void mainThreadTurnStopsTheCeiling() throws Exception {
             ScriptedTransport transport = startOnePrompt(CEILING_MS);
@@ -429,6 +436,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).isTrue();
         }
 
+        @SuppressWarnings("null")
         @Test
         void requiresActionStopsTheCeiling() throws Exception {
             ScriptedTransport transport = startOnePrompt(CEILING_MS);
@@ -449,6 +457,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).isTrue();
         }
 
+        @SuppressWarnings("null")
         @Test
         void ceilingIsNotArmedMidTurn() throws Exception {
             // A "running" after an answered request inside a turn does not
@@ -470,6 +479,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).isTrue();
         }
 
+        @SuppressWarnings("null")
         @Test
         void resultWhileAnsweringARequest_doesNotArm() throws Exception {
             // A background agent's request the SDK is still answering when the
@@ -490,6 +500,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).isTrue();
         }
 
+        @SuppressWarnings("null")
         @Test
         void ceilingLeavesATrackedAgentAlone() throws Exception {
             // A tracked background agent still in flight may still need stdin
@@ -510,6 +521,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).isTrue();
         }
 
+        @SuppressWarnings("null")
         @ParameterizedTest
         @ValueSource(strings = { "0", "2147483648", "huge" })
         void waitsForIdleWithNoOrAHugeCeiling(String ceiling) throws Exception {
@@ -530,6 +542,7 @@ class QueryHandlerRunEndTest {
             assertThat(transport.awaitClosed()).as("closed at idle").isTrue();
         }
 
+        @SuppressWarnings("null")
         @Test
         void ceilingEndedStreamReopensForAMainThreadTurn() throws Exception {
             ControllablePrompt prompt = new ControllablePrompt();
@@ -590,6 +603,7 @@ class QueryHandlerRunEndTest {
             return QueryHandler.runEndCeilingMs(optionsEnv, ambient);
         }
 
+        @SuppressWarnings("null")
         @Test
         void parse() {
             assertThat(parse(Map.of(), Map.of())).as("default").isEqualTo(600_000);

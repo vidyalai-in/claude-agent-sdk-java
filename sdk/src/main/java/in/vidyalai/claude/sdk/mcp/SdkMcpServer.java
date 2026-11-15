@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -944,6 +945,14 @@ public final class SdkMcpServer implements McpMessageHandler {
             return completed(errorResponse(id, ERROR_CODE_INTERNAL_ERROR,
                     "Request id " + id + " is already in flight"));
         }
+        // A caller that cancels the response has given up on the call, just
+        // as notifications/cancelled says: QueryHandler does so when the CLI
+        // sends control_cancel_request for the control request carrying it.
+        response.whenComplete((ignored, ex) -> {
+            if ((ex instanceof CancellationException) && inFlight.remove(key, entry)) {
+                context.cancel();
+            }
+        });
 
         try {
             @SuppressWarnings("rawtypes")

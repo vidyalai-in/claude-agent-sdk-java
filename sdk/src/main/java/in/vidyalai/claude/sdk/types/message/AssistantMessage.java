@@ -27,6 +27,16 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param stopReason      reason the model stopped generating (e.g. "end_turn")
  * @param sessionId       session ID this message belongs to
  * @param uuid            unique identifier for this message in the session
+ * @param userMessageUuid  {@code uuid} of the user message this turn is
+ *                         answering — see {@link ResultMessage#userMessageUuid()}.
+ *                         Set on the first top-level assistant message after
+ *                         that value is set or changes, which can be partway
+ *                         through a turn; null on all others.
+ * @param userMessageUuids {@code uuid} of every user message this turn has
+ *                         taken in so far. Set on the same messages as
+ *                         {@code userMessageUuid}, except on older CLIs. A
+ *                         message taken in later may be listed only on the
+ *                         result — see {@link ResultMessage#userMessageUuids()}.
  */
 public record AssistantMessage(
         @JsonProperty("content") List<ContentBlock> content,
@@ -37,14 +47,16 @@ public record AssistantMessage(
         @JsonProperty("message_id") @Nullable String messageId,
         @JsonProperty("stop_reason") @Nullable String stopReason,
         @JsonProperty("session_id") @Nullable String sessionId,
-        @JsonProperty("uuid") @Nullable String uuid) implements Message {
+        @JsonProperty("uuid") @Nullable String uuid,
+        @JsonProperty("user_message_uuid") @Nullable String userMessageUuid,
+        @JsonProperty("user_message_uuids") @Nullable List<String> userMessageUuids) implements Message {
 
     /**
      * Backwards-compatible constructor without new fields.
      */
     public AssistantMessage(List<ContentBlock> content, String model,
             @Nullable String parentToolUseId, @Nullable AssistantMessageError error) {
-        this(content, model, parentToolUseId, error, null, null, null, null, null);
+        this(content, model, parentToolUseId, error, null, null, null, null, null, null, null);
     }
 
     /**
@@ -53,7 +65,19 @@ public record AssistantMessage(
     public AssistantMessage(List<ContentBlock> content, String model,
             @Nullable String parentToolUseId, @Nullable AssistantMessageError error,
             @Nullable Map<String, Object> usage) {
-        this(content, model, parentToolUseId, error, usage, null, null, null, null);
+        this(content, model, parentToolUseId, error, usage, null, null, null, null, null, null);
+    }
+
+    /**
+     * Backwards-compatible constructor without {@code userMessageUuid} and
+     * {@code userMessageUuids}.
+     */
+    public AssistantMessage(List<ContentBlock> content, String model,
+            @Nullable String parentToolUseId, @Nullable AssistantMessageError error,
+            @Nullable Map<String, Object> usage, @Nullable String messageId,
+            @Nullable String stopReason, @Nullable String sessionId, @Nullable String uuid) {
+        this(content, model, parentToolUseId, error, usage, messageId, stopReason, sessionId, uuid,
+                null, null);
     }
 
     @Override

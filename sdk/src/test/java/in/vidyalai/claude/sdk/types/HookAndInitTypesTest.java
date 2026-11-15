@@ -10,6 +10,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -71,6 +72,7 @@ class HookAndInitTypesTest {
     private record KeySets(Set<String> required, Set<String> optional) {
     }
 
+    @SuppressWarnings("null")
     private static KeySets keySets(Class<? extends Record> type) {
         Set<String> required = new HashSet<>();
         Set<String> optional = new HashSet<>();
@@ -119,6 +121,7 @@ class HookAndInitTypesTest {
          * Every field set, then only the required ones: the toMap key sets
          * match the TypeScript SDK's *HookSpecificOutput types.
          */
+        @SuppressWarnings("null")
         @Test
         void outputKeySetsMatchTypeScript() {
             Map<HookSpecificOutput, Set<String>> full = new LinkedHashMap<>();
@@ -177,6 +180,7 @@ class HookAndInitTypesTest {
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
+        @SuppressWarnings("null")
         @Test
         void everyPermittedOutputIsARegisteredSubtypeWithADistinctEventName() throws Exception {
             Map<Class<?>, String> registered = Arrays
@@ -197,7 +201,7 @@ class HookAndInitTypesTest {
                 }
                 var ctor = type.getDeclaredConstructor(
                         Arrays.stream(comps).map(RecordComponent::getType).toArray(Class<?>[]::new));
-                HookSpecificOutput output = (HookSpecificOutput) ctor.newInstance(args);
+                HookSpecificOutput output = (HookSpecificOutput) Objects.requireNonNull(ctor.newInstance(args));
                 assertThat(output.hookEventName()).as(type.getSimpleName()).isEqualTo(registered.get(type));
             }
         }
@@ -229,6 +233,7 @@ class HookAndInitTypesTest {
             return m;
         }
 
+        @SuppressWarnings("null")
         @Test
         void baseHookInputPromptIdAndEffort() {
             Map<String, Object> data = base("PreToolUse");
@@ -244,6 +249,7 @@ class HookAndInitTypesTest {
             assertThat(input.effort()).isEqualTo(new HookEffort("high"));
         }
 
+        @SuppressWarnings("null")
         @Test
         void baseHookInputNewFieldsAreOptional() {
             Map<String, Object> data = base("UserPromptSubmit");
@@ -261,6 +267,7 @@ class HookAndInitTypesTest {
             }
         }
 
+        @SuppressWarnings("null")
         @Test
         void postToolUseDurationMs() {
             Map<String, Object> data = base("PostToolUse");
@@ -408,11 +415,10 @@ class HookAndInitTypesTest {
             Map<String, Object> data = initFrame();
             Message message = MessageParser.parse(data);
             assertThat(message).isExactlyInstanceOf(SystemMessage.class);
-            SystemMessage sys = (SystemMessage) message;
+            SystemMessage sys = (SystemMessage) Objects.requireNonNull(message);
             assertThat(sys.data()).isEqualTo(data);
 
-            SystemInitData init = sys.initData();
-            assertThat(init).isNotNull();
+            SystemInitData init = Objects.requireNonNull(sys.initData());
             assertThat(init.mcpServers().get(0).status()).isEqualTo("connected");
             assertThat(init.mcpServers().get(0).source()).isNull();
             assertThat(init.permissionMode()).isEqualTo(PermissionMode.DEFAULT);

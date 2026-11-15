@@ -119,6 +119,7 @@ mvn exec:java -Dexec.mainClass="examples.MaxBudgetExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.McpServer" -pl examples
 mvn exec:java -Dexec.mainClass="examples.MessageOriginExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.MultiTurnConversation" -pl examples
+mvn exec:java -Dexec.mainClass="examples.ParallelToolSessionReadsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.PermissionCallbacks" -pl examples
 mvn exec:java -Dexec.mainClass="examples.PluginsExample" -pl examples
 mvn exec:java -Dexec.mainClass="examples.QuickStart" -pl examples
@@ -260,7 +261,8 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
     │   └── ToolPermissionContext.java  # Permission context record
     ├── hook/                       # Hook system types
     │   ├── HookEvent.java              # Hook event enum (10 events)
-    │   ├── HookMatcher.java            # Hook matcher class
+    │   ├── HookMatcher.java            # Hook matcher record (timeout, onFailure)
+    │   ├── HookOnFailure.java          # continue/block policy for a failing hook
     │   ├── HookContext.java            # Hook context record
     │   ├── input/                      # Hook input types (from CLI)
     │   │   ├── HookInput.java              # Base sealed interface (promptId, effort)
@@ -403,6 +405,7 @@ examples/src/main/java/examples/
 ├── ForwardSubagentTextExample.java # Forward subagent text/thinking blocks
 ├── VerbatimPromptsExample.java     # Deliver prompts as written (no @path expansion)
 ├── BackgroundAgentHooksExample.java # Hooks served in a background subagent's follow-up turn
+├── ParallelToolSessionReadsExample.java # Session reads return a parallel tool turn whole (live check)
 ├── WindowsBatchCliExample.java     # Windows .cmd CLI opt-in (Windows-only)
 └── plugins/                        # Example plugin implementations
 ```

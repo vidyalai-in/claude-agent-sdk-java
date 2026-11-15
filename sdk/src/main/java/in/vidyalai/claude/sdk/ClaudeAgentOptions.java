@@ -144,6 +144,10 @@ public final class ClaudeAgentOptions {
     @Nullable
     private final String user;
 
+    // App/library identifier sent to the API (CLAUDE_AGENT_SDK_CLIENT_APP)
+    @Nullable
+    private final String clientApp;
+
     // Opt-in to spawning a Windows .bat/.cmd CLI, which the SDK refuses by
     // default because cmd.exe re-parses the command line (CVE-2024-27980,
     // "BatBadBut"). Ignored on POSIX, where there is no cmd.exe hop.
@@ -280,6 +284,7 @@ public final class ClaudeAgentOptions {
         this.stderrCallback = builder.stderrCallback;
         this.hooks = ((builder.hooks != null) ? Map.copyOf(builder.hooks) : null);
         this.user = builder.user;
+        this.clientApp = builder.clientApp;
         this.allowUnsafeWindowsBatchCli = builder.allowUnsafeWindowsBatchCli;
         this.includePartialMessages = builder.includePartialMessages;
         this.includeHookEvents = builder.includeHookEvents;
@@ -359,6 +364,7 @@ public final class ClaudeAgentOptions {
         builder.stderrCallback = this.stderrCallback;
         builder.hooks = ((this.hooks != null) ? new HashMap<>(this.hooks) : null);
         builder.user = this.user;
+        builder.clientApp = this.clientApp;
         builder.allowUnsafeWindowsBatchCli = this.allowUnsafeWindowsBatchCli;
         builder.includePartialMessages = this.includePartialMessages;
         builder.includeHookEvents = this.includeHookEvents;
@@ -655,6 +661,24 @@ public final class ClaudeAgentOptions {
     @Nullable
     public String user() {
         return user;
+    }
+
+    /**
+     * Returns the app/library identifier.
+     *
+     * <p>
+     * Your app/library identifier (e.g. {@code "my-app/1.0.0"}), sent on
+     * requests to the API. Sets {@code CLAUDE_AGENT_SDK_CLIENT_APP} for the
+     * Claude Code subprocess, and wins over a value for that variable in
+     * {@link #env()} or the inherited environment. The value must be valid in
+     * an HTTP header: a character above U+00FF stops every request. Pass an
+     * empty string to send no identifier.
+     *
+     * @return the identifier, or null when unset
+     */
+    @Nullable
+    public String clientApp() {
+        return clientApp;
     }
 
     /**
@@ -992,6 +1016,8 @@ public final class ClaudeAgentOptions {
         private Map<HookEvent, List<HookMatcher>> hooks;
         @Nullable
         private String user;
+        @Nullable
+        private String clientApp;
         private boolean allowUnsafeWindowsBatchCli;
         private boolean includePartialMessages;
         private boolean includeHookEvents;
@@ -1432,8 +1458,10 @@ public final class ClaudeAgentOptions {
          * {@code --settings} CLI flag. When {@code sandbox} is also set, the
          * settings are merged with the sandbox settings and passed as one JSON
          * string: an inline string is parsed directly, and a path is read from
-         * disk (a missing file is logged and only the sandbox settings are
-         * passed).
+         * disk, relative to {@code cwd} when {@code cwd} is set. Settings that
+         * cannot be loaded make {@code connect()} throw
+         * {@link in.vidyalai.claude.sdk.exceptions.CLIConnectionException}
+         * rather than launch without the caller's permission rules and hooks.
          *
          * <p>These are loaded into the "flag settings" layer, which has the
          * highest priority among user-controlled settings.
@@ -1469,11 +1497,13 @@ public final class ClaudeAgentOptions {
          * {@code enableFileCheckpointing} is set,
          * {@code CLAUDE_CODE_SDK_READS_SESSION_STATE=1} unless this map or the
          * inherited environment already names it, and W3C trace context from an
-         * active OpenTelemetry span.
+         * active OpenTelemetry span. {@code CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP}
+         * is always removed (not overridable; see {@link #clientApp(String)}).
          *
          * <p>SDK consumers can identify their app/library in the User-Agent
          * header by setting {@code CLAUDE_AGENT_SDK_CLIENT_APP} (e.g.
-         * {@code "my-app/1.0.0"}).
+         * {@code "my-app/1.0.0"}). The {@link #clientApp(String)} option sets
+         * this variable for you and wins over a value here.
          *
          * @param env map of environment variable names to values
          * @return this builder
@@ -1545,6 +1575,34 @@ public final class ClaudeAgentOptions {
         }
 
         /**
+         * Sets the app/library identifier sent on requests to the API.
+         *
+         * <p>
+         * Your app/library identifier (e.g. {@code "my-app/1.0.0"}), sent on
+         * requests to the API. Sets {@code CLAUDE_AGENT_SDK_CLIENT_APP} for the
+         * Claude Code subprocess, and wins over a value for that variable in
+         * {@link #env(Map)} or the inherited environment. The value must be valid in
+         * an HTTP header: a character above U+00FF stops every request. Pass an
+         * empty string to send no identifier.
+         *
+         * <p>
+         * Unlike the Python SDK, this SDK never derives a default identifier:
+         * Python names the installed distribution behind {@code python -m}, and
+         * only for the CLI bundled in its wheel, which this SDK does not ship.
+         * {@code CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP} inherited from an outer
+         * SDK session is always dropped, since it names that session's app.
+         *
+         * @param clientApp the identifier (e.g. {@code "my-app/1.0.0"}), an
+         *                  empty string to send none, or null to leave the
+         *                  environment as it is
+         * @return this builder
+         */
+        public Builder clientApp(@Nullable String clientApp) {
+            this.clientApp = clientApp;
+            return this;
+        }
+
+        /**
          * Permits spawning a Windows {@code .bat}/{@code .cmd} CLI, which the
          * SDK refuses by default. <b>This weakens a security control — read
          * this entire note before enabling it.</b>
@@ -1589,6 +1647,13 @@ public final class ClaudeAgentOptions {
          * when the CLI path and every argument value are administrator
          * controlled, and the risk has been reviewed and accepted. Ignored on
          * POSIX, where there is no cmd.exe hop.
+         *
+         * <p>
+         * The opt-in also affects discovery when {@code cliPath} is unset: with
+         * no {@code claude.exe} on {@code PATH} or in
+         * {@code ~/.local/bin}, the SDK falls back to a {@code claude.cmd}, then
+         * {@code claude.bat}, found in an absolute {@code PATH} entry. Without
+         * the opt-in only {@code claude.exe} is ever found.
          *
          * @param allowUnsafeWindowsBatchCli true to permit a {@code .bat}/
          *                                   {@code .cmd} CLI on Windows
@@ -1718,6 +1783,12 @@ public final class ClaudeAgentOptions {
 
         /**
          * Sets the setting sources to load.
+         *
+         * <p>When null, all sources are loaded (matches CLI defaults). Pass an
+         * empty list to disable filesystem settings (SDK isolation mode), for
+         * example when {@code cwd} may be untrusted: project settings can run
+         * hooks. Must include {@link SettingSource#PROJECT} to load CLAUDE.md
+         * files.
          *
          * @param settingSources list of setting sources
          * @return this builder

@@ -748,16 +748,8 @@ public final class SessionStores {
                 messages.add(Sessions.toSessionMessage(e));
             }
         }
-        if (limit != null && limit > 0 && messages.size() > limit) {
-            messages = messages.subList(0, limit);
-        }
-        if (offset > 0) {
-            if (offset >= messages.size()) {
-                return List.of();
-            }
-            return new ArrayList<>(messages.subList(offset, messages.size()));
-        }
-        return messages;
+        // Offset first, then limit, as on the local-disk path and in Python.
+        return Sessions.applyLimitOffset(messages, limit, offset);
     }
 
     private static List<SessionMessage> entriesToSubagentMessages(
@@ -774,16 +766,8 @@ public final class SessionStores {
                         e, parentIds.toolUseId(), parentIds.parentAgentId()));
             }
         }
-        if (limit != null && limit > 0 && messages.size() > limit) {
-            messages = messages.subList(0, limit);
-        }
-        if (offset > 0) {
-            if (offset >= messages.size()) {
-                return List.of();
-            }
-            return new ArrayList<>(messages.subList(offset, messages.size()));
-        }
-        return messages;
+        // Offset first, then limit, as on the local-disk path and in Python.
+        return Sessions.applyLimitOffset(messages, limit, offset);
     }
 
     @Nullable

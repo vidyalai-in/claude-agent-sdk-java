@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-10-19 (Updated)
-**Java SDK Version:** 0.2.4
-**Python SDK Version:** [0.2.168](https://github.com/anthropics/claude-agent-sdk-python/commit/498e063489d08a36210dbfc5fa5f5b72b401ea62) (latest)
+**Analysis Date:** 2026-11-15 (Updated)
+**Java SDK Version:** 0.2.5
+**Python SDK Version:** [0.2.182](https://github.com/anthropics/claude-agent-sdk-python/commit/4720d367f7db9d5df8a166c74d7f36a538ac8c34) (latest)
 **Status:** ✅ **100% Feature Parity Maintained**
 
 ---
@@ -11,7 +11,26 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.2.168):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.168. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.182):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.182. These updates include:
+- **v0.2.169-0.2.182** - Eight SDK-facing changes; the rest is bundled-CLI bumps (2.1.304 → 2.1.325), PyPI trusted publishing and hash-pinned build tools (#1415, #1418, #1455), wheel packaging, and removal of the `@claude` workflow (#1485). Ported to Java:
+  - **`user_message_uuid` / `user_message_uuids`** (#1505) on `ResultMessage`, `AssistantMessage` and `StreamEvent` → `userMessageUuid()` / `userMessageUuids()`. The parser keeps an empty list distinct from an absent one (`null`) and drops non-string entries. `MessageOrigin`'s Javadoc no longer suggests `origin` identifies your result; it shows the uuid match instead. `MessageOriginExample` sends a prompt with a `uuid` and checks for it on the result, mirroring the updated `e2e-tests/test_message_origin.py`.
+  - **`HookMatcher.on_failure`** (#1460) → `HookMatcher.onFailure` with a new `HookOnFailure` enum (`CONTINUE`, `BLOCK`), sent as `onFailure`. For a `BLOCK` matcher, `QueryHandler.initialize()` throws `CLIConnectionException` unless the reply reports `hook_on_failure_supported`, and when it reports `hooks_applied: false`. A hook that completes with `null` or returns a `null` future already answered with an error frame; it now has an explicit message. `Hooks.java` puts its dangerous-command guard on `BLOCK`.
+  - **`client_app`** (#1432) → `ClaudeAgentOptions.clientApp(String)`. It sets `CLAUDE_AGENT_SDK_CLIENT_APP`, winning over `env` and the inherited value, and `""` opts out. `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP` is always dropped from the child environment. Python's derived label (`_client_app.py`) is N/A: it applies only to the wheel's bundled CLI and sits behind a `999.0.0` CLI-version gate, and Java ships no bundled CLI.
+  - **Settings fail closed when merged with `sandbox`** (#1426). Unloadable settings throw `CLIConnectionException("Failed to load settings: ...")` instead of being logged and dropped. A relative path resolves against `cwd`, and a BOM is stripped. Jackson quotes the offending source in its messages, so Java reports only the line and column and attaches no cause, keeping inline secrets out of the exception.
+  - **Version read from the init message** (#1483). The `cliPath -v` probe is gone; `checkClaudeVersion(Map)` runs on the first `system`/`init` frame in the reader loop, once per transport. A CLI that reports no `claude_code_version` is logged as too old, and `verbatimPrompts` then warns with version `unknown`.
+  - **Windows `claude.exe` lookup in absolute `PATH` entries only** (#1484). `isWindowsNativeExe` and the shim/wrapper fallbacks are gone, and `findInPath` is POSIX-only now. **Java divergence:** with `allowUnsafeWindowsBatchCli(true)`, Java still returns `claude.cmd`/`claude.bat` (absolute entries only) when no `claude.exe` exists, so callers who opted in keep auto-discovery.
+  - **Parallel tool calls in session reads** (#1422). `Sessions.recoverOrphanedParallelToolResults` ports `_recover_orphaned_parallel_tool_results` and runs at the end of `buildConversationChain`, so both `getSessionMessages` and `getSessionMessagesFromStore` return the whole turn.
+  - **Found in independent re-verification and fixed:**
+    - Both store readers paged `limit` before `offset`, now `messages[offset:offset+limit]`. Disk `limit=0` meant empty, now no limit.
+    - Java's main-chain leaf selection, kept from the initial port, now matches `_build_conversation_chain`, using Python truthiness for the `isSidechain`/`isMeta`/`teamName` flags.
+    - Settings with trailing JSON now fail (`FAIL_ON_TRAILING_TOKENS`, on this read only).
+    - `hook_on_failure_supported` is read with Python truthiness.
+    - `Hooks.java`'s guard covers `Bash|PowerShell` (#1467).
+    - Each fix has tests, checked against the Python implementation on the same inputs.
+  - **Correction: `control_cancel_request` was not handled until now** (#751, v0.1.52). The v0.1.52 entry below listed it, but `QueryHandler` ignored the frame behind a TODO. It now tracks each control request from the CLI by `request_id`. On a cancel it cancels the callback's future, interrupts the handler thread and writes no response, which is what Python's task cancellation does. An SDK MCP tool call also gets its `ToolCallContext` cancelled. A request ends exactly one way, answered or cancelled, so a cancel cannot interrupt a response being written. `ControlCancelRequestTest` ports `TestControlCancelRequest` (cancelled hook, unknown id, late cancel after completion) and adds blocking hooks, `canUseTool`, SDK MCP and one-of-several cases.
+  - **`ParallelToolSessionReadsExample`** ports `e2e-tests/test_parallel_tool_session_reads.py` (#1422): live tool ids against both readers, a skip when the transcript did not fork, a non-zero exit on a mismatch.
+  - **Docs** (#1486). The `settingSources` Javadoc explains the `null` default and the isolation use of `List.of()`. The `PermissionUpdate.to_dict` refactor in the same commit is behavior-neutral, so there is nothing to port.
+  - *Tests.* `ParallelToolSessionReadsTest` ports the new `TestGetSessionMessages`/`TestBuildConversationChain` cases, the store case and the e2e scenario's shape. `HookOnFailureTest` ports the `test_query.py` initialize cases (the unknown-value case is N/A with an enum) and `test_failed_hook_sends_error_response`. `UserMessageUuidsParsingTest` ports the `test_message_parser.py` cases. `SettingsClientAppVersionTransportTest` ports the sandbox-settings cases, the `TestPrecedence` env cases that don't involve derivation, and the init-message version tests. `SubprocessCLIWindowsRefusalTest$Discovery` ports `TestWindowsCliLookup` and adds the opt-in shim cases. `RunEndSubprocessTest`'s stand-in CLI now reports its version in the init frame and no longer answers `-v`. Not ported: the wheel/`download_cli.py` tests and the client-app derivation tests (no bundled CLI). The relative-settings-without-`cwd` case is also skipped, because the JVM cannot `chdir`.
 - **v0.2.161-0.2.168** - Three type-level changes, all in v0.2.166; everything else is bundled-CLI bumps (2.1.284 → 2.1.303), CI hardening (#1328, #1329, #1366, #1368) and e2e-test fixes. Ported to Java:
   - **Hook-specific output types and missing hook input fields** (PR #1331). Fourteen new `HookSpecificOutput` records (Python added 13; `SessionStartHookSpecificOutput` already existed in Python and had been missed in Java): `SessionStart` (`additionalContext`, `initialUserMessage`, `sessionTitle`, `watchPaths`, `reloadSkills`), `UserPromptExpansion`, `PostToolBatch`, `Stop`, `SubagentStop`, `PermissionDenied` (`retry`), `PreModelSwitch` (`permissionDecision` limited to allow/deny/ask — the record rejects `DEFER`), `PostModelSwitch`, `Elicitation`/`ElicitationResult` (`action` as the new `ElicitationAction` enum, `content`), `CwdChanged`/`FileChanged` (`watchPaths`), `WorktreeCreate` (required `worktreePath`) and `MessageDisplay` (`displayContent`). `UserPromptSubmitHookSpecificOutput` gains `sessionTitle` and `suppressOriginalPrompt`. All are registered in `@JsonSubTypes` and `permits`. Every `HookInput` gains `promptId()` and `effort()` (new `HookEffort` record); `PostToolUse`/`PostToolUseFailure` gain `durationMs`; `Stop`/`SubagentStop` gain `lastAssistantMessage`, `backgroundTasks` (`BackgroundTaskSummary`) and `sessionCrons` (`SessionCronSummary`). New components are appended and each record keeps its previous canonical signature as an overload. As in Python, `HookEvent` is unchanged, so SDK callbacks still cannot register for the events that only have outputs.
   - **`SystemInitData`** (PR #1332): the `system`/`init` payload as a record, with `SystemInitMcpServer`, `SystemInitPlugin`, `SystemInitPluginError` and the `FastModeState`/`FastModeDisabledReason` enums. Python narrows with `cast(SystemInitData, msg.data)`; Java reads it with `SystemMessage.initData()` (null for other subtypes) or `SystemInitData.from(map)`. The parser still returns a plain `SystemMessage`. Unknown keys are ignored and an unrecognized enum value reads as `null` (Python's literals are an open set too), with the raw value left in `data()`.
@@ -102,7 +121,7 @@ The **Java SDK has achieved and maintains 100% feature parity** with the Python 
 - **v0.1.55** - Fix(mcp): forward maxResultSizeChars via `_meta` to bypass Zod annotation stripping; CLI 2.1.91
 - **v0.1.54** - `background`, `effort`, `permissionMode` fields on `AgentDefinition`; CLI 2.1.89-2.1.90
 - **v0.1.53** - Fix: omit `--setting-sources` flag when empty; fix: spawn wait_for_result as background task for string prompts; CLI 2.1.88
-- **v0.1.52** - Fix: send string prompt in `connect()` instead of dropping it; `control_cancel_request` handling; `get_context_usage()` method; `Annotated` support for `@tool` parameter descriptions; `tool_use_id`/`agent_id` in `ToolPermissionContext`; `session_id` option; CLI 2.1.86-2.1.87
+- **v0.1.52** - Fix: send string prompt in `connect()` instead of dropping it; `control_cancel_request` handling (ported in Java only in 0.2.5; see the correction above); `get_context_usage()` method; `Annotated` support for `@tool` parameter descriptions; `tool_use_id`/`agent_id` in `ToolPermissionContext`; `session_id` option; CLI 2.1.86-2.1.87
 - **v0.1.51** - `disallowedTools`, `maxTurns`, `initialPrompt` on `AgentDefinition`; `errors` field on `ResultMessage`; `delete_session`/`fork_session` APIs; offset pagination in `list_sessions`; `task_budget` option; `dontAsk` permission mode; `SystemPromptFile` support; resource_link/embedded resource handling in MCP; `isError` propagation; skip non-JSON lines on stdout; filter `CLAUDECODE` env var; preserved fields on `AssistantMessage`/`ResultMessage` (`message_id`, `stop_reason`, `session_id`, `uuid`, `model_usage`, `permission_denials`, `errors`); CLI 2.1.83-2.1.85
 - **v0.1.50** - Per-turn `usage` on `AssistantMessage`; `skills`/`memory`/`mcpServers` fields on `AgentDefinition`; `tag`/`created_at` on `SDKSessionInfo` (file_size now optional); `get_session_info()` single-session lookup; `aiTitle`/`lastPrompt` in summary resolution; ENTRYPOINT default-if-absent (caller can override); graceful subprocess shutdown (wait before SIGTERM); CLI 2.1.77-2.1.81
 - **v0.1.49** - Typed `RateLimitEvent` message; `rename_session`/`tag_session` APIs; CLI 2.1.72-2.1.76; revert FGTS env var
@@ -324,16 +343,16 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 |------|--------|------|--------|
 | Base message | `Message` union | `Message` sealed interface | ✅ |
 | User message | `UserMessage` dataclass (with `tool_use_result`) | `UserMessage` record (with `tool_use_result`) | ✅ |
-| Assistant message | `AssistantMessage` dataclass | `AssistantMessage` record | ✅ |
+| Assistant message | `AssistantMessage` dataclass (with `user_message_uuid(s)`) | `AssistantMessage` record (with `userMessageUuid(s)`) | ✅ |
 | System message | `SystemMessage` dataclass | `SystemMessage` record | ✅ |
 | Init payload | `SystemInitData` TypedDict (+ `SystemInitMcpServer`, `SystemInitPlugin`, `SystemInitPluginError`) | `SystemInitData` record via `SystemMessage.initData()` (+ nested records) | ✅ |
 | Fast mode literals | `FastModeState`, `FastModeDisabledReason` Literals | `FastModeState`, `FastModeDisabledReason` enums | ✅ |
 | Task started message | `TaskStartedMessage` dataclass | `TaskStartedMessage` record | ✅ |
 | Task progress message | `TaskProgressMessage` dataclass | `TaskProgressMessage` record | ✅ |
 | Task notification message | `TaskNotificationMessage` dataclass | `TaskNotificationMessage` record | ✅ |
-| Result message | `ResultMessage` dataclass (with `stop_reason`, `terminal_reason`, `origin`) | `ResultMessage` record (with `stopReason`, `terminalReason`, `origin`) | ✅ |
+| Result message | `ResultMessage` dataclass (with `stop_reason`, `terminal_reason`, `origin`, `user_message_uuid(s)`) | `ResultMessage` record (with `stopReason`, `terminalReason`, `origin`, `userMessageUuid(s)`) | ✅ |
 | Per-model usage | `ModelUsage` TypedDict | `ModelUsage` record (plus `raw()`) | ✅ |
-| Stream event | `StreamEvent` dataclass | `StreamEvent` record | ✅ |
+| Stream event | `StreamEvent` dataclass (with `user_message_uuid(s)`) | `StreamEvent` record (with `userMessageUuid(s)`) | ✅ |
 | Rate limit event | `RateLimitEvent` dataclass | `RateLimitEvent` record | ✅ |
 | Rate limit info | `RateLimitInfo` dataclass | `RateLimitInfo` record | ✅ |
 | Conversation reset | `ConversationResetMessage` dataclass | `ConversationResetMessage` record | ✅ |
@@ -404,7 +423,8 @@ All features from Python SDK v0.1.49 and earlier were already implemented. This 
 | PreCompact input | `PreCompactHookInput` | `PreCompactHookInput` record | ✅ |
 | Notification input | `NotificationHookInput` | `NotificationHookInput` record | ✅ |
 | PermissionRequest input | `PermissionRequestHookInput` | `PermissionRequestHookInput` record | ✅ |
-| Hook matcher | `HookMatcher` | `HookMatcher` class | ✅ |
+| Hook matcher | `HookMatcher` (with `timeout`, `on_failure`) | `HookMatcher` record (with `timeoutSeconds`, `onFailure`) | ✅ |
+| Hook failure policy | `on_failure: Literal["continue", "block"]` | `HookOnFailure` enum | ✅ |
 | Hook output | `HookJSONOutput` | `HookOutput` class | ✅ |
 | Hook context | `HookContext` | `HookContext` record | ✅ |
 | Hook specific output (base) | `HookSpecificOutput` union (21 members) | `HookSpecificOutput` sealed interface (21 permitted records) | ✅ |
@@ -501,7 +521,7 @@ All 37+ configuration options are implemented with 100% parity:
 | **Permission control** (3 options) | ✅ | ✅ | ✅ |
 | **Session management** (5 options, incl. `resumeSessionAt` / `resumeDropsTurn`) | ✅ | ✅ | ✅ |
 | **Resource limits** (4 options) | ✅ | ✅ | ✅ |
-| **Environment** (4 options) | ✅ | ✅ | ✅ |
+| **Environment** (5 options, incl. `clientApp`) | ✅ | ✅ | ✅ |
 | **Hooks** (1 option) | ✅ | ✅ | ✅ |
 | **Agents** (1 option) | ✅ | ✅ | ✅ |
 | **Sandbox** (1 option) | ✅ | ✅ | ✅ |
@@ -509,7 +529,7 @@ All 37+ configuration options are implemented with 100% parity:
 | **Advanced features** (7 options, incl. `forwardSubagentText`, `verbatimPrompts`) | ✅ | ✅ | ✅ |
 | **Callbacks** (1 option) | ✅ | ✅ | ✅ |
 
-**Total: 39+ configuration options - 100% parity**
+**Total: 40+ configuration options - 100% parity**
 
 ---
 
@@ -546,6 +566,7 @@ All 37+ configuration options are implemented with 100% parity:
 | **Typed error results** | ✅ `e2e-tests/test_error_results.py` | ✅ `ErrorHandling.java` (`errorResultMessages()`) | ✅ |
 | **`canUseTool` with a string prompt** | ✅ `e2e-tests/test_tool_permissions.py` | ✅ `PermissionCallbacks.java` (`oneShotStringPrompt()`) | ✅ |
 | **Subagent session reads** | ✅ `e2e-tests/test_subagent_session_reads.py` | ✅ `SubagentTranscriptExample.java` | ✅ |
+| **Parallel tool session reads** | ✅ `e2e-tests/test_parallel_tool_session_reads.py` | ✅ `ParallelToolSessionReadsExample.java` | ✅ **NEW** |
 | **Verbatim prompts** | ✅ `e2e-tests/test_verbatim_prompts.py` | ✅ `VerbatimPromptsExample.java` | ✅ **NEW** |
 | **Follow-up turn after a background subagent (run end)** | ✅ `e2e-tests/test_run_end.py` | ✅ `BackgroundAgentHooksExample.java` | ✅ **NEW** |
 | **System prompt `snapshot`** | ✅ README "System Prompt" | ✅ `SystemPromptExample.java` (`snapshotOff()`), README "System Prompt" | ✅ |
@@ -620,6 +641,8 @@ All 37+ configuration options are implemented with 100% parity:
 | **SDK-MCP server-initiated traffic** | Notifications are dropped; requests (roots, sampling, elicitation) are refused `-32601` | No path for a server to initiate anything | ⚠️ Structural. The Java SPI is request-in/response-out, so progress notifications, sampling and elicitation from a server have nowhere to go. Not reachable through `SdkMcpServer`, which never initiates. |
 | **SDK-MCP invalid arguments** | Validated against `inputSchema`; `Input validation error: ...` as an `isError` result, handler not called | Same | ✅ Aligned (0.1.24). Previously Java did not validate at all, so bad arguments reached the handler and surfaced as a leaked `ClassCastException`/NPE. |
 | **stdin-close wait** | No timeout; bounded between turns by `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` | Same | ✅ Aligned (Python v0.2.160 sync). Java previously kept a 60s `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` cap on the wait that Python dropped in #731. |
+| **Client app label** | `client_app` sets `CLAUDE_AGENT_SDK_CLIENT_APP`; with none set, a label is derived from the installed distribution for the bundled CLI only (gated off for every current CLI) | `clientApp` sets the same variable; nothing is derived | ⚠️ Structural. Java ships no bundled CLI, the only case Python derives for. Both drop an inherited `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP`. |
+| **Windows CLI discovery with the batch-CLI opt-in** | No opt-in exists; only `claude.exe` is found | Same without the opt-in. With `allowUnsafeWindowsBatchCli(true)`, `claude.cmd`/`claude.bat` is found as a last resort (absolute `PATH` entries only) | ⚠️ Intentional (Python v0.2.182 sync). Keeps auto-discovery for callers who already accepted the batch-CLI risk. |
 | **SDK-MCP handler exception** | `isError` result carrying the exception text | Same | ✅ Aligned (0.1.24). Previously a JSON-RPC `-32603`, which the CLI degraded into an `isError` result prefixed `Tool invocation failed: `. |
 
 ---
@@ -915,12 +938,12 @@ All previously identified gaps have been closed:
 
 **Status: COMPLETE & MAINTAINED** ✅
 
-The Java SDK is a high-quality, feature-complete port that maintains full compatibility with the Python SDK's capabilities (v0.1.54) while following Java best practices and idioms. Regular verification ensures continued parity as both SDKs evolve.
+The Java SDK is a high-quality, feature-complete port that maintains full compatibility with the Python SDK's capabilities (v0.2.182) while following Java best practices and idioms. Regular verification ensures continued parity as both SDKs evolve.
 
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-10-19
-**Python SDK Version:** 0.2.168 (commit 498e063489d08a36210dbfc5fa5f5b72b401ea62)
-**Java SDK Version:** 0.2.4
+**Latest Verification:** 2026-11-15
+**Python SDK Version:** 0.2.182 (commit 4720d367f7db9d5df8a166c74d7f36a538ac8c34)
+**Java SDK Version:** 0.2.5
 **Status:** ✅ 100% Feature Parity Maintained

@@ -15,6 +15,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +35,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDKClient;
+import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.exceptions.ClaudeSDKException;
 import in.vidyalai.claude.sdk.exceptions.ResultException;
 import in.vidyalai.claude.sdk.mcp.McpMessageHandler;
@@ -60,6 +62,7 @@ import in.vidyalai.claude.sdk.types.control.response.SDKControlResponse;
 import in.vidyalai.claude.sdk.types.hook.HookContext;
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 import in.vidyalai.claude.sdk.types.hook.HookMatcher;
+import in.vidyalai.claude.sdk.types.hook.HookOnFailure;
 import in.vidyalai.claude.sdk.types.hook.input.HookInput;
 import in.vidyalai.claude.sdk.types.hook.output.HookOutput;
 import in.vidyalai.claude.sdk.types.control.request.SDKControlGetContextUsageRequest;
@@ -352,6 +355,11 @@ public class QueryHandler implements AutoCloseable {
     private final ExecutorService readerExecutor;
     private final ExecutorService controlExecutor;
 
+    // Control requests from the CLI still being answered, by request_id, so a
+    // control_cancel_request can stop the one it names. Each handler removes
+    // its own entry when it finishes, which makes a late cancel a no-op.
+    private final Map<String, InflightControlRequest> inflightControlRequests = new ConcurrentHashMap<>();
+
     // Run-end state. The reader thread, the stdin writer (streamInput), the
     // ceiling sleeper and close() all touch it, so every field below is
     // guarded by runLock.
@@ -635,6 +643,7 @@ public class QueryHandler implements AutoCloseable {
         try {
             // Build hooks configuration for initialization
             Map<HookEvent, List<Map<String, Object>>> hooksConfig = new HashMap<>();
+            boolean blocksOnFailure = false;
             if (hooks != null) {
                 for (Map.Entry<HookEvent, List<HookMatcher>> entry : hooks.entrySet()) {
                     List<HookMatcher> matchers = entry.getValue();
@@ -653,6 +662,11 @@ public class QueryHandler implements AutoCloseable {
                             matcherConfig.put("hookCallbackIds", callbackIds);
                             if (matcher.timeoutSeconds() != null) {
                                 matcherConfig.put("timeout", matcher.timeoutSeconds());
+                            }
+                            HookOnFailure onFailure = matcher.onFailure();
+                            if (onFailure != null) {
+                                matcherConfig.put("onFailure", onFailure.getValue());
+                                blocksOnFailure |= (onFailure == HookOnFailure.BLOCK);
                             }
                             matcherConfigs.add(matcherConfig);
                         }
@@ -679,7 +693,11 @@ public class QueryHandler implements AutoCloseable {
                     forwardSubagentText ? Boolean.TRUE : null,
                     systemPromptSnapshot);
 
-            initializationResult = sendControlRequest(request, initializeTimeout);
+            SDKControlResponse response = sendControlRequest(request, initializeTimeout);
+            if (blocksOnFailure) {
+                requireHookOnFailureHonored(response);
+            }
+            initializationResult = response;
             return initializationResult;
         } catch (Exception e) {
             // Reset initialized flag on failure so retry is possible
@@ -700,6 +718,37 @@ public class QueryHandler implements AutoCloseable {
                 throw sdkError;
             }
             throw new ClaudeSDKException("Failed to initialize: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Refuses an initialize answer that would let an {@code onFailure = BLOCK}
+     * hook fail open or never run.
+     *
+     * <p>
+     * A responder that does not honor {@code onFailure}, such as a CLI that
+     * predates it, drops the field and answers normally, so the absence of
+     * {@code hook_on_failure_supported} is the only sign. {@code hooks_applied:
+     * false} means nothing registered these callbacks, as on a process that was
+     * already running.
+     */
+    private static void requireHookOnFailureHonored(SDKControlResponse response) {
+        Map<String, Object> body = ((response != null) && (response.response() instanceof ControlResponse ok))
+                ? ok.response()
+                : null;
+        // Python truthiness for the support flag (`not response.get(...)`), and
+        // an exact `is False` for hooks_applied, as upstream.
+        if ((body == null) || !Sessions.truthy(body.get("hook_on_failure_supported"))) {
+            throw new CLIConnectionException(
+                    "The process answering initialize does not honor onFailure on hook matchers, "
+                            + "so a hook that fails would not block. Update Claude Code if it is old, "
+                            + "or remove onFailure(HookOnFailure.BLOCK) from your hooks.");
+        }
+        if (Boolean.FALSE.equals(body.get("hooks_applied"))) {
+            throw new CLIConnectionException(
+                    "This session was already running and did not register your hooks, so a hook "
+                            + "set to onFailure(HookOnFailure.BLOCK) would never run. Start a new "
+                            + "session, or remove onFailure(HookOnFailure.BLOCK) from your hooks.");
         }
     }
 
@@ -888,13 +937,17 @@ public class QueryHandler implements AutoCloseable {
                 } else if ("control_request".equals(msgType)) {
                     // Handle incoming control requests from CLI
                     // Use controlExecutor for concurrent control request handling
-                    controlExecutor.submit(() -> handleControlRequest(message));
+                    submitControlRequest(message);
                     continue;
                 } else if ("control_cancel_request".equals(msgType)) {
-                    // TODO: Implement cancellation support
-                    // (the Python SDK cancels asyncio tasks; in Java, the control
-                    // executor handles each request in its own virtual thread and
-                    // we currently don't track them individually for cancellation)
+                    // The CLI has abandoned a request it sent: stop its handler
+                    // and never answer it.
+                    if (message.get("request_id") instanceof String cancelId) {
+                        InflightControlRequest inflight = inflightControlRequests.remove(cancelId);
+                        if (inflight != null) {
+                            inflight.cancel();
+                        }
+                    }
                     continue;
                 } else if ("transcript_mirror".equals(msgType)) {
                     // SessionStore write path: peel mirror frames off stdout
@@ -1128,10 +1181,121 @@ public class QueryHandler implements AutoCloseable {
     }
 
     /**
+     * Starts answering one control request from the CLI on its own thread,
+     * tracked by {@code request_id} so a {@code control_cancel_request} can
+     * stop it (Python SDK #751).
+     */
+    private void submitControlRequest(Map<String, Object> message) {
+        InflightControlRequest inflight = new InflightControlRequest();
+        String trackedId = ((message.get("request_id") instanceof String id) ? id : null);
+        if (trackedId != null) {
+            // Registered before the task starts, so it is always there to be
+            // removed: the handler cannot finish ahead of the registration.
+            inflightControlRequests.put(trackedId, inflight);
+        }
+        try {
+            inflight.task(controlExecutor.submit(() -> {
+                try {
+                    handleControlRequest(message, inflight);
+                } finally {
+                    if (trackedId != null) {
+                        inflightControlRequests.remove(trackedId, inflight);
+                    }
+                }
+            }));
+        } catch (RejectedExecutionException e) {
+            // Closing: the request will never be handled, so stop tracking it.
+            if (trackedId != null) {
+                inflightControlRequests.remove(trackedId, inflight);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * One control request from the CLI that is still being answered.
+     *
+     * <p>
+     * It ends exactly one way: answered, or cancelled by the CLI. Settling
+     * that with one compare-and-set keeps a cancellation from interrupting a
+     * handler partway through writing its response, and a handler that loses
+     * the race from writing a response the CLI no longer expects.
+     */
+    static final class InflightControlRequest {
+
+        private static final int OPEN = 0;
+        private static final int ANSWERING = 1;
+        private static final int CANCELLED = 2;
+
+        private final AtomicInteger state = new AtomicInteger(OPEN);
+        private volatile @Nullable Future<?> task;
+        private volatile @Nullable CompletableFuture<?> awaiting;
+
+        void task(Future<?> submitted) {
+            task = submitted;
+            if (isCancelled()) {
+                submitted.cancel(true);
+            }
+        }
+
+        boolean isCancelled() {
+            return (state.get() == CANCELLED);
+        }
+
+        /** Claims the right to respond; false once the CLI has cancelled. */
+        boolean beginAnswer() {
+            return state.compareAndSet(OPEN, ANSWERING);
+        }
+
+        /**
+         * Cancels the user callback's future, so code composed on it can stop,
+         * then interrupts the handler thread waiting on it. A no-op once the
+         * handler has begun answering.
+         */
+        void cancel() {
+            if (!state.compareAndSet(OPEN, CANCELLED)) {
+                return;
+            }
+            CompletableFuture<?> callback = awaiting;
+            if (callback != null) {
+                callback.cancel(true);
+            }
+            Future<?> running = task;
+            if (running != null) {
+                running.cancel(true);
+            }
+        }
+
+        /**
+         * Waits for a user callback's result. Throws
+         * {@link java.util.concurrent.CancellationException} or
+         * {@link InterruptedException} once the request is cancelled.
+         */
+        <T> T await(CompletableFuture<T> callback, long timeout, TimeUnit unit)
+                throws InterruptedException, ExecutionException, TimeoutException {
+            return track(callback).get(timeout, unit);
+        }
+
+        /** {@link #await(CompletableFuture, long, TimeUnit)} with no deadline. */
+        <T> T await(CompletableFuture<T> callback) throws InterruptedException, ExecutionException {
+            return track(callback).get();
+        }
+
+        private <T> CompletableFuture<T> track(CompletableFuture<T> callback) {
+            awaiting = callback;
+            if (isCancelled()) {
+                // Cancelled before the callback was handed over.
+                callback.cancel(true);
+            }
+            return callback;
+        }
+    }
+
+    /**
      * Handles incoming control requests from CLI using strongly-typed classes.
      */
     @SuppressWarnings("null")
-    private void handleControlRequest(Map<String, Object> message) {
+    private void handleControlRequest(Map<String, Object> message, InflightControlRequest inflight) {
         String requestId = null;
         try {
             // Deserialize to typed SDKControlRequest
@@ -1170,7 +1334,7 @@ public class QueryHandler implements AutoCloseable {
                         permissionReq.description());
 
                 CompletableFuture<PermissionResult> resultFuture = canUseTool.apply(toolName, input, context);
-                PermissionResult result = resultFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);
+                PermissionResult result = inflight.await(resultFuture, RESULT_WAIT_SECS, TimeUnit.SECONDS);
 
                 // Serialize permission result to response format
                 if (result instanceof PermissionResultAllow allow) {
@@ -1192,12 +1356,24 @@ public class QueryHandler implements AutoCloseable {
                 String toolUseId = hookReq.toolUseId();
                 HookContext context = new HookContext(toolUseId);
 
+                // A failed hook must answer with an error frame, never success:
+                // HookMatcher.onFailure(BLOCK) relies on it, as the CLI blocks
+                // only on an error reply. A null future or a null output is a
+                // failure (a callback with no opinion returns an empty
+                // HookOutput); an exceptional future reaches the catch below.
                 CompletableFuture<HookOutput> outputFuture = callback.apply(hookInput, context);
-                HookOutput output = outputFuture.get(RESULT_WAIT_SECS, TimeUnit.SECONDS);
+                if (outputFuture == null) {
+                    throw new ClaudeSDKException("Hook callback " + callbackId + " returned a null future");
+                }
+                HookOutput output = inflight.await(outputFuture, RESULT_WAIT_SECS, TimeUnit.SECONDS);
+                if (output == null) {
+                    throw new ClaudeSDKException("Hook callback " + callbackId
+                            + " completed with null; return an empty HookOutput for no decision");
+                }
                 responseData = output.toMap();
             } else if (requestData instanceof SDKControlMcpMessageRequest mcpReq) {
                 responseData.put("mcp_response",
-                        handleSdkMcpRequest(mcpReq.serverName(), mcpReq.message()));
+                        handleSdkMcpRequest(mcpReq.serverName(), mcpReq.message(), inflight));
             } else if (requestData instanceof SDKControlMCPStatusRequest) {
                 // MCP status is sent from SDK to CLI, not CLI to SDK
                 throw new ClaudeSDKException("Unexpected mcp status request from CLI: " + requestData);
@@ -1234,7 +1410,11 @@ public class QueryHandler implements AutoCloseable {
             }
 
             // Send success response
-            sendControlResponse(new ControlResponse(requestId, responseData));
+            if (inflight.beginAnswer()) {
+                sendControlResponse(new ControlResponse(requestId, responseData));
+            } else {
+                logger.fine("Dropping the response to cancelled control request " + requestId);
+            }
         } catch (Throwable e) {
             // Throwable, not Exception: this runs on a submit()ed task whose
             // Future nobody reads, so an Error here used to vanish without a
@@ -1245,7 +1425,11 @@ public class QueryHandler implements AutoCloseable {
                 requestId = (String) message.get("request_id");
             }
             Level level = ((e instanceof Exception) ? Level.WARNING : Level.SEVERE);
-            if (requestId != null) {
+            if (!inflight.beginAnswer()) {
+                // The CLI cancelled it: the interruption or cancellation that
+                // got us here is expected, and nobody is waiting for an answer.
+                logger.fine("Control request " + requestId + " cancelled by the CLI");
+            } else if (requestId != null) {
                 logger.log(level, "Error in handling control request", e);
                 sendControlResponse(new ControlErrorResponse(requestId, describeThrowable(e)));
             } else {
@@ -1270,10 +1454,13 @@ public class QueryHandler implements AutoCloseable {
      *
      * @param serverName the SDK MCP server the CLI addressed
      * @param message    the JSON-RPC message to deliver
+     * @param inflight   the control request carrying it; cancelling that
+     *                   cancels the handler's future
      * @return the payload for the {@code mcp_response} field
      */
     private Map<String, Object> handleSdkMcpRequest(
-            @Nullable String serverName, @Nullable Map<String, Object> message) {
+            @Nullable String serverName, @Nullable Map<String, Object> message,
+            InflightControlRequest inflight) {
 
         Object id = ((message != null) ? message.get("id") : null);
         if ((serverName == null) || (message == null)) {
@@ -1295,7 +1482,7 @@ public class QueryHandler implements AutoCloseable {
             //
             // get(), not join(): join() cannot be interrupted, which would
             // make controlExecutor.shutdownNow() a no-op on this thread.
-            Map<String, Object> mcpResponse = server.handleMessage(message).get();
+            Map<String, Object> mcpResponse = inflight.await(server.handleMessage(message));
             // A notification gets no reply, but the control request that
             // carried one still expects an acknowledgement.
             return ((mcpResponse != null)
@@ -1307,9 +1494,12 @@ public class QueryHandler implements AutoCloseable {
                     "Interrupted while waiting for SDK MCP server '" + serverName + "'");
         } catch (ExecutionException | RuntimeException e) {
             // RuntimeException covers CancellationException, which is what a
-            // handler settled by close() completes with.
+            // handler settled by close() completes with, and what a
+            // control_cancel_request leaves behind (the caller then drops this
+            // reply unsent).
             Throwable cause = ((e.getCause() != null) ? e.getCause() : e);
-            logger.log(Level.WARNING, "SDK MCP server '" + serverName + "' failed", cause);
+            logger.log((inflight.isCancelled() ? Level.FINE : Level.WARNING),
+                    "SDK MCP server '" + serverName + "' failed", cause);
             return jsonRpcError(id, -32603, describeThrowable(cause));
         }
     }
@@ -1725,6 +1915,11 @@ public class QueryHandler implements AutoCloseable {
             logger.fine("No 'idle' " + runEndCeilingMs + "ms after the last result; ending the run");
             endRun();
         }
+    }
+
+    /** Control requests from the CLI still being answered. Package-private for testing. */
+    int inflightControlRequestCount() {
+        return inflightControlRequests.size();
     }
 
     /** Whether a run-end ceiling sleeper is armed. Package-private for testing. */

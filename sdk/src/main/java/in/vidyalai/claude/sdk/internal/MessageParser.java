@@ -255,7 +255,8 @@ public final class MessageParser {
             String uuid = (String) data.get("uuid");
 
             return new AssistantMessage(blocks, model, parentToolUseId, error, usage,
-                    messageId, stopReason, sessionId, uuid);
+                    messageId, stopReason, sessionId, uuid,
+                    parseUserMessageUuid(data), parseUserMessageUuids(data));
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in assistant message: " + e.getMessage(), data, e);
         }
@@ -471,10 +472,37 @@ public final class MessageParser {
                     subtype, durationMs, durationApiMs, isError, numTurns,
                     sessionId, stopReason, totalCostUsd, usage, result, structuredOutput,
                     modelUsage, permissionDenials, deferredToolUse, errors, apiErrorStatus,
-                    uuid, terminalReason, parseOrigin(data));
+                    uuid, terminalReason, parseOrigin(data),
+                    parseUserMessageUuid(data), parseUserMessageUuids(data));
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in result message: " + e.getMessage(), data, e);
         }
+    }
+
+    /**
+     * Reads {@code user_message_uuid}: the uuid of the user message a turn is
+     * answering. Anything but a string reads as absent.
+     */
+    private static @Nullable String parseUserMessageUuid(Map<String, Object> data) {
+        return (data.get("user_message_uuid") instanceof String uuid) ? uuid : null;
+    }
+
+    /**
+     * Reads {@code user_message_uuids}: the uuids of every user message a turn
+     * has taken in. An empty list stays empty, distinct from an absent one
+     * (null). Non-string entries are dropped rather than failing the frame.
+     */
+    private static @Nullable List<String> parseUserMessageUuids(Map<String, Object> data) {
+        if (!(data.get("user_message_uuids") instanceof List<?> raw)) {
+            return null;
+        }
+        List<String> uuids = new ArrayList<>(raw.size());
+        for (Object item : raw) {
+            if (item instanceof String uuid) {
+                uuids.add(uuid);
+            }
+        }
+        return List.copyOf(uuids);
     }
 
     /**
@@ -573,7 +601,8 @@ public final class MessageParser {
             }
             String parentToolUseId = (String) data.get("parent_tool_use_id");
 
-            return new StreamEvent(uuid, sessionId, event, parentToolUseId);
+            return new StreamEvent(uuid, sessionId, event, parentToolUseId,
+                    parseUserMessageUuid(data), parseUserMessageUuids(data));
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in stream_event message: " + e.getMessage(), data, e);
         }

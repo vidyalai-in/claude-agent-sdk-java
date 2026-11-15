@@ -22,6 +22,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -823,17 +824,7 @@ public class Sessions {
             }
         }
 
-        if (offset > 0) {
-            if (offset >= messages.size())
-                return List.of();
-            messages = new ArrayList<>(messages.subList(offset, messages.size()));
-        }
-
-        if (limit != null && messages.size() > limit) {
-            messages = new ArrayList<>(messages.subList(0, limit));
-        }
-
-        return Collections.unmodifiableList(messages);
+        return Collections.unmodifiableList(applyLimitOffset(messages, limit, offset));
     }
 
     // -------------------------------------------------------------------------
@@ -856,7 +847,7 @@ public class Sessions {
                     String type = (String) entry.get("type");
                     if (type == null || !validTypes.contains(type))
                         continue;
-                    if (entry.get("uuid") == null)
+                    if (!(entry.get("uuid") instanceof String))
                         continue;
                     entries.add(entry);
                 } catch (Exception e) {
@@ -874,93 +865,391 @@ public class Sessions {
         if (entries.isEmpty())
             return List.of();
 
-        // Build maps for O(1) lookup
+        // Index by uuid for O(1) parent lookup. A later entry with the same
+        // uuid replaces the earlier one but keeps its position, as a Python
+        // dict does. Entries without a string uuid are skipped (the readers
+        // already drop them).
         Map<String, Map<String, Object>> byUuid = new LinkedHashMap<>();
         Map<String, Integer> indexByUuid = new HashMap<>();
+        List<Map<String, Object>> withUuid = new ArrayList<>();
         Set<String> parentUuids = new HashSet<>();
-
         for (int i = 0; i < entries.size(); i++) {
             Map<String, Object> entry = entries.get(i);
-            String uuid = (String) entry.get("uuid");
-            if (uuid != null) {
-                byUuid.put(uuid, entry);
-                indexByUuid.put(uuid, i);
-                String parentUuid = (String) entry.get("parentUuid");
-                if (parentUuid != null) {
-                    parentUuids.add(parentUuid);
-                }
+            if (!(entry.get("uuid") instanceof String uuid)) {
+                continue;
+            }
+            byUuid.put(uuid, entry);
+            indexByUuid.put(uuid, i);
+            withUuid.add(entry);
+            String parentUuid = parentUuidOf(entry);
+            if (parentUuid != null) {
+                parentUuids.add(parentUuid);
             }
         }
 
-        // Terminals: entries whose uuid is not a parentUuid of any other entry
-        List<Map<String, Object>> terminals = new ArrayList<>();
-        for (Map<String, Object> entry : entries) {
-            String uuid = (String) entry.get("uuid");
-            if (uuid != null && !parentUuids.contains(uuid)) {
-                terminals.add(entry);
+        // From each terminal (an entry no other entry names as its parent),
+        // walk back to the nearest user/assistant entry: that is a leaf.
+        List<Map<String, Object>> leaves = new ArrayList<>();
+        for (Map<String, Object> terminal : withUuid) {
+            if (parentUuids.contains(uuidOf(terminal))) {
+                continue;
             }
-        }
-
-        // Walk back from each terminal to find the best main-chain leaf
-        Map<String, Object> bestLeaf = null;
-        int bestIndex = -1;
-
-        for (Map<String, Object> terminal : terminals) {
-            Map<String, Object> candidate = terminal;
-            while (candidate != null) {
-                String type = (String) candidate.get("type");
-                boolean isSidechain = Boolean.TRUE.equals(candidate.get("isSidechain"));
-                boolean isMeta = Boolean.TRUE.equals(candidate.get("isMeta"));
-                boolean hasTeamName = candidate.get("teamName") != null;
-
-                if (("user".equals(type) || "assistant".equals(type))
-                        && !isSidechain && !isMeta && !hasTeamName) {
-                    String candidateUuid = (String) candidate.get("uuid");
-                    int idx = indexByUuid.getOrDefault(candidateUuid, -1);
-                    if (idx > bestIndex) {
-                        bestIndex = idx;
-                        bestLeaf = candidate;
-                    }
+            Map<String, Object> walk = terminal;
+            Set<String> walkSeen = new HashSet<>();
+            while ((walk != null) && walkSeen.add(uuidOf(walk))) {
+                Object type = walk.get("type");
+                if ("user".equals(type) || "assistant".equals(type)) {
+                    leaves.add(walk);
                     break;
                 }
-
-                String parentUuid = (String) candidate.get("parentUuid");
-                candidate = parentUuid != null ? byUuid.get(parentUuid) : null;
+                String parentUuid = parentUuidOf(walk);
+                walk = (parentUuid != null) ? byUuid.get(parentUuid) : null;
             }
         }
-
-        if (bestLeaf == null)
+        if (leaves.isEmpty()) {
             return List.of();
+        }
+
+        // Prefer a main-chain leaf (not sidechain, team or meta), the most
+        // recent in file order; with none, the most recent leaf of any kind.
+        List<Map<String, Object>> mainLeaves = new ArrayList<>();
+        for (Map<String, Object> leaf : leaves) {
+            if (!truthy(leaf.get("isSidechain")) && !truthy(leaf.get("teamName")) && !truthy(leaf.get("isMeta"))) {
+                mainLeaves.add(leaf);
+            }
+        }
+        Map<String, Object> bestLeaf = null;
+        int bestIndex = -1;
+        for (Map<String, Object> candidate : (mainLeaves.isEmpty() ? leaves : mainLeaves)) {
+            int idx = indexByUuid.getOrDefault(uuidOf(candidate), -1);
+            if ((bestLeaf == null) || (idx > bestIndex)) {
+                bestLeaf = candidate;
+                bestIndex = idx;
+            }
+        }
 
         // Walk from bestLeaf to root, collecting the chain
         List<Map<String, Object>> chain = new ArrayList<>();
         Map<String, Object> current = bestLeaf;
         Set<String> visited = new HashSet<>();
 
-        while (current != null) {
-            String uuid = (String) current.get("uuid");
-            if (uuid == null || !visited.add(uuid))
-                break; // cycle guard
+        while ((current != null) && visited.add(uuidOf(current))) { // cycle guard
             chain.add(current);
-            String parentUuid = (String) current.get("parentUuid");
-            current = parentUuid != null ? byUuid.get(parentUuid) : null;
+            String parentUuid = parentUuidOf(current);
+            current = (parentUuid != null) ? byUuid.get(parentUuid) : null;
         }
 
         Collections.reverse(chain);
-        return chain;
+        return recoverOrphanedParallelToolResults(byUuid, chain, visited);
+    }
+
+    /** Returns the API {@code message.id} of an assistant entry, if it has one. */
+    @Nullable
+    private static String assistantMessageId(Map<String, Object> entry) {
+        if (!"assistant".equals(entry.get("type")) || !(entry.get("message") instanceof Map<?, ?> message)) {
+            return null;
+        }
+        return ((message.get("id") instanceof String id) && !id.isEmpty()) ? id : null;
+    }
+
+    /** Returns {@code idField} of each {@code blockType} content block in an entry. */
+    private static List<String> contentBlockIds(Map<String, Object> entry, String blockType, String idField) {
+        if (!(entry.get("message") instanceof Map<?, ?> message) || !(message.get("content") instanceof List<?> content)) {
+            return List.of();
+        }
+        List<String> ids = new ArrayList<>();
+        for (Object block : content) {
+            if ((block instanceof Map<?, ?> b) && blockType.equals(b.get("type"))
+                    && (b.get(idField) instanceof String id)) {
+                ids.add(id);
+            }
+        }
+        return ids;
+    }
+
+    /** Returns true for a user entry with a parent that carries a tool_result. */
+    private static boolean isToolResultEntry(Map<String, Object> entry) {
+        if (!"user".equals(entry.get("type"))
+                || (parentUuidOf(entry) == null)
+                || !(entry.get("message") instanceof Map<?, ?> message)
+                || !(message.get("content") instanceof List<?> content)) {
+            return false;
+        }
+        for (Object block : content) {
+            if ((block instanceof Map<?, ?> b) && "tool_result".equals(b.get("type"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Returns true if two entries were written by the same (sub)agent. */
+    private static boolean sameWriter(Map<String, Object> a, Map<String, Object> b) {
+        return (truthy(a.get("isSidechain")) == truthy(b.get("isSidechain")))
+                && Objects.equals(a.get("agentId"), b.get("agentId"));
+    }
+
+    private static String timestampSortKey(Map<String, Object> entry) {
+        return (entry.get("timestamp") instanceof String ts) ? ts : "";
+    }
+
+    private static String uuidOf(Map<String, Object> entry) {
+        return (String) entry.get("uuid");
+    }
+
+    /**
+     * Puts back the tool calls and results a parallel turn left off the chain.
+     *
+     * <p>
+     * The CLI writes one assistant entry per content block, so a response with
+     * N parallel tool calls is N assistant entries that share
+     * {@code message.id} and are chained one after another. Each tool_result
+     * entry's {@code parentUuid} is its own call's assistant entry, so the
+     * results fan out from different parents and the transcript forks. The
+     * {@code parentUuid} walk follows only the branch the next turn continued
+     * from: it keeps one result, and drops every call written after the one
+     * that result answers.
+     *
+     * <p>
+     * For each response on the chain, this collects its assistant entries and
+     * their tool results that the walk did not reach, and inserts them right
+     * after the response's last entry on the chain, so the response stays in
+     * one piece and every result follows its call. Mirrors the TypeScript and
+     * Python SDKs' {@code getSessionMessages}.
+     *
+     * @param byUuid every entry by uuid, in file order
+     * @param chain  the walked chain, root to leaf
+     * @param seen   the uuids on {@code chain}; recovered uuids are added to it
+     */
+    static List<Map<String, Object>> recoverOrphanedParallelToolResults(
+            Map<String, Map<String, Object>> byUuid,
+            List<Map<String, Object>> chain,
+            Set<String> seen) {
+        List<Map<String, Object>> chainAssistants = new ArrayList<>();
+        for (Map<String, Object> e : chain) {
+            if ("assistant".equals(e.get("type"))) {
+                chainAssistants.add(e);
+            }
+        }
+        if (chainAssistants.isEmpty()) {
+            return chain;
+        }
+
+        // Anchor = the last on-chain entry of each response. chainAssistants is
+        // in chain order, so later entries overwrite earlier ones.
+        Map<String, Map<String, Object>> anchorByMessageId = new HashMap<>();
+        for (Map<String, Object> e : chainAssistants) {
+            String messageId = assistantMessageId(e);
+            if (messageId != null) {
+                anchorByMessageId.put(messageId, e);
+            }
+        }
+        if (anchorByMessageId.isEmpty()) {
+            return chain;
+        }
+
+        // Group every assistant entry by response, and record which entry made
+        // each tool call. A tool_use id claimed by two different responses is
+        // ambiguous (null) and is never used to place a result.
+        Map<String, List<Map<String, Object>>> siblingsByMessageId = new HashMap<>();
+        Map<String, Map<String, Object>> callOwner = new HashMap<>();
+        List<Map<String, Object>> toolResultEntries = new ArrayList<>();
+        for (Map<String, Object> e : byUuid.values()) {
+            String messageId = assistantMessageId(e);
+            if (messageId != null) {
+                siblingsByMessageId.computeIfAbsent(messageId, k -> new ArrayList<>()).add(e);
+                for (String callId : contentBlockIds(e, "tool_use", "id")) {
+                    if (!callOwner.containsKey(callId)) {
+                        callOwner.put(callId, e);
+                        continue;
+                    }
+                    Map<String, Object> owner = callOwner.get(callId);
+                    boolean sameResponse = (owner != null) && messageId.equals(assistantMessageId(owner));
+                    callOwner.put(callId, sameResponse ? e : null);
+                }
+            } else if (isToolResultEntry(e)) {
+                toolResultEntries.add(e);
+            }
+        }
+
+        // Index each tool result under the assistant entries it may belong to:
+        // its parent, its sourceToolAssistantUUID, and the owner of each call it
+        // answers. The last two only count when written by the same agent.
+        Map<String, List<Map<String, Object>>> resultsByAssistant = new HashMap<>();
+        for (Map<String, Object> result : toolResultEntries) {
+            resultsByAssistant.computeIfAbsent(parentUuidOf(result), k -> new ArrayList<>()).add(result);
+            if (result.get("sourceToolAssistantUUID") instanceof String source) {
+                Map<String, Object> sourceEntry = byUuid.get(source);
+                if ((sourceEntry != null) && sameWriter(result, sourceEntry)) {
+                    resultsByAssistant.computeIfAbsent(source, k -> new ArrayList<>()).add(result);
+                }
+            }
+            for (String callId : contentBlockIds(result, "tool_result", "tool_use_id")) {
+                Map<String, Object> owner = callOwner.get(callId);
+                if ((owner != null) && sameWriter(result, owner)) {
+                    resultsByAssistant.computeIfAbsent(uuidOf(owner), k -> new ArrayList<>()).add(result);
+                }
+            }
+        }
+
+        // Only needed to place strays, which are rare: built on first use.
+        Set<String> answeredOnChain = null;
+        Map<String, Integer> filePosition = null;
+
+        Set<String> processed = new HashSet<>();
+        Map<String, List<Map<String, Object>>> inserts = new HashMap<>();
+        for (Map<String, Object> assistant : chainAssistants) {
+            String messageId = assistantMessageId(assistant);
+            if ((messageId == null) || !processed.add(messageId)) {
+                continue;
+            }
+
+            List<Map<String, Object>> group = siblingsByMessageId.getOrDefault(messageId, List.of(assistant));
+            Set<String> memberUuids = new HashSet<>();
+            List<Map<String, Object>> orphanedSiblings = new ArrayList<>();
+            for (Map<String, Object> member : group) {
+                memberUuids.add(uuidOf(member));
+                if (!seen.contains(uuidOf(member))) {
+                    orphanedSiblings.add(member);
+                }
+            }
+            List<Map<String, Object>> orphanedResults = new ArrayList<>();
+            // Results indexed under this response whose parent is not one of its
+            // entries: recovered only if they answer a still-unanswered call.
+            List<Map<String, Object>> strays = new ArrayList<>();
+            Set<String> collected = new HashSet<>();
+            for (Map<String, Object> member : group) {
+                for (Map<String, Object> result : resultsByAssistant.getOrDefault(uuidOf(member), List.of())) {
+                    String resultUuid = uuidOf(result);
+                    if (seen.contains(resultUuid) || !collected.add(resultUuid)) {
+                        continue;
+                    }
+                    if (memberUuids.contains(result.get("parentUuid"))) {
+                        orphanedResults.add(result);
+                    } else {
+                        strays.add(result);
+                    }
+                }
+            }
+
+            if (!strays.isEmpty()) {
+                if ((answeredOnChain == null) || (filePosition == null)) {
+                    answeredOnChain = new HashSet<>();
+                    for (Map<String, Object> e : chain) {
+                        answeredOnChain.addAll(contentBlockIds(e, "tool_result", "tool_use_id"));
+                    }
+                    filePosition = new HashMap<>();
+                    int i = 0;
+                    for (String uid : byUuid.keySet()) {
+                        filePosition.put(uid, i++);
+                    }
+                }
+                Set<String> answered = new HashSet<>(answeredOnChain);
+                for (Map<String, Object> result : orphanedResults) {
+                    answered.addAll(contentBlockIds(result, "tool_result", "tool_use_id"));
+                }
+                Map<String, Integer> positions = filePosition;
+                strays.sort(Comparator.comparingInt(e -> positions.get(uuidOf(e))));
+                for (Map<String, Object> result : strays) {
+                    List<String> callIds = contentBlockIds(result, "tool_result", "tool_use_id");
+                    boolean answersOpenCall = false;
+                    for (String callId : callIds) {
+                        Map<String, Object> owner = callOwner.get(callId);
+                        if (!answered.contains(callId) && (owner != null) && memberUuids.contains(uuidOf(owner))) {
+                            answersOpenCall = true;
+                            break;
+                        }
+                    }
+                    if (!answersOpenCall) {
+                        continue;
+                    }
+                    answered.addAll(callIds);
+                    orphanedResults.add(result);
+                }
+            }
+
+            if (orphanedSiblings.isEmpty() && orphanedResults.isEmpty()) {
+                continue;
+            }
+
+            // Timestamp order keeps content-block and completion order. The sort
+            // is stable, so on a tie siblings keep file order and results keep
+            // the order of the calls they answer.
+            orphanedSiblings.sort(Comparator.comparing(Sessions::timestampSortKey));
+            orphanedResults.sort(Comparator.comparing(Sessions::timestampSortKey));
+            List<Map<String, Object>> recovered = new ArrayList<>(orphanedSiblings);
+            recovered.addAll(orphanedResults);
+            for (Map<String, Object> e : recovered) {
+                seen.add(uuidOf(e));
+            }
+            inserts.put(uuidOf(anchorByMessageId.get(messageId)), recovered);
+        }
+
+        if (inserts.isEmpty()) {
+            return chain;
+        }
+
+        List<Map<String, Object>> resultChain = new ArrayList<>(chain.size());
+        for (Map<String, Object> e : chain) {
+            resultChain.add(e);
+            resultChain.addAll(inserts.getOrDefault(uuidOf(e), List.of()));
+        }
+        return resultChain;
     }
 
     static boolean isVisibleMessage(Map<String, Object> entry) {
-        String type = (String) entry.get("type");
+        Object type = entry.get("type");
         if (!"user".equals(type) && !"assistant".equals(type))
             return false;
-        if (Boolean.TRUE.equals(entry.get("isMeta")))
+        if (truthy(entry.get("isMeta")))
             return false;
-        if (Boolean.TRUE.equals(entry.get("isSidechain")))
+        if (truthy(entry.get("isSidechain")))
             return false;
-        if (entry.get("teamName") != null)
+        return !truthy(entry.get("teamName"));
+    }
+
+    /**
+     * Python truthiness, which the transcript readers follow so that flags
+     * written as something other than a JSON boolean ({@code "true"},
+     * {@code 1}, an empty {@code teamName}) are read the same way in both SDKs.
+     */
+    static boolean truthy(@Nullable Object value) {
+        if (value == null) {
             return false;
+        }
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof Number n) {
+            return n.doubleValue() != 0;
+        }
+        if (value instanceof CharSequence cs) {
+            return cs.length() > 0;
+        }
+        if (value instanceof java.util.Collection<?> c) {
+            return !c.isEmpty();
+        }
+        if (value instanceof Map<?, ?> m) {
+            return !m.isEmpty();
+        }
         return true;
+    }
+
+    /** {@code parentUuid} when it is a non-empty string, else null (no parent). */
+    @Nullable
+    private static String parentUuidOf(Map<String, Object> entry) {
+        return ((entry.get("parentUuid") instanceof String parent) && !parent.isEmpty()) ? parent : null;
+    }
+
+    /**
+     * Applies {@code offset}, then {@code limit}, as Python's
+     * {@code messages[offset:offset + limit]}. A null or non-positive limit
+     * means no limit.
+     */
+    static <T> List<T> applyLimitOffset(List<T> messages, @Nullable Integer limit, int offset) {
+        int from = Math.min(Math.max(offset, 0), messages.size());
+        int to = ((limit != null) && (limit > 0)) ? Math.min(messages.size(), from + limit) : messages.size();
+        return new ArrayList<>(messages.subList(from, to));
     }
 
     static SessionMessage toSessionMessage(Map<String, Object> entry) {

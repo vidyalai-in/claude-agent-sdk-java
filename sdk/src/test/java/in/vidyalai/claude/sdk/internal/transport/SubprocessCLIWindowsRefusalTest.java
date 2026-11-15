@@ -114,19 +114,6 @@ class SubprocessCLIWindowsRefusalTest {
             // POSIX has no cmd.exe hop, and ".cmd" is an ordinary filename.
             assertThat(SubprocessCLITransport.isWindowsBatchCli("/opt/claude.cmd")).isFalse();
         }
-
-        @ParameterizedTest
-        @ValueSource(strings = {"claude.exe", "claude.EXE", "claude.exe.", "claude.com",
-                "C:\\bin\\claude.exe"})
-        void nativeExecutablesAreRecognized(String cliPath) {
-            assertThat(SubprocessCLITransport.isWindowsNativeExe(cliPath)).isTrue();
-        }
-
-        @ParameterizedTest
-        @ValueSource(strings = {"claude.cmd", "claude", "C:\\bin\\claude", "claude.exe.cmd"})
-        void nonNativeExecutablesAreRejected(String cliPath) {
-            assertThat(SubprocessCLITransport.isWindowsNativeExe(cliPath)).isFalse();
-        }
     }
 
     @Nested
@@ -165,9 +152,9 @@ class SubprocessCLIWindowsRefusalTest {
         @Test
         void connectRefusesBatchCliBeforeSpawning() {
             pretendWindows();
-            // The refusal must land before anything is spawned, including the
-            // version probe — so a nonexistent path still fails as a refusal
-            // rather than as a spawn or not-found error.
+            // The refusal must land before anything is spawned, so a
+            // nonexistent path still fails as a refusal rather than as a
+            // spawn or not-found error.
             ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                     .cliPath(Path.of("C:\\npm\\claude.cmd"))
                     .build();
@@ -216,61 +203,123 @@ class SubprocessCLIWindowsRefusalTest {
             return sb.toString();
         }
 
-        @Test
-        void nativeExeIsPreferredOverShadowingShimInSameDirectory() throws IOException {
-            pretendWindows();
-            Path bin = tmp.resolve("bin");
-            // npm drops an extensionless bash wrapper next to its shim; without
-            // the .exe preference it would shadow the real executable.
-            touchExecutable(bin, "claude");
-            touchExecutable(bin, "claude.exe");
+        /** A relative PATH entry, from the JVM's working directory, naming {@code dir}. */
+        private String relativeEntry(Path dir) {
+            return Path.of("").toAbsolutePath().relativize(dir.toAbsolutePath()).toString();
+        }
 
-            assertThat(SubprocessCLITransport.findCli(pathOf(bin)))
-                    .endsWith("claude.exe");
+        private String joined(String... entries) {
+            return String.join(SubprocessCLITransport.isWindows() ? ";" : ":", entries);
         }
 
         @Test
-        void nativeExeInLaterDirectoryBeatsExtensionlessWrapperInEarlierOne()
-                throws IOException {
+        void findsNativeExeOnPath() throws IOException {
             pretendWindows();
-            Path early = tmp.resolve("early");
-            Path late = tmp.resolve("late");
-            touchExecutable(early, "claude");
-            touchExecutable(late, "claude.exe");
-
-            // PATH is walked directory-major, so an extensionless entry in an
-            // early directory would otherwise win outright.
-            assertThat(SubprocessCLITransport.findCli(pathOf(early, late)))
-                    .endsWith("claude.exe");
+            Path exe = touchExecutable(tmp.resolve("bin"), "claude.exe");
+            assertThat(SubprocessCLITransport.findCli(pathOf(tmp.resolve("missing"), tmp.resolve("bin")), false))
+                    .isEqualTo(exe.toString());
         }
 
         @Test
-        void npmShimIsReturnedSoConnectCanExplainTheRefusal() throws IOException {
+        void relativePathEntriesAreNotSearched() throws IOException {
             pretendWindows();
-            Path bin = tmp.resolve("bin");
-            touchExecutable(bin, "claude.cmd");
+            touchExecutable(tmp.resolve("tools"), "claude.exe");
+            Path exe = touchExecutable(tmp.resolve("bin"), "claude.exe");
+            // "" and "." name the working directory, the other entry a
+            // directory under it: any of them could be planted. Only the
+            // relative "tools" entry holds a claude.exe here (planting one in
+            // the JVM's working directory is not safe in a shared build), so
+            // the "" and "." entries are skipped rather than exercised.
+            String path = joined("", ".", relativeEntry(tmp.resolve("tools")), tmp.resolve("bin").toString());
+            assertThat(SubprocessCLITransport.findCli(path, false)).isEqualTo(exe.toString());
+        }
+
+        @Test
+        void onlyRelativeHitsIsNotFound() throws IOException {
+            pretendWindows();
             System.setProperty("user.home", tmp.resolve("home").toString());
-
-            // With no native executable anywhere, the shim is returned rather
-            // than a not-found error, so connect() raises the batch-script
-            // refusal with its remediation.
-            String resolved = SubprocessCLITransport.findCli(pathOf(bin));
-            assertThat(resolved).endsWith("claude.cmd");
-            assertThatThrownBy(() -> SubprocessCLITransport.rejectWindowsBatchCli(resolved))
-                    .isInstanceOf(CLIConnectionException.class);
+            touchExecutable(tmp.resolve("tools"), "claude.exe");
+            assertThatThrownBy(() -> SubprocessCLITransport.findCli(
+                    joined("", ".", relativeEntry(tmp.resolve("tools"))), false))
+                    .isInstanceOf(CLINotFoundException.class);
         }
 
         @Test
-        void shimIsPreferredOverExtensionlessWrapper() throws IOException {
+        void shimAndWrapperDoNotShadowNativeExe() throws IOException {
             pretendWindows();
-            Path bin = tmp.resolve("bin");
-            touchExecutable(bin, "claude");
-            touchExecutable(bin, "claude.cmd");
-            System.setProperty("user.home", tmp.resolve("home").toString());
+            touchExecutable(tmp.resolve("npm"), "claude.cmd");
+            touchExecutable(tmp.resolve("npm"), "claude.exe.cmd");
+            touchExecutable(tmp.resolve("wsl"), "claude");
+            Path exe = touchExecutable(tmp.resolve("bin"), "claude.exe");
+            String path = pathOf(tmp.resolve("npm"), tmp.resolve("wsl"), tmp.resolve("bin"));
+            assertThat(SubprocessCLITransport.findCli(path, false)).isEqualTo(exe.toString());
+            // The batch-CLI opt-in only adds a last resort; a native exe still wins.
+            assertThat(SubprocessCLITransport.findCli(path, true)).isEqualTo(exe.toString());
+        }
 
-            // Windows resolves .CMD ahead of an extensionless name via PATHEXT,
-            // and the explanatory refusal beats an opaque spawn failure.
-            assertThat(SubprocessCLITransport.findCli(pathOf(bin))).endsWith("claude.cmd");
+        @SuppressWarnings("null")
+        @Test
+        void shimOnlyMachineGetsTheNativeInstallMessage() throws IOException {
+            pretendWindows();
+            System.setProperty("user.home", tmp.resolve("home").toString());
+            touchExecutable(tmp.resolve("npm"), "claude.cmd");
+            assertThatThrownBy(() -> SubprocessCLITransport.findCli(pathOf(tmp.resolve("npm")), false))
+                    .isInstanceOf(CLINotFoundException.class)
+                    .hasMessageContaining("claude.cmd shim");
+        }
+
+        @Test
+        void shimIsFoundForCallersWhoOptedInToBatchCli() throws IOException {
+            pretendWindows();
+            System.setProperty("user.home", tmp.resolve("home").toString());
+            touchExecutable(tmp.resolve("npm"), "claude");
+            touchExecutable(tmp.resolve("npm"), "claude.bat");
+            Path shim = touchExecutable(tmp.resolve("npm"), "claude.cmd");
+            // Java-only: allowUnsafeWindowsBatchCli keeps auto-discovery of
+            // npm's shim, preferring .cmd, and never an extensionless wrapper.
+            assertThat(SubprocessCLITransport.findCli(pathOf(tmp.resolve("npm")), true))
+                    .isEqualTo(shim.toString());
+        }
+
+        @Test
+        void optedInShimLookupSkipsRelativePathEntries() throws IOException {
+            pretendWindows();
+            System.setProperty("user.home", tmp.resolve("home").toString());
+            touchExecutable(tmp.resolve("npm"), "claude.cmd");
+            assertThatThrownBy(() -> SubprocessCLITransport.findCli(
+                    joined(".", relativeEntry(tmp.resolve("npm"))), true))
+                    .isInstanceOf(CLINotFoundException.class);
+        }
+
+        @Test
+        void optInIsIgnoredOffWindows() throws IOException {
+            pretendLinux();
+            System.setProperty("user.home", tmp.resolve("home").toString());
+            touchExecutable(tmp.resolve("npm"), "claude.cmd");
+            assertThatThrownBy(() -> SubprocessCLITransport.findCli(pathOf(tmp.resolve("npm")), true))
+                    .isInstanceOf(CLINotFoundException.class);
+        }
+
+        @Test
+        void pathHitDoesNotNeedAHomeDirectory() throws IOException {
+            pretendWindows();
+            Path exe = touchExecutable(tmp.resolve("bin"), "claude.exe");
+            // user.home is read only for the fallback, after the PATH sweep.
+            System.clearProperty("user.home");
+            assertThat(SubprocessCLITransport.findCli(pathOf(tmp.resolve("bin")), false))
+                    .isEqualTo(exe.toString());
+        }
+
+        @Test
+        void nativeInstallerLocationIsTheFallback() throws IOException {
+            pretendWindows();
+            Path home = tmp.resolve("home");
+            Path exe = touchExecutable(home.resolve(".local").resolve("bin"), "claude.exe");
+            // Not the POSIX-shaped name beside it
+            touchExecutable(home.resolve(".local").resolve("bin"), "claude");
+            System.setProperty("user.home", home.toString());
+            assertThat(SubprocessCLITransport.findCli(pathOf(tmp.resolve("missing")), false))
+                    .isEqualTo(exe.toString());
         }
 
         @Test
@@ -280,7 +329,7 @@ class SubprocessCLIWindowsRefusalTest {
             touchExecutable(home.resolve(".local").resolve("bin"), "claude.exe");
             System.setProperty("user.home", home.toString());
 
-            assertThat(SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty"))))
+            assertThat(SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty")), false))
                     .endsWith("claude.exe");
         }
 
@@ -296,7 +345,7 @@ class SubprocessCLIWindowsRefusalTest {
             System.setProperty("user.home", home.toString());
 
             assertThatThrownBy(
-                    () -> SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty"))))
+                    () -> SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty")), false))
                     .isInstanceOf(CLINotFoundException.class);
         }
 
@@ -307,7 +356,7 @@ class SubprocessCLIWindowsRefusalTest {
             touchExecutable(home.resolve(".npm-global").resolve("bin"), "claude");
             System.setProperty("user.home", home.toString());
 
-            assertThat(SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty"))))
+            assertThat(SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty")), false))
                     .endsWith("claude");
         }
 
@@ -317,7 +366,7 @@ class SubprocessCLIWindowsRefusalTest {
             pretendWindows();
             System.setProperty("user.home", tmp.resolve("home").toString());
 
-            assertThatThrownBy(() -> SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty"))))
+            assertThatThrownBy(() -> SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty")), false))
                     .isInstanceOf(CLINotFoundException.class)
                     .hasMessageContaining("install.ps1")
                     .hasMessageContaining("claude.exe")
@@ -334,7 +383,7 @@ class SubprocessCLIWindowsRefusalTest {
 
             // Java's POSIX message predates this change and must stay as-is;
             // only the Windows branch is new.
-            assertThatThrownBy(() -> SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty"))))
+            assertThatThrownBy(() -> SubprocessCLITransport.findCli(pathOf(tmp.resolve("empty")), false))
                     .isInstanceOf(CLINotFoundException.class)
                     .hasMessageContaining("https://code.claude.com/docs/en/setup")
                     .hasMessageNotContaining("install.ps1");

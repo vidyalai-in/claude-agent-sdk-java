@@ -53,13 +53,38 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *                          versions, or a result that bypassed the query loop
  *                          such as a local slash command).
  * @param origin            origin of the user message that triggered this turn
- *                          — see {@link MessageOrigin}. Lets a
- *                          streaming-input consumer distinguish the result of
- *                          its own prompt (null, or
- *                          {@link MessageOriginKind#HUMAN} if it stamped that)
- *                          from results of injected turns such as
- *                          background-task notifications
- *                          ({@link MessageOriginKind#TASK_NOTIFICATION}).
+ *                          — see {@link MessageOrigin}. Describes only what
+ *                          <em>started</em> the turn, such as a background-task
+ *                          notification
+ *                          ({@link MessageOriginKind#TASK_NOTIFICATION}). A
+ *                          prompt sent while an injected turn is running can be
+ *                          answered inside that turn, and the result then
+ *                          carries the injected turn's origin, so match
+ *                          {@code userMessageUuids} to find the result for a
+ *                          given prompt.
+ * @param userMessageUuid   {@code uuid} of the user message that started this
+ *                          turn (the last one, if several were merged to start
+ *                          it). On an injected turn, the last user message
+ *                          taken in while it was running. Covers only messages
+ *                          sent as maps with a top-level {@code uuid} string;
+ *                          prompts passed as a plain string have none. Use a
+ *                          new uuid for every message, as the CLI can skip one
+ *                          whose uuid it has already seen. Null when the turn
+ *                          took in no such message, or on older CLIs. Set on
+ *                          error results too, so check {@code terminalReason}
+ *                          and {@code isError} before treating the message as
+ *                          answered. Mirrors the TypeScript SDK's
+ *                          {@code SDKResultMessage.user_message_uuid}.
+ * @param userMessageUuids  {@code uuid} of every user message this turn took
+ *                          in, in order: those that started it, then any sent
+ *                          while it was running. The CLI lists at most 64, so a
+ *                          uuid missing from a full list may still have been
+ *                          taken in. Can be empty on an interrupted turn. Null
+ *                          when {@code userMessageUuid} is null for any other
+ *                          reason, and also on some error results and older
+ *                          CLIs that report only {@code userMessageUuid}.
+ *                          Mirrors the TypeScript SDK's
+ *                          {@code SDKResultMessage.user_message_uuids}.
  */
 public record ResultMessage(
         @JsonProperty("subtype") String subtype,
@@ -80,7 +105,9 @@ public record ResultMessage(
         @JsonProperty("api_error_status") @Nullable Integer apiErrorStatus,
         @JsonProperty("uuid") @Nullable String uuid,
         @JsonProperty("terminal_reason") @Nullable String terminalReason,
-        @JsonProperty("origin") @Nullable MessageOrigin origin) implements Message {
+        @JsonProperty("origin") @Nullable MessageOrigin origin,
+        @JsonProperty("user_message_uuid") @Nullable String userMessageUuid,
+        @JsonProperty("user_message_uuids") @Nullable List<String> userMessageUuids) implements Message {
 
     /**
      * Backwards-compatible constructor without modelUsage, permissionDenials,
@@ -93,7 +120,7 @@ public record ResultMessage(
             @Nullable Object structuredOutput) {
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -111,7 +138,7 @@ public record ResultMessage(
             @Nullable String uuid) {
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
-                modelUsage, permissionDenials, null, errors, null, uuid, null, null);
+                modelUsage, permissionDenials, null, errors, null, uuid, null, null, null, null);
     }
 
     /**
@@ -131,7 +158,7 @@ public record ResultMessage(
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
                 modelUsage, permissionDenials, deferredToolUse, errors,
-                apiErrorStatus, uuid, null, null);
+                apiErrorStatus, uuid, null, null, null, null);
     }
 
     /**
@@ -152,7 +179,30 @@ public record ResultMessage(
         this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
                 stopReason, totalCostUsd, usage, result, structuredOutput,
                 modelUsage, permissionDenials, deferredToolUse, errors,
-                apiErrorStatus, uuid, terminalReason, null);
+                apiErrorStatus, uuid, terminalReason, null, null, null);
+    }
+
+    /**
+     * Backwards-compatible constructor without {@code userMessageUuid} and
+     * {@code userMessageUuids}.
+     */
+    public ResultMessage(String subtype, int durationMs, int durationApiMs,
+            boolean isError, int numTurns, String sessionId,
+            @Nullable String stopReason, @Nullable Double totalCostUsd,
+            @Nullable Map<String, Object> usage, @Nullable String result,
+            @Nullable Object structuredOutput,
+            @Nullable Map<String, ModelUsage> modelUsage,
+            @Nullable List<Object> permissionDenials,
+            @Nullable DeferredToolUse deferredToolUse,
+            @Nullable List<String> errors,
+            @Nullable Integer apiErrorStatus,
+            @Nullable String uuid,
+            @Nullable String terminalReason,
+            @Nullable MessageOrigin origin) {
+        this(subtype, durationMs, durationApiMs, isError, numTurns, sessionId,
+                stopReason, totalCostUsd, usage, result, structuredOutput,
+                modelUsage, permissionDenials, deferredToolUse, errors,
+                apiErrorStatus, uuid, terminalReason, origin, null, null);
     }
 
     @Override

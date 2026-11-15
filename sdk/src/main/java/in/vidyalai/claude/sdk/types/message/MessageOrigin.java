@@ -14,17 +14,25 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * In streaming input mode a single connection interleaves the turns you send
  * with turns the session injects on its own (background-task notifications,
  * scheduled-task prompts, MCP channel messages, messages relayed from peer
- * sessions, ...). {@code origin} tells them apart, e.g. to decide whether a
- * {@link ResultMessage} answers <i>your</i> prompt:
+ * sessions, ...). {@code origin} tells you what started a turn. It does not
+ * tell you whether a {@link ResultMessage} covers <i>your</i> prompt: a prompt
+ * sent while an injected turn is running can be answered inside that turn, and
+ * the result then carries the injected turn's origin. To match a result to your
+ * prompts, send each one with a {@code uuid} and look for it in the result:
  *
  * <pre>{@code
- * MessageOrigin origin = result.origin();
- * if (origin == null || origin.kind() == MessageOriginKind.HUMAN) {
- *     // a turn this application submitted
- * } else if (origin.kind() == MessageOriginKind.TASK_NOTIFICATION) {
- *     // follow-up turn driven by a background task
+ * List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+ * if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+ *     // this turn took in the prompt sent with myUuid
  * }
  * }</pre>
+ *
+ * <p>
+ * Read with {@code receiveMessages()}: {@code receiveResponse()} stops at the
+ * first result, which can be an injected turn's. See
+ * {@link ResultMessage#userMessageUuid()} for how to send the {@code uuid}.
+ * Prompts sent as a plain string have none; for those, {@code origin} being
+ * null or of kind {@link MessageOriginKind#HUMAN} is only a best effort.
  *
  * <p>
  * Only {@code kind} is always present; the remaining fields depend on the kind
