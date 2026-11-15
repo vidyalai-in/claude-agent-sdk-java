@@ -149,11 +149,13 @@ record AssistantMessage(
     @Nullable String messageId,              // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,             // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,              // Session ID this message belongs to
-    @Nullable String uuid                    // Unique identifier in the session transcript
+    @Nullable String uuid,                   // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
-`usage` マップは、利用可能な場合にターンごとの API トークン消費データを含み、`input_tokens`、`output_tokens`、キャッシュ関連のキーなどが入ります。`messageId`、`stopReason`、`sessionId`、`uuid` の各フィールドは API レベルの識別子を保持します。これらは null 許容で、部分／ストリーミングメッセージでは存在しません。新しいフィールドを含まない後方互換のコンストラクターも用意されています。
+`usage` マップは、利用可能な場合にターンごとの API トークン消費データを含み、`input_tokens`、`output_tokens`、キャッシュ関連のキーなどが入ります。`messageId`、`stopReason`、`sessionId`、`uuid` の各フィールドは API レベルの識別子を保持します。これらは null 許容で、部分／ストリーミングメッセージでは存在しません。`userMessageUuid` と `userMessageUuids` は、その値が設定または変更された後の最初のトップレベルのアシスタントメッセージにだけ設定されます。[プロンプトに対応する結果の特定](#プロンプトに対応する結果の特定)を参照してください。新しいフィールドを含まない後方互換のコンストラクターも用意されています。
 
 ### メソッド
 
@@ -551,7 +553,10 @@ record ResultMessage(
     @Nullable List<String> errors,                // Error messages from the CLI
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
-    @Nullable String terminalReason               // Why the query loop terminated
+    @Nullable String terminalReason,              // Why the query loop terminated
+    @Nullable MessageOrigin origin,               // What started the turn (see Message Origin)
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message
 ```
 
@@ -632,7 +637,9 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
@@ -782,7 +789,7 @@ for (Message msg : client.receiveResponse()) {
 
 ## メッセージの出所
 
-`UserMessage.origin()` と `ResultMessage.origin()` は、そのターンが*なぜ*開始されたのかを示します。ストリーミング入力モードでは、1 つの接続の中でアプリケーションが送るターンと、セッションが自分で差し込むターン — バックグラウンドタスクの通知、発火したスケジュールタスクのプロンプト、MCP チャネルのメッセージ、ピアセッションから中継されたメッセージ — が入り混じります。`ResultMessage` 上のこのフィールドは、そのターンを*引き起こした*メッセージの出所を報告します。これにより「これは自分のプロンプトへの応答だ」と「これはバックグラウンドタスクへの応答だ」を区別できます。
+`UserMessage.origin()` と `ResultMessage.origin()` は、そのターンが*なぜ*開始されたのかを示します。ストリーミング入力モードでは、1 つの接続の中でアプリケーションが送るターンと、セッションが自分で差し込むターン — バックグラウンドタスクの通知、発火したスケジュールタスクのプロンプト、MCP チャネルのメッセージ、ピアセッションから中継されたメッセージ — が入り混じります。`ResultMessage` 上のこのフィールドは、そのターンを*開始した*もの（バックグラウンドタスクの通知など）を報告します。
 
 ```java
 MessageOrigin origin = result.origin();
@@ -807,6 +814,39 @@ client.query(List.of(message).iterator());
 ```
 
 SDK ホストから受け付けられる kind は `human` のみで、Claude Code >= 2.1.210 が必要です。ツール結果のユーザーメッセージには出所が付きません。
+
+### プロンプトに対応する結果の特定
+
+`origin` からは、ある結果が*自分の*プロンプトを含むかどうかはわかりません。差し込まれたターンの実行中に
+送ったプロンプトはそのターンの中で応答されることがあり、その場合の結果は差し込まれたターンの出所を
+運びます。プロンプトに対応する結果を見つけるには、送信するメッセージのマップに新しいトップレベルの
+`uuid` を付け、それを `userMessageUuid()` / `userMessageUuids()` から探します：
+
+```java
+String myUuid = UUID.randomUUID().toString();
+message.put("uuid", myUuid);
+client.query(List.of(message).iterator());
+
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    if (messages.next() instanceof ResultMessage result) {
+        List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+        if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+            // this turn took in the prompt sent with myUuid
+            break;
+        }
+    }
+}
+```
+
+`receiveMessages()` で読んでください：`receiveResponse()` は最初の結果で止まり、それが差し込まれた
+ターンの結果である可能性があります。CLI はすでに見た uuid のメッセージを読み飛ばすことがあるため、
+メッセージごとに新しい uuid を使ってください。エラー結果にも uuid が付くので、プロンプトが応答された
+とみなす前に `isError()` と `terminalReason()` を確認してください。`userMessageUuids()` は中断された
+ターンでは空のリストになり、古い CLI では null です。プレーンな文字列として送ったプロンプトには uuid が
+ありません。その場合、`origin` が null または `HUMAN` であることはベストエフォートの目安にすぎません。
+`MessageOriginExample` がこの往復を実行します。フィールドの詳細：
+[ResultMessage → userMessageUuid と userMessageUuids](./api-message-types.md#usermessageuuid-と-usermessageuuids)。
 
 認識できない kind はエラーにならず可視のまま残ります。`kind()` は null で `kindValue()` にワイヤ上の文字列が入り、`isHuman()` は false になります — つまり未知の出所は常に「人間ではない」と読めます。CLI のオブジェクト全体は `raw()` に保持されます。フィールドごとのリファレンス：[MessageOrigin](./api-message-types.md#messageorigin)。
 

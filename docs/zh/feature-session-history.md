@@ -75,6 +75,27 @@ record SessionMessage(
 
 只返回顶层的会话消息 —— 工具使用的支线消息、元消息以及子 agent 消息都会被过滤掉。
 
+### 对话是如何重建的
+
+会话记录是一棵树：每个条目都在 `parentUuid` 中指明它的父条目，而被恢复或编辑过的对话会留下分支。
+`getSessionMessages()` 和 `getSessionMessagesFromStore()` 以相同的方式重建对话，与 Python SDK 保持一致：
+
+1. **选出叶子。** 每个没有被任何条目回指的条目，都会沿父链回溯到离它最近的用户或助手条目，该条目成为
+   一个候选叶子。最新的主链候选（不是支线、元或团队条目）胜出。只有在不存在主链候选时，才由任意类型中
+   最新的候选胜出。`isSidechain`、`isMeta` 和 `teamName` 标志按 Python 判断真值的方式读取，因此空的
+   `teamName` 视为没有团队。
+2. **从叶子沿 `parentUuid` 回溯**到根。`uuid` 不是字符串的条目会被跳过；`parentUuid` 不是非空字符串时，
+   视为没有父条目。
+3. **把并行工具调用放回去。** 对于包含多个并行工具调用的响应，CLI 会为每个调用写一条助手条目，这些条目
+   共享同一个 `message.id`，并把每个结果写在它自己那个调用的条目之下。会话记录在这里分叉，而回溯只保留
+   下一轮所延续的那个分支。被跳过的调用和结果会被放回到该响应在链上的最后一个条目之后：先是按时间戳排序
+   的调用，然后是按完成顺序排列的结果。结果通过其父条目、`sourceToolAssistantUUID` 或 `tool_use_id` 与
+   对应的调用匹配，绝不会跨 agent 匹配，对于链上已经有答复的调用也绝不会再匹配第二次。
+
+因此，包含并行工具调用的轮次可以被完整读回：每个调用都在，每个结果都排在它的调用之后。
+`ParallelToolSessionReadsExample` 会针对实际运行的 CLI 执行这样一个轮次，并检查两种读取方式。子 agent
+的会话记录是线性的，不需要这些处理。
+
 对于 `getSessionMessages()` / `getSessionMessagesFromStore()` 的结果，`parentToolUseId` 与
 `parentAgentId` 始终为 null。它们会在 `getSubagentMessages()` /
 `getSubagentMessagesFromStore()` 中被填充：`parentToolUseId` 是父会话中派生该子 agent 的那个 Agent
@@ -209,6 +230,10 @@ List<SessionMessage> page = ClaudeSDK.getSessionMessages(
     20       // offset
 );
 ```
+
+分页作用于重建后的对话，且先应用偏移量：结果是第 `offset` 条到第 `offset + limit - 1` 条消息。`limit`
+为 `null`、`0` 或负数时表示不限制。所有会话和子 agent 的读取方法，无论是读磁盘还是读 `SessionStore`，都以
+这种方式分页，从并行工具轮次中放回的消息也计入上限。
 
 ## 重命名会话
 

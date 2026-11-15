@@ -584,6 +584,16 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+默认情况下，失败的钩子（抛出异常，或以异常完成）被视为未作决定，因此该命令仍会执行。对于绝不能失败即放行的守卫，
+请为 matcher 指定 `HookOnFailure.BLOCK` 策略：
+
+```java
+HookMatcher bashMatcher = new HookMatcher("Bash", List.of(checkBashCommand), null, HookOnFailure.BLOCK);
+```
+
+如果 CLI 版本过旧、无法遵循该策略，`connect()` 会抛出 `CLIConnectionException`。参见
+[钩子 → 失败策略](../feature-hooks.md#failure-policy-onfailure)。
+
 ### 示例：记录所有工具调用
 
 ```java
@@ -916,6 +926,11 @@ if (origin == null || origin.isHuman()) {
 这一种取值会被接受。若某个 kind 比本 SDK 建模的更新，`kind()` 会是 null，但仍可通过
 `kindValue()` 读取其原始协议字符串，并且它永远不会被视为 human。
 
+`origin()` 说明的是什么启动了一个轮次，而不是它是否在回答你的提示词：在一个注入的轮次运行期间发送的提示词，
+可能会在该轮次内得到回答。要找到某个提示词对应的结果，请用一个新的顶层 `uuid` 发送它，然后在
+`result.userMessageUuid()` 或 `result.userMessageUuids()` 中查找这个 uuid。参见
+[消息类型 → 将结果与你的提示词对应起来](../feature-message-types.md#matching-a-result-to-your-prompt)。
+
 ### 内容块（Content Blocks）
 
 ```java
@@ -1125,6 +1140,8 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `LargeAgentsExample.java` —— 通过 initialize 请求传递大型 agent 定义（260KB+）
 - `SystemPromptExample.java` —— 自定义系统提示词用法
 - `IncludePartialMessagesExample.java` —— 带部分消息更新的流式传输
+- `MessageOriginExample.java` —— 消息来源、通过 uuid 将结果与其提示词对应起来，以及对话重置
+- `ParallelToolSessionReadsExample.java` —— 读回包含并行工具调用的轮次，并与实际运行的 CLI 进行核对
 
 ### 运行示例
 

@@ -82,18 +82,19 @@ options.toBuilder()
 
 ### 环境
 - `cwd(Path)` —— 工作目录
-- `cliPath(Path)` —— 自定义 CLI 路径（Windows 的 `.bat`/`.cmd` 路径会被拒绝；见下文）
-- `allowUnsafeWindowsBatchCli(boolean)` —— 放弃对 Windows 批处理脚本的拒绝策略；同时还要求设置 `-Djdk.lang.Process.allowAmbiguousCommands=false`，并会拒绝任何参数中的 cmd.exe 元字符（默认 `false`）
-- `settings(String)` —— 设置文件路径或内联 JSON 字符串；原样传给 `--settings`，设置了沙箱时则与 `sandbox` 合并为一个 JSON 字符串
+- `cliPath(Path)` —— 自定义 CLI 路径（Windows 的 `.bat`/`.cmd` 路径会被拒绝；见下文）。未设置时，SDK 会自动搜索 CLI；在 Windows 上只会找到 `claude.exe`，先在绝对路径的 `PATH` 条目中查找，然后是 `~/.local/bin/claude.exe`
+- `allowUnsafeWindowsBatchCli(boolean)` —— 放弃对 Windows 批处理脚本的拒绝策略；同时还要求设置 `-Djdk.lang.Process.allowAmbiguousCommands=false`，并会拒绝任何参数中的 cmd.exe 元字符（默认 `false`）。在不存在 `claude.exe` 时，还允许 CLI 发现返回 `claude.cmd`/`claude.bat` 垫片
+- `settings(String)` —— 设置文件路径或内联 JSON 字符串；原样传给 `--settings`，设置了沙箱时则与 `sandbox` 合并为一个 JSON 字符串。相对路径相对于 `cwd` 解析；为该合并而加载设置失败时，`connect()` 会以 `CLIConnectionException` 失败
 - `addDirs(List<Path>)` —— 额外的上下文目录
-- `env(Map<String, String>)` —— 环境变量，合并到继承的环境之上。SDK 还会设置 `CLAUDE_CODE_ENTRYPOINT`（可覆盖）、`CLAUDE_AGENT_SDK_VERSION`，以及 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`（除非已经出现该变量）；参见 [env()](./feature-configuration-options.md#env)
+- `env(Map<String, String>)` —— 环境变量，合并到继承的环境之上。SDK 还会设置 `CLAUDE_CODE_ENTRYPOINT`（可覆盖）、`CLAUDE_AGENT_SDK_VERSION`，以及 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`（除非已经出现该变量），并去掉继承来的 `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP`；参见 [env()](./feature-configuration-options.md#env)
+- `clientApp(String)` —— 你的应用／库标识符（例如 `"my-app/1.0.0"`），以 `CLAUDE_AGENT_SDK_CLIENT_APP` 的形式随 API 请求发送；优先于 `env` 和继承来的值，`""` 表示不发送。参见 [clientApp()](./feature-configuration-options.md#clientapp)
 - `extraArgs(Map<String, String>)` —— 额外的 CLI 标志；键不带前导 `--`，值为空白时表示不带值的标志
 
 ### 回调
 - `stderrCallback(Consumer<String>)` —— stderr 回调
 
 ### 钩子
-- `hooks(Map<HookEvent, List<HookMatcher>>)` —— 钩子回调
+- `hooks(Map<HookEvent, List<HookMatcher>>)` —— 钩子回调。`HookMatcher` 可以设置 `timeoutSeconds` 和 `onFailure` 策略（`HookOnFailure.CONTINUE` 或 `BLOCK`）；参见[钩子 → 失败策略](./feature-hooks.md#失败策略onfailure)
 - `includeHookEvents(boolean)` —— 为 `true` 时，CLI 会把钩子的生命周期事件（`PreToolUse`、`PostToolUse`、`Stop` 等）作为 `HookEventMessage` 对象推送到消息流中。`SessionStart` 和 `Setup` 钩子事件无论如何都会发出。对应 `--include-hook-events`。参见[钩子 → 消息流上的钩子生命周期事件](./feature-hooks.md#消息流上的钩子生命周期事件)。
 
 ### 高级
@@ -102,7 +103,7 @@ options.toBuilder()
 - `verbatimPrompts(boolean)` —— 把 SDK 发送的每条用户消息都标记为 `client_composed`，让 Claude Code 原样投递：不做 `@path` 展开，也不分派斜杠命令。开启期间会覆盖单条消息上的取值。需要 Claude Code 2.1.248+（在更旧的 CLI 上 SDK 会发出警告）。参见 [verbatimPrompts()](./feature-configuration-options.md#verbatimprompts)
 - `forwardSubagentText(boolean)` —— 为 `true` 时，子 agent 的文本块与思考块会与始终转发的 `tool_use` / `tool_result` 块一起被转发到消息流中。通过 `initialize` 控制请求发送（没有对应的 CLI 标志）。参见 [Agent → 观察子 agent 的输出](./feature-agents.md#观察子-agent-的输出)。
 - `agents(Map<String, AgentDefinition>)` —— 自定义 agent
-- `settingSources(List<SettingSource>)` —— 设置来源（空列表会通过 `--setting-sources=` 禁用所有来源；不设置则保留 CLI 默认值）
+- `settingSources(List<SettingSource>)` —— 设置来源（空列表会通过 `--setting-sources=` 禁用所有来源，使会话与文件系统设置隔离；不设置则保留 CLI 默认值，即加载所有来源）
 - `skills(List<String>)` —— Skills 白名单（会自动向 `allowedTools` 注入 `Skill(name)`，并把 `settingSources` 默认设为 user/project）。名称必须完全精确 —— 通配符、规则分隔符以及首尾空白都会在 `connect()` 时抛出 `IllegalArgumentException`
 - `skillsAll()` —— 启用所有被发现的 skill（自动注入裸的 `Skill` 工具）
 - `sandbox(SandboxSettings)` —— bash 命令的沙箱配置；其中的 `network` 键配置沙箱自身的网络隔离（工具层面的限制仍放在权限规则中）

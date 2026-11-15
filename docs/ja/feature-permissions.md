@@ -45,6 +45,10 @@
 })
 ```
 
+コールバックが応答する前に CLI が権限リクエストを放棄した場合（たとえばターンが中断されたときに
+`control_cancel_request` を送ってきた場合）、SDK はコールバックが返した future をキャンセルし、それを
+待っているスレッドに割り込み、応答は送りません。
+
 > **`canUseTool` は `"ask"` の判断でのみ発火します。** このコールバックは、対話的な権限プロンプトの
 > SDK における代替であり、CLI の権限ルールが `"ask"` と評価されたときにだけ実行されます。
 > `allowedTools`、`permissionMode`（例：`ACCEPT_EDITS`、`BYPASS_PERMISSIONS`）、設定ファイルの

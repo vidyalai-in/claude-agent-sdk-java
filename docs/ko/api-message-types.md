@@ -68,7 +68,9 @@ record AssistantMessage(
     @Nullable String messageId,                   // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,                  // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,                   // Session ID this message belongs to
-    @Nullable String uuid                         // Unique identifier in the session transcript
+    @Nullable String uuid,                        // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,             // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids       // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
@@ -82,6 +84,10 @@ record AssistantMessage(
 new AssistantMessage(content, model, parentToolUseId, error)  // usage and all later fields default to null
 new AssistantMessage(content, model, parentToolUseId, error, usage)  // messageId and later fields default to null
 ```
+
+9인자 생성자(`userMessageUuid`와 `userMessageUuids` 없음)도 유지됩니다. 두 필드는 값이 설정되거나
+바뀐 뒤의 첫 번째 최상위 어시스턴트 메시지에만 채워지며(턴 중간일 수도 있습니다), 나머지 메시지에서는
+모두 null입니다. [결과를 내 프롬프트와 대응시키기](#결과를-내-프롬프트와-대응시키기)를 참고하세요.
 
 ### AssistantMessageError
 
@@ -176,7 +182,9 @@ record ResultMessage(
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
     @Nullable String terminalReason,              // Why the query loop terminated
-    @Nullable MessageOrigin origin                // Origin of the triggering user message
+    @Nullable MessageOrigin origin,               // What started the turn
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message {
     String type();  // Returns "result"
 }
@@ -192,9 +200,27 @@ record ResultMessage(
 
 새 필드가 필요 없는 코드를 위해 하위 호환 생성자도 제공됩니다. 원래의 11인자 생성자(`modelUsage`,
 `permissionDenials`, `deferredToolUse`, `errors`, `apiErrorStatus`, `uuid`, `terminalReason`,
-`origin` 없음)는 계속 동작합니다. 이전 형태에 맞춰 작성된 호출자를 위해 15인자(`deferredToolUse`,
-`apiErrorStatus`, `terminalReason`, `origin` 없음), 17인자(`terminalReason`, `origin` 없음),
-18인자(`origin` 없음) 오버로드도 있습니다.
+`origin`, `userMessageUuid`, `userMessageUuids` 없음)는 계속 동작합니다. 이전 형태에 맞춰 작성된 호출자를
+위해 15인자(`deferredToolUse`, `apiErrorStatus`, `terminalReason` 및 그 이후 필드 없음), 17인자
+(`terminalReason` 및 그 이후 필드 없음), 18인자(`origin` 및 그 이후 필드 없음), 19인자(`userMessageUuid`와
+`userMessageUuids` 없음) 오버로드도 있습니다.
+
+### userMessageUuid와 userMessageUuids
+
+- **`userMessageUuid`**는 이 턴을 시작한 사용자 메시지의 `uuid`입니다(여러 메시지가 합쳐져 턴을 시작했다면
+  마지막 메시지의 것). 주입된 턴에서는 턴이 실행되는 동안 받아들인 마지막 사용자 메시지의 것입니다.
+- **`userMessageUuids`**는 턴이 받아들인 모든 사용자 메시지의 `uuid`를 순서대로 나열합니다. 턴을 시작한
+  메시지가 먼저 오고, 이어서 턴이 실행되는 동안 보낸 메시지가 옵니다. CLI는 최대 64개까지만 나열하므로,
+  가득 찬 목록에 없는 uuid라도 받아들여졌을 수 있습니다. 중단된 턴에서는 빈 목록일 수 있으며, 이는
+  `null`과 구별됩니다.
+
+두 필드 모두 최상위 `uuid` 문자열이 있는 맵으로 보낸 메시지만 다룹니다. 일반 문자열로 전달한 프롬프트에는
+uuid가 없습니다. CLI는 이미 본 uuid를 가진 메시지를 건너뛸 수 있으므로 메시지마다 새 uuid를 쓰세요. 턴이
+그런 메시지를 하나도 받아들이지 않았거나 CLI가 오래된 경우 두 필드는 모두 null입니다. `userMessageUuids`는
+일부 오류 결과와 `userMessageUuid`만 보고하는 CLI에서도 null입니다. 두 필드는 오류 결과에도 채워지므로,
+프롬프트에 응답했다고 판단하기 전에 `isError`와 `terminalReason`을 확인하세요. 목록에 문자열이 아닌 항목이
+있으면 프레임 전체를 실패시키는 대신 그 항목을 버립니다.
+[결과를 내 프롬프트와 대응시키기](#결과를-내-프롬프트와-대응시키기)를 참고하세요.
 
 ### terminalReason
 
@@ -280,12 +306,17 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "stream_event"
     @Nullable String eventType(); // Returns event.get("type"), or null
 }
 ```
+
+4인자 생성자는 유지됩니다. `userMessageUuid`와 `userMessageUuids`는 값이 설정되거나 바뀐 뒤의 첫 번째
+최상위 비(非)ping 이벤트에만 채워지며, 나머지 이벤트에서는 모두 null입니다.
 
 ## 콘텐츠 블록
 
@@ -526,7 +557,7 @@ record MessageOrigin(
 
 스트리밍 입력 모드에서는 하나의 연결이 여러분의 애플리케이션이 보내는 턴과 세션이 스스로 주입하는 턴 —
 백그라운드 작업 알림, 발동된 예약 작업 프롬프트, MCP 채널 메시지, 피어 세션에서 중계된 메시지 — 을
-번갈아 나릅니다. `origin`이 이들을 구분해 줍니다:
+번갈아 나릅니다. `origin`은 무엇이 턴을 시작했는지 알려 줍니다:
 
 ```java
 MessageOrigin origin = result.origin();
@@ -536,6 +567,27 @@ if (origin == null || origin.isHuman()) {
     // follow-up turn driven by a background task
 }
 ```
+
+다만 결과가 *내* 프롬프트를 다루는지는 알려 주지 않습니다. 주입된 턴이 실행되는 동안 보낸 프롬프트는 그
+턴 안에서 응답될 수 있으며, 그러면 결과에는 주입된 턴의 출처가 실립니다. 프롬프트에 대한 결과를 찾으려면
+그 uuid를 대조하세요(다음 절).
+
+### 결과를 내 프롬프트와 대응시키기
+
+각 프롬프트를 새로운 최상위 `uuid`가 있는 메시지 맵으로 만들어 `ClaudeSDKClient.query(Iterator)`로 보내고,
+결과에서 그 uuid를 찾으세요:
+
+```java
+List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+    // this turn took in the prompt sent with myUuid
+}
+```
+
+`receiveMessages()`로 읽으세요. `receiveResponse()`는 첫 번째 결과에서 멈추는데, 그것이 주입된 턴의 결과일
+수 있습니다. 일반 문자열로 보낸 프롬프트에는 uuid가 없으므로, 그런 프롬프트에 대해서는 `origin`이 null이거나
+`HUMAN`인지 보는 것이 최선의 추정일 뿐입니다. `MessageOriginExample`은 이런 방식으로 프롬프트를 보내고
+결과에서 그 uuid를 확인합니다.
 
 `origin`이 null이면 CLI가 그 메시지에 출처를 붙이지 않았다는 뜻입니다. `ClaudeSDK.query()`나
 `ClaudeSDKClient.query(String)`로 보낸 프롬프트는, `ClaudeSDKClient.query(Iterator)`를 통해 메시지 맵에

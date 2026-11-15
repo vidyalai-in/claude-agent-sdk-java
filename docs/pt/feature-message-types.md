@@ -149,11 +149,13 @@ record AssistantMessage(
     @Nullable String messageId,              // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,             // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,              // Session ID this message belongs to
-    @Nullable String uuid                    // Unique identifier in the session transcript
+    @Nullable String uuid,                   // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
-O mapa `usage` traz, quando disponível, os dados de consumo de tokens da API por turno, incluindo chaves como `input_tokens`, `output_tokens` e campos relacionados a cache. Os campos `messageId`, `stopReason`, `sessionId` e `uuid` guardam identificadores no nível da API. Eles aceitam null e estão ausentes em mensagens parciais/de streaming. Também existem construtores retrocompatíveis sem os campos mais recentes.
+O mapa `usage` traz, quando disponível, os dados de consumo de tokens da API por turno, incluindo chaves como `input_tokens`, `output_tokens` e campos relacionados a cache. Os campos `messageId`, `stopReason`, `sessionId` e `uuid` guardam identificadores no nível da API. Eles aceitam null e estão ausentes em mensagens parciais/de streaming. `userMessageUuid` e `userMessageUuids` são preenchidos apenas na primeira mensagem de assistente de nível superior depois que seu valor é definido ou muda; veja [Associando um resultado ao seu prompt](#associando-um-resultado-ao-seu-prompt). Também existem construtores retrocompatíveis sem os campos mais recentes.
 
 ### Métodos
 
@@ -546,7 +548,10 @@ record ResultMessage(
     @Nullable List<String> errors,                // Error messages from the CLI
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
-    @Nullable String terminalReason               // Why the query loop terminated
+    @Nullable String terminalReason,              // Why the query loop terminated
+    @Nullable MessageOrigin origin,               // What started the turn (see Message Origin)
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message
 ```
 
@@ -627,7 +632,9 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
@@ -777,7 +784,7 @@ for (Message msg : client.receiveResponse()) {
 
 ## Origem da mensagem
 
-`UserMessage.origin()` e `ResultMessage.origin()` expõem *por que* um turno foi iniciado. No modo de entrada por streaming, uma conexão intercala os turnos que a sua aplicação envia com turnos que a própria sessão injeta — notificações de tarefas em segundo plano, prompts de tarefas agendadas que dispararam, mensagens de canal MCP, mensagens repassadas de sessões pares. Em um `ResultMessage`, o campo reporta a origem da mensagem que *disparou* aquele turno, e é isso que permite distinguir "isto responde ao meu prompt" de "isto responde a uma tarefa em segundo plano".
+`UserMessage.origin()` e `ResultMessage.origin()` expõem *por que* um turno foi iniciado. No modo de entrada por streaming, uma conexão intercala os turnos que a sua aplicação envia com turnos que a própria sessão injeta — notificações de tarefas em segundo plano, prompts de tarefas agendadas que dispararam, mensagens de canal MCP, mensagens repassadas de sessões pares. Em um `ResultMessage`, o campo reporta o que *iniciou* aquele turno, como uma notificação de tarefa em segundo plano.
 
 ```java
 MessageOrigin origin = result.origin();
@@ -802,6 +809,29 @@ client.query(List.of(message).iterator());
 ```
 
 Apenas o kind `human` é aceito vindo de um host do SDK, e ele exige Claude Code >= 2.1.210. Mensagens de usuário com resultados de ferramenta nunca carregam origem.
+
+### Associando um resultado ao seu prompt
+
+`origin` não diz se um resultado cobre o *seu* prompt: um prompt enviado enquanto um turno injetado está em execução pode ser respondido dentro desse turno, e o resultado então carrega a origem do turno injetado. Para encontrar o resultado de um prompt, coloque um `uuid` de nível superior novo no mapa da mensagem que você envia e procure-o em `userMessageUuid()` / `userMessageUuids()`:
+
+```java
+String myUuid = UUID.randomUUID().toString();
+message.put("uuid", myUuid);
+client.query(List.of(message).iterator());
+
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    if (messages.next() instanceof ResultMessage result) {
+        List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+        if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+            // this turn took in the prompt sent with myUuid
+            break;
+        }
+    }
+}
+```
+
+Leia com `receiveMessages()`: `receiveResponse()` para no primeiro resultado, que pode ser o de um turno injetado. Use um uuid novo para cada mensagem, pois o CLI pode ignorar uma cujo uuid já tenha visto. Resultados de erro também carregam o uuid, então verifique `isError()` e `terminalReason()` antes de considerar o prompt respondido. `userMessageUuids()` é uma lista vazia em um turno interrompido e null em CLIs mais antigos. Prompts enviados como string simples não têm uuid; para eles, um `origin` null ou `HUMAN` é apenas uma aproximação. `MessageOriginExample` executa esse ciclo completo. Detalhes dos campos: [ResultMessage → userMessageUuid e userMessageUuids](./api-message-types.md#usermessageuuid-e-usermessageuuids).
 
 Kinds não reconhecidos permanecem visíveis em vez de virarem erros: `kind()` é null enquanto `kindValue()` guarda a string do protocolo, e `isHuman()` é false — ou seja, uma atribuição desconhecida sempre se lê como "não humana". O objeto completo do CLI fica em `raw()`. Referência campo a campo: [MessageOrigin](./api-message-types.md#messageorigin).
 

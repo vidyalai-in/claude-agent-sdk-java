@@ -79,6 +79,31 @@ record SessionMessage(
 최상위 대화 메시지만 반환됩니다 — 도구 사용의 곁가지 메시지, 메타 메시지, 서브에이전트 메시지는
 걸러집니다.
 
+### 대화가 재구성되는 방식
+
+트랜스크립트는 트리입니다. 각 항목은 `parentUuid`로 부모를 가리키며, 재개하거나 편집한 대화에는 가지가
+생깁니다. `getSessionMessages()`와 `getSessionMessagesFromStore()`는 Python SDK와 똑같이, 같은 방식으로
+대화를 재구성합니다:
+
+1. **리프를 고릅니다.** 아무것도 자신을 가리키지 않는 항목마다 가장 가까운 사용자 또는 어시스턴트 항목까지
+   거슬러 올라가고, 그 항목이 리프 후보가 됩니다. 메인 체인(곁가지·메타·팀 항목이 아닌) 후보 중 가장 최근
+   것이 선택됩니다. 그런 후보가 없을 때만 종류와 상관없이 가장 최근 후보가 선택됩니다. `isSidechain`,
+   `isMeta`, `teamName` 플래그는 Python이 참/거짓을 판단하는 방식대로 읽으므로, 빈 `teamName`은 팀이
+   없는 것으로 봅니다.
+2. 리프에서 `parentUuid`를 따라 루트까지 **거슬러 올라갑니다.** `uuid`가 문자열이 아닌 항목은 건너뛰고,
+   비어 있지 않은 문자열이 아닌 `parentUuid`는 부모가 없는 것으로 봅니다.
+3. **병렬 도구 호출을 되돌려 놓습니다.** CLI는 병렬 도구 호출이 여러 개인 응답을 호출마다 하나씩, 같은
+   `message.id`를 공유하는 어시스턴트 항목으로 기록하고, 각 결과는 해당 호출의 항목 아래에 기록합니다.
+   트랜스크립트는 거기서 갈라지며, 거슬러 올라가기는 다음 턴이 이어진 가지만 남깁니다. 건너뛴 호출과
+   결과는 체인에 있는 그 응답의 마지막 항목 바로 뒤에 되돌려 놓습니다. 호출은 타임스탬프 순으로, 그다음
+   결과는 완료된 순서대로 놓입니다. 결과는 부모, `sourceToolAssistantUUID` 또는 `tool_use_id`를 통해 호출과
+   짝지어지며, 에이전트를 넘나들어 짝지어지는 일은 없고, 체인에서 이미 응답된 호출과 다시 짝지어지는 일도
+   없습니다.
+
+따라서 병렬 도구 호출이 있는 턴도 온전히 다시 읽힙니다. 모든 호출이, 그리고 각 결과가 그 호출 뒤에
+나옵니다. `ParallelToolSessionReadsExample`은 실제 CLI에서 그런 턴을 실행하고 두 읽기 방식을 모두
+확인합니다. 서브에이전트 트랜스크립트는 선형이어서 이런 처리가 필요 없습니다.
+
 `getSessionMessages()` / `getSessionMessagesFromStore()` 결과에서는 `parentToolUseId`와
 `parentAgentId`가 항상 null입니다. 이들이 채워지는 것은 `getSubagentMessages()` /
 `getSubagentMessagesFromStore()`의 경우로, `parentToolUseId`는 그 서브에이전트를 만들어 낸 부모
@@ -215,6 +240,11 @@ List<SessionMessage> page = ClaudeSDK.getSessionMessages(
     20       // offset
 );
 ```
+
+페이지네이션은 재구성된 대화에 오프셋부터 먼저 적용됩니다. 결과는 `offset`번째부터 `offset + limit - 1`번째
+메시지까지입니다. `limit`이 `null`, `0` 또는 음수이면 제한이 없습니다. 디스크에서 읽든 `SessionStore`에서
+읽든 모든 세션 및 서브에이전트 읽기 방식이 이렇게 페이지를 나누며, 병렬 도구 턴에서 되돌려 놓은 메시지도
+limit에 포함됩니다.
 
 ## 세션 이름 바꾸기
 

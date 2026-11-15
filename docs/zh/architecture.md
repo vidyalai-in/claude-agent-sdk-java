@@ -514,6 +514,23 @@ QueryHandler
 这并非纸上谈兵。一个陈旧的、由 IDE 编译出的、携带"unresolved compilation problem" `Error` 的类，曾让
 每一个 SDK MCP 控制请求都无声地挂起，直到这里的捕获范围被放宽。
 
+### 被取消的控制请求
+
+CLI 可以放弃它发出的某个控制请求（例如在某一轮被中断时），方法是发送一条带有相同 `request_id` 的
+`control_cancel_request`。`QueryHandler` 会把它提交的每个处理函数保存在一个以 `request_id` 为键的 map
+中；处理函数完成时会移除自己的条目，因此迟到的取消、或者指向未知 id 的取消都不会产生任何效果。收到取消时，
+它会：
+
+1. 取消用户回调返回的 `CompletableFuture`（钩子、`canUseTool`，或 SDK MCP 服务器的响应），使基于它
+   组合的代码可以停止。对于 SDK MCP 工具调用，`SdkMcpServer` 会对此作出反应，取消该调用的
+   `ToolCallContext`，与 `notifications/cancelled` 的做法相同；
+2. 中断处理线程，这样也能触达那些阻塞自身线程的回调；并且
+3. 不写出任何 `control_response`：CLI 已经不再等待它。
+
+一个请求只会以一种方式结束 —— 被作答或被取消，由一次 compare-and-set 决定。输掉竞争的处理函数会丢弃
+它的响应，输掉竞争的取消则什么也不做，因此取消永远不会在响应写入 stdin 的中途打断它。这与 Python SDK
+的做法一致：Python SDK 会取消处理函数的任务并跳过响应。
+
 ### stdin 的生命周期与一次运行的结束
 
 > **`controlExecutor` 必须保持"每任务一线程"。** SDK MCP 工具调用会驻留其控制线程直到工具作答，而终止

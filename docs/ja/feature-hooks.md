@@ -51,13 +51,15 @@ var options = ClaudeAgentOptions.builder()
 
 ```java
 record HookMatcher(
-    @Nullable String matcher,        // which tools/events to match; null matches all
-    List<HookCallback> hooks,        // callbacks to run
-    @Nullable Double timeoutSeconds  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable String matcher,         // which tools/events to match; null matches all
+    List<HookCallback> hooks,         // callbacks to run
+    @Nullable Double timeoutSeconds,  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable HookOnFailure onFailure // what a failing callback does; null = CONTINUE
 )
 
 new HookMatcher(List<HookCallback> hooks)                  // matcher = null
 new HookMatcher(String matcher, List<HookCallback> hooks)  // timeoutSeconds = null
+new HookMatcher(String matcher, List<HookCallback> hooks, Double timeoutSeconds)  // onFailure = null
 ```
 
 ツールのイベントでは、`matcher` はツール名（`"Bash"`）、`|` で連結した複数の名前（`"Write|MultiEdit|Edit"`）、
@@ -84,10 +86,52 @@ record HookContext(
 SDK は、返された future の完了を待ってから CLI に応答します。同期的な処理では
 `CompletableFuture.completedFuture(...)` を返してください。
 
+コールバックが例外を投げた場合、例外的に完了する future を返した場合、`null` で完了した場合、
+または `null` の future を返した場合は、エラーとして応答されます。意見のないコールバックは
+`null` ではなく、必ず `HookOutput.empty()` を返してください。エラーによってアクションが続行されるか
+どうかは、マッチャーの[失敗ポリシー](#失敗ポリシーonfailure)によって決まります。
+
+CLI がフック呼び出しを放棄した場合（たとえばターンが中断されたときに `control_cancel_request` を
+送ってきた場合）、SDK はコールバックが返した future をキャンセルし、それを待っているスレッドに割り込み、
+応答は送りません。自分のスレッドをブロックするコールバックは `InterruptedException` を受け取り、
+処理を別のスレッドに渡すコールバックは、キャンセルされた future に反応できます。
+
 > **ディスパッチ順序：** 同じイベントに複数のマッチャーが登録されている場合、CLI は一致するフック
 > コールバックを順番にではなく**並行に**（並列で）ディスパッチします。各フックは互いに独立するよう
 > 設計してください —— あるフックが完了してから別のフックが始まることを当てにしないでください
 > （たとえば、ゲートの順序を前提としたレートリミッタのフックを連鎖させないこと）。
+
+### 失敗ポリシー（`onFailure`）
+
+`HookOnFailure` は、失敗したコールバックが、呼び出し元のアクションに対してどう作用するかを決めます：
+
+| 値 | 失敗したコールバック |
+|-------|--------------------|
+| `CONTINUE`（および既定の `null`） | 判断なしとして扱われます：フックが実行されなかったかのようにアクションが続行されます |
+| `BLOCK` | アクションをブロックします |
+
+コールバックが失敗するのは、エラーとして応答されたとき（上記参照）、または CLI が受け付けない値
+（認識できない `permissionDecision` など）を返したときです。認識されないキーは失敗にはなりません。
+フェイルオープンしてはならないガードには `BLOCK` を使います：
+
+```java
+HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), null, HookOnFailure.BLOCK);
+```
+
+`Stop` と `SubagentStop` はこのオプションを無視します。`PermissionRequest` のブロックは、
+`canUseTool` が応答する前に届いた場合にのみ有効です。
+
+ポリシーは initialize リクエストで `onFailure` として送られます。いずれかのマッチャーが `BLOCK` を
+使っている場合、`initialize()`（したがって `connect()`）は CLI の応答を確認し、次のいずれかに
+該当するとトランスポートを閉じて `CLIConnectionException` を投げます：
+
+- 応答が `hook_on_failure_supported` を報告していない：CLI が古すぎてポリシーを守れず、
+  ガードがフェイルオープンしてしまうため。
+- 応答が `hooks_applied: false` を報告している：すでに実行中のセッションがフックを登録しておらず、
+  ガードが決して実行されないため。
+
+`CONTINUE` は CLI のサポートを必要としません。古い CLI はもともとそう振る舞うからです。
+`Hooks.java` は危険なコマンドのガードに `BLOCK` を使っており、拒否の扱い方も示しています。
 
 ## フック入力
 

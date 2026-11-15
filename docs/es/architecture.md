@@ -548,6 +548,25 @@ Esto no es teórico. Una clase antigua compilada por el IDE que llevaba un `Erro
 compilation problem» hacía que toda petición de control MCP del SDK se colgara en silencio hasta que se
 amplió esta captura.
 
+### Peticiones de control canceladas
+
+El CLI puede abandonar una petición de control que envió, por ejemplo cuando se interrumpe un turno,
+enviando `control_cancel_request` con el mismo `request_id`. `QueryHandler` guarda cada handler que
+envía en un mapa indexado por `request_id`; el handler elimina su propia entrada al terminar, así que
+una cancelación que llega tarde, o que nombra un id desconocido, no hace nada. Ante una cancelación:
+
+1. cancela el `CompletableFuture` que devolvió el callback del usuario (hook, `canUseTool` o la
+   respuesta del servidor MCP del SDK), para que el código compuesto sobre él pueda detenerse. En una
+   llamada a una herramienta MCP del SDK, `SdkMcpServer` reacciona cancelando el `ToolCallContext` de
+   la llamada, igual que con `notifications/cancelled`;
+2. interrumpe el hilo del handler, lo que también alcanza a un callback que bloquea su propio hilo; y
+3. no escribe ninguna `control_response`: el CLI ya no la está esperando.
+
+Una petición termina exactamente de una forma, respondida o cancelada, y lo decide una única
+operación compare-and-set. Un handler que pierde la carrera descarta su respuesta, y una cancelación
+que la pierde no hace nada, así que una cancelación nunca interrumpe una respuesta a medio escribir en
+el stdin. Esto coincide con el SDK de Python, que cancela la tarea del handler y omite la respuesta.
+
 ### Ciclo de vida del stdin y el final de una ejecución
 
 > **El `controlExecutor` debe seguir siendo un hilo por tarea.** Una llamada a una herramienta MCP del

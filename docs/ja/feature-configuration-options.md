@@ -522,7 +522,10 @@ Claude Code CLI へのカスタムパス。
 .cliPath(Path.of("/custom/path/to/claude"))
 ```
 
-デフォルト：システムの PATH を検索します。
+デフォルト：CLI を探索します。POSIX では `PATH`、続いていくつかの一般的なインストール先を探します。
+Windows ではネイティブの `claude.exe` だけが、しかも絶対パスの `PATH` エントリ、続いて
+`~/.local/bin/claude.exe` からのみ見つかります。[トランスポート層 →
+Windows の CLI 探索](./feature-transport-layer.md#windowscli-の探索順序0121)を参照してください。
 
 **Windows**：`.bat`/`.cmd` のパス（npm の `claude.cmd` シム）は拒否されます — OS がそれを `cmd.exe` 経由で実行し、`cmd.exe` がコマンドラインを再解析するためです。`claude.exe` を指すか、下記の `allowUnsafeWindowsBatchCli()` を参照してください。
 
@@ -541,6 +544,10 @@ Claude Code CLI へのカスタムパス。
 2. **すべての CLI 引数で `& | < > ^ % ! "` と CR/LF を拒否し**、問題のあるオプション名を示す `IllegalArgumentException` をスローします。`%` と `!` は JDK のエスケープ対象に含まれておらず、クォートしても `%VAR%` の展開は止まりません。
 3. **受け入れたリスクを示す `WARNING` をログに出します**。
 
+このオプトインにより、`claude.exe` が存在しない場合に、CLI の探索が絶対パスの `PATH` エントリから npm の
+`claude.cmd` シム（または `claude.bat`）を返せるようにもなるため、`cliPath()` を未設定のままにできます。
+オプトインしない場合、探索がシムを返すことはありません。
+
 **残存リスク**：cmd.exe は依然として環境から `%VAR%` を展開します。CLI のパスとすべての引数値が管理者の管理下にある場合にのみ使用してください。POSIX では無視されます。[トランスポート層 → バッチ CLI のオプトイン](./feature-transport-layer.md#windowsバッチ-cli-のオプトイン0122)を参照してください。
 
 ### settings()
@@ -554,9 +561,16 @@ Claude Code CLI へのカスタムパス。
 
 `sandbox()` が無い場合、値はそのまま `--settings` に渡されます。`sandbox()` も設定されている場合は、
 両者が 1 つの JSON 文字列にマージされます。`{` で始まり `}` で終わる値は JSON として解析され、それ以外は
-ファイルパスとして読み込まれます（ファイルが存在しないか読めない場合はログに記録され、サンドボックスの
-設定だけが渡されます）。これらは CLI の「フラグ設定」レイヤーに読み込まれ、ユーザーが制御する設定の
-中で最も優先度が高くなります。
+ファイルパスとして読み込まれます。相対パスは、`cwd()` が設定されていれば CLI と同様にそれを基準に解決され、
+UTF-8 のバイトオーダーマークは取り除かれます。これらは CLI の「フラグ設定」レイヤーに読み込まれ、ユーザーが
+制御する設定の中で最も優先度が高くなります。
+
+設定をマージできない場合、`connect()` はサンドボックスの設定だけで CLI を起動するのではなく、
+`CLIConnectionException("Failed to load settings: ...")` で失敗します。サンドボックスの設定だけで起動すると、
+権限ルールやフックが黙って失われてしまうからです。対象となるのは、ファイルが存在しないか読めない場合、
+ディレクトリの場合、（インラインまたはファイル内の）JSON が不正な場合、オブジェクトではない JSON の場合、
+オブジェクトの後に内容が続く場合です。メッセージには JSON エラーの行と列が示されますが、秘密情報を含み
+うる設定のテキストそのものは決して引用されません。
 
 ### addDirs()
 
@@ -583,13 +597,16 @@ CLI プロセスの環境変数を設定します。
 ))
 ```
 
-この Map は親プロセスの環境の上にマージされます。ここでのエントリは継承した値を上書きし、継承した
-集合からは `CLAUDECODE` が取り除かれます。トランスポートは次の変数も設定します：
+この Map は親プロセスの環境の上にマージされます。ここでのエントリは継承した値を上書きします。継承した
+集合からは `CLAUDECODE` が取り除かれ、`CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP` は常に取り除かれます。外側の
+SDK セッションから継承したものは、そのセッションのアプリを指しているからです。トランスポートは次の変数も
+設定します：
 
 | 変数 | 設定される条件 | ここで上書き可能か |
 |----------|------|------------------|
 | `CLAUDE_CODE_ENTRYPOINT=sdk-java` | 常に | 可 |
 | `CLAUDE_AGENT_SDK_VERSION` | 常に | 不可 |
+| `CLAUDE_AGENT_SDK_CLIENT_APP` | `clientApp(...)` が設定されている（[clientApp()](#clientapp) を参照） | 不可：`clientApp()` が優先 |
 | `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` | この Map または継承した環境がすでにその名前を持つ場合（大文字小文字を問わず）を除く | 可 |
 | `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` | `enableFileCheckpointing(true)` | — |
 | `PWD` | `cwd(...)` が設定されている | — |
@@ -599,8 +616,22 @@ CLI プロセスの環境変数を設定します。
 調整できます（[アーキテクチャ → stdin のライフサイクル](./architecture.md#stdin-のライフサイクルと実行の終了)を参照）。
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` はターン間の待ち時間の上限です（既定 `600000`、`0` で無制限）。
 `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` を設定すると、CLI の `session_state_changed` フレームを
-受け取るようにオプトインできます。User-Agent ヘッダーであなたのアプリケーションを識別させるには、
-`CLAUDE_AGENT_SDK_CLIENT_APP`（例：`"my-app/1.0.0"`）を設定します。
+受け取るようにオプトインできます。
+
+### clientApp()
+
+API へのリクエストで送られる、あなたのアプリまたはライブラリの識別子。
+
+```java
+.clientApp("my-app/1.0.0")
+```
+
+CLI のサブプロセスに `CLAUDE_AGENT_SDK_CLIENT_APP` を設定します。`env()` や継承した環境にあるこの変数の値
+より優先されます。`""` を渡すと識別子を送りません。`null`（デフォルト）は環境をそのままにします。値は
+HTTP ヘッダーとして有効でなければなりません：U+00FF を超える文字があると、すべてのリクエストが止まります。
+
+Python SDK と異なり、この SDK がデフォルトの識別子を導出することはありません。Python が識別子を導出する
+のは wheel に同梱された CLI の場合だけで、この SDK は CLI を同梱していません。
 
 ### extraArgs()
 
@@ -674,6 +705,15 @@ HookMatcher.HookCallback beforeRead = (input, context) -> {
 
 コールバックは型付きの `HookInput` と `HookContext` を受け取り、`CompletableFuture<HookOutput>` を返します。
 入力、出力、フック固有の出力については[フック](./feature-hooks.md)を参照してください。
+
+マッチャーにはタイムアウトと `onFailure` ポリシーも設定できます。`HookOnFailure.BLOCK` を指定すると、
+失敗したコールバックはアクションを実行させずにブロックします：
+
+```java
+new HookMatcher("Bash", List.of(guard), null, HookOnFailure.BLOCK)
+```
+
+[フック → 失敗ポリシー](./feature-hooks.md#失敗ポリシーonfailure)を参照してください。
 
 **利用可能なイベント**：
 - `PRE_TOOL_USE` — ツール実行前
@@ -784,7 +824,9 @@ Claude Code は通常、プロンプトテキスト中の `@/absolute/path` を�
 ))
 ```
 
-**空のリストはすべてのソースを無効にします。** `List.of()` を渡すと CLI に `--setting-sources=`（空）が送られ、ファイルシステム上のあらゆる設定ソースが抑制されます。オプションを**完全に省略**した場合（デフォルト）は `--setting-sources` フラグ自体が付かず、CLI が独自のデフォルトを適用します。
+**空のリストはすべてのソースを無効にします。** `List.of()` を渡すと CLI に `--setting-sources=`（空）が送られ、ファイルシステム上のあらゆる設定ソースが抑制されます。オプションを**完全に省略**した場合（デフォルト）は `--setting-sources` フラグ自体が付かず、CLI が独自のデフォルトを適用し、すべてのソースが読み込まれます。
+
+ファイルシステム上の設定からセッションを隔離するには `List.of()` を使ってください。たとえば `cwd` が信頼できない可能性がある場合です：プロジェクトの設定はフックを実行できます。`CLAUDE.md` ファイルを読み込むには `SettingSource.PROJECT` を含めてください。
 
 ### skills() / skillsAll()
 

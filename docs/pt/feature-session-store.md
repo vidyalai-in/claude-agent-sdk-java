@@ -351,6 +351,11 @@ List<SessionMessage> subAgent =
 String spawnedBy = subAgent.get(0).parentToolUseId();
 ```
 
+`getSessionMessagesFromStore` reconstrói a conversa exatamente como o leitor local, inclusive um turno
+com chamadas de ferramenta paralelas, e os dois leitores de mensagens paginam com o offset primeiro
+(`limit` `null` ou `0` = sem limite); veja
+[Histórico de sessões → Como a conversa é reconstruída](./feature-session-history.md#como-a-conversa-é-reconstruída).
+
 `listSessionsFromStore` tem um caminho rápido quando o store implementa `listSessionSummaries`: uma
 chamada em lote de resumos mais uma enumeração barata de `listSessions` para preencher as lacunas de
 sessões com arquivos laterais ausentes ou desatualizados. Quando `listSessionSummaries` não está

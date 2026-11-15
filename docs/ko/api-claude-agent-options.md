@@ -82,18 +82,19 @@ options.toBuilder()
 
 ### 환경
 - `cwd(Path)` — 작업 디렉터리
-- `cliPath(Path)` — 사용자 지정 CLI 경로 (Windows의 `.bat`/`.cmd` 경로는 거부됩니다. 아래 참고)
-- `allowUnsafeWindowsBatchCli(boolean)` — Windows 배치 스크립트 거부를 해제합니다. 아울러 `-Djdk.lang.Process.allowAmbiguousCommands=false`가 필요하며, 모든 인자에서 cmd.exe 메타문자를 거부합니다(기본 `false`)
-- `settings(String)` — 설정 파일 경로 또는 인라인 JSON 문자열. `--settings`에 그대로 전달되며, 샌드박스가 설정된 경우에는 `sandbox`와 병합되어 하나의 JSON 문자열이 됩니다
+- `cliPath(Path)` — 사용자 지정 CLI 경로 (Windows의 `.bat`/`.cmd` 경로는 거부됩니다. 아래 참고). 지정하지 않으면 SDK가 CLI를 찾습니다. Windows에서는 `claude.exe`만 찾으며, 절대 경로인 `PATH` 항목을 먼저 살핀 뒤 `~/.local/bin/claude.exe`를 확인합니다
+- `allowUnsafeWindowsBatchCli(boolean)` — Windows 배치 스크립트 거부를 해제합니다. 아울러 `-Djdk.lang.Process.allowAmbiguousCommands=false`가 필요하며, 모든 인자에서 cmd.exe 메타문자를 거부합니다(기본 `false`). 또한 `claude.exe`가 없을 때 CLI 탐색이 `claude.cmd`/`claude.bat` 심(shim)을 반환할 수 있게 합니다
+- `settings(String)` — 설정 파일 경로 또는 인라인 JSON 문자열. `--settings`에 그대로 전달되며, 샌드박스가 설정된 경우에는 `sandbox`와 병합되어 하나의 JSON 문자열이 됩니다. 상대 경로는 `cwd`를 기준으로 해석되며, 이 병합을 위해 설정을 불러올 수 없으면 `connect()`가 `CLIConnectionException`으로 실패합니다
 - `addDirs(List<Path>)` — 추가 컨텍스트 디렉터리
-- `env(Map<String, String>)` — 환경 변수. 상속된 환경 위에 병합됩니다. SDK는 또한 `CLAUDE_CODE_ENTRYPOINT`(재정의 가능), `CLAUDE_AGENT_SDK_VERSION`을 설정하고, 이미 지정되어 있지 않으면 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`도 설정합니다. [env()](./feature-configuration-options.md#env)를 참고하세요
+- `env(Map<String, String>)` — 환경 변수. 상속된 환경 위에 병합됩니다. SDK는 또한 `CLAUDE_CODE_ENTRYPOINT`(재정의 가능), `CLAUDE_AGENT_SDK_VERSION`을 설정하고, 이미 지정되어 있지 않으면 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`도 설정하며, 상속된 `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP`은 제거합니다. [env()](./feature-configuration-options.md#env)를 참고하세요
+- `clientApp(String)` — 애플리케이션/라이브러리 식별자(예: `"my-app/1.0.0"`). API 요청에 `CLAUDE_AGENT_SDK_CLIENT_APP`으로 전송되며, `env`와 상속된 값보다 우선합니다. `""`이면 아무것도 보내지 않습니다. [clientApp()](./feature-configuration-options.md#clientapp)을 참고하세요
 - `extraArgs(Map<String, String>)` — 추가 CLI 플래그. 키에는 앞의 `--`를 붙이지 않으며, 값 없는 플래그는 빈 값으로 지정합니다
 
 ### 콜백
 - `stderrCallback(Consumer<String>)` — stderr 콜백
 
 ### 훅
-- `hooks(Map<HookEvent, List<HookMatcher>>)` — 훅 콜백
+- `hooks(Map<HookEvent, List<HookMatcher>>)` — 훅 콜백. `HookMatcher`에는 `timeoutSeconds`와 `onFailure` 정책(`HookOnFailure.CONTINUE` 또는 `BLOCK`)을 지정할 수 있습니다. [훅 → 실패 정책(`onFailure`)](./feature-hooks.md#실패-정책onfailure)을 참고하세요
 - `includeHookEvents(boolean)` — `true`이면 CLI가 훅 수명 주기 이벤트(`PreToolUse`, `PostToolUse`, `Stop` 등)를 `HookEventMessage` 객체로 메시지 스트림에 흘려보냅니다. `SessionStart`와 `Setup` 훅 이벤트는 이 설정과 상관없이 내보내집니다. `--include-hook-events`에 대응합니다. [훅 → 스트림의 훅 수명 주기 이벤트](./feature-hooks.md#스트림의-훅-수명-주기-이벤트)를 참고하세요.
 
 ### 고급
@@ -102,7 +103,7 @@ options.toBuilder()
 - `verbatimPrompts(boolean)` — SDK가 보내는 모든 사용자 메시지에 `client_composed` 표시를 붙여, Claude Code가 작성된 그대로 전달하게 합니다. `@path` 확장도, 슬래시 명령 디스패치도 일어나지 않습니다. 켜져 있는 동안에는 메시지별 값을 덮어씁니다. Claude Code 2.1.248 이상이 필요합니다(더 오래된 CLI에서는 SDK가 경고를 남깁니다). [verbatimPrompts()](./feature-configuration-options.md#verbatimprompts)를 참고하세요
 - `forwardSubagentText(boolean)` — `true`이면 서브에이전트의 텍스트 블록과 사고 블록이, 항상 전달되는 `tool_use` / `tool_result` 블록과 함께 메시지 스트림으로 전달됩니다. `initialize` 제어 요청으로 전송되며 CLI 플래그는 없습니다. [에이전트 → 서브에이전트 출력 관찰하기](./feature-agents.md#서브에이전트-출력-관찰하기)를 참고하세요.
 - `agents(Map<String, AgentDefinition>)` — 사용자 정의 에이전트
-- `settingSources(List<SettingSource>)` — 설정 출처(빈 목록은 `--setting-sources=`로 모든 출처를 비활성화하고, 생략하면 CLI 기본값을 유지합니다)
+- `settingSources(List<SettingSource>)` — 설정 출처(빈 목록은 `--setting-sources=`로 모든 출처를 비활성화하여 세션을 파일시스템 설정과 격리하고, 생략하면 모든 출처를 불러오는 CLI 기본값을 유지합니다)
 - `skills(List<String>)` — Skills 허용 목록(`allowedTools`에 `Skill(name)`을 자동 주입하고 `settingSources`를 user/project로 기본 설정합니다). 이름은 정확히 일치해야 하며, 와일드카드·규칙 구분자·앞뒤 공백은 `connect()`에서 `IllegalArgumentException`을 던집니다
 - `skillsAll()` — 발견된 모든 skill을 활성화합니다(맨 `Skill` 도구를 자동 주입)
 - `sandbox(SandboxSettings)` — bash 명령용 샌드박스 구성. `network` 키는 샌드박스 자체의 네트워크 격리를 구성합니다(도구 수준의 제한은 권한 규칙에 남습니다)

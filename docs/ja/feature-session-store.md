@@ -346,6 +346,11 @@ List<SessionMessage> subAgent =
 String spawnedBy = subAgent.get(0).parentToolUseId();
 ```
 
+`getSessionMessagesFromStore` は、並列のツール呼び出しを含むターンも含めて、ローカルの読み取り関数と
+まったく同じように会話を再構築します。また、どちらのメッセージ読み取り関数もオフセットを先に適用して
+ページングします（`limit` が `null` または `0` = 上限なし）。
+[セッション履歴 → 会話の再構築方法](./feature-session-history.md#会話の再構築方法)を参照してください。
+
 ストアが `listSessionSummaries` を実装している場合、`listSessionsFromStore` には高速経路があります。
 1 回のバッチ要約呼び出しと、安価な `listSessions` の列挙で、サイドカーが欠けていたり古かったりする
 セッションだけを埋め合わせます。`listSessionSummaries` が未実装のときは、セッションごとに 1 回の

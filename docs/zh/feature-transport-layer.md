@@ -41,7 +41,8 @@ Transport transport = new SubprocessCLITransport(options);
 - 带宽限期的优雅关闭（在 stdin EOF 之后、发送 SIGTERM 之前，等待子进程把会话文件刷盘）
 - 默认设置 `CLAUDE_CODE_ENTRYPOINT=sdk-java`（可通过 `ClaudeAgentOptions.env()` 覆盖）
 - 设置 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`（除非调用方的 `env()` 或继承的环境中已经出现该变量，不区分大小写），使 CLI 报告标记为 `sdk_host_only` 的 `session_state_changed` 帧；`QueryHandler` 读取这些帧来决定 stdin 何时可以关闭，并在它们到达消费者之前将其丢弃。参见[架构 → stdin 的生命周期](./architecture.md#stdin-的生命周期与一次运行的结束)。传输层设置的完整变量列表见[配置选项 → env()](./feature-configuration-options.md#env)。
-- 当 CLI 版本低于 2.0.0 时，以及开启了 `verbatimPrompts` 但 CLI 版本低于 2.1.248（它会忽略 `client_composed`）时，在连接时发出警告（记录 `WARNING` 日志）。版本检查会运行 `<cli> -v`，设置了 `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` 时跳过。
+- 从第一条 `system`/`init` 消息的 `claude_code_version` 字段检查 CLI 版本，每个传输只检查一次，因此 `cliPath` 只会为启动会话而被执行（不再有单独的 `<cli> -v` 探测）。当 CLI 没有报告版本时，它会记录一条 `WARNING`：低于 2.0.0 的版本以及最早的几个 2.0 版本都不会发送版本。当开启了 `verbatimPrompts` 而 CLI 版本低于 2.1.248（它会忽略 `client_composed`）或没有报告版本（显示为 `unknown`）时，它同样会发出警告。设置 `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` 可关闭该检查。
+- 同时设置了 `settings` 与 `sandbox` 时，把两者合并为一个 `--settings` 值；当设置无法加载时，让 `connect()` 以 `CLIConnectionException` 失败，而不是丢弃这些设置。参见[配置选项 → settings()](./feature-configuration-options.md#settings)。
 
 ### CLI 标志转发
 
@@ -95,7 +96,7 @@ Windows 没有 shebang 机制。当 CLI 路径指向 `.bat` 或 `.cmd` 文件时
 唯一稳健的补救措施** —— Node.js 针对这一漏洞类别（CVE-2024-27980，"BatBadBut"）也采用了同样的做法。
 
 `connect()` 会在用任何路径派生进程之前先校验解析出来的路径，因此该检查覆盖了通往可执行文件的每一条
-途径：PATH 发现、显式的 `ClaudeAgentOptions.cliPath(...)`，以及在主进程之前运行的版本探测。
+途径：PATH 发现以及显式的 `ClaudeAgentOptions.cliPath(...)`。
 
 ```java
 // On Windows, with cliPath pointing at npm's shim:
@@ -134,20 +135,26 @@ Claude Code，或者把 `cliPath` 指向某个 `claude.exe`。如果确实无法
 
 ### Windows：CLI 发现顺序（0.1.21）
 
-发现过程优先选择原生可执行文件，因为 Windows 上无扩展名的 `claude` 是一个 git-bash / WSL 包装脚本，
-操作系统无法直接运行它：
+在 Windows 上，发现过程只会找到原生的 `claude.exe`（自 0.2.5 起）。无扩展名的 `claude` 是一个
+git-bash / WSL 包装脚本，操作系统无法直接运行它；而 npm 的 `claude.cmd` 垫片会被 `connect()` 拒绝：
 
-1. 先在**整个** `PATH` 中搜寻 `claude.exe`。PATH 是按目录为主序遍历的，若无此步，早出现目录中的包装
-   脚本会遮蔽掉安装在后面目录里的真正 `claude.exe`。
-2. 否则回退到 `~/.local/bin/claude.exe`。在 Windows 上刻意**不**探测那些 POSIX 风格的位置：在那里
-   匹配到无扩展名的文件会用一个晦涩的派生失败抢在解释性拒绝之前；而且带根但无盘符的
-   `/usr/local/bin/claude` 会相对当前盘符解析 —— 那是另一个本地用户可以创建的位置，构成了植入二进制
-   的探测点。
-3. 否则，如果 `PATH` 上有 `claude.cmd` / `claude.bat` 垫片，就返回它 —— 这样做正是为了让
-   `connect()` 抛出批处理脚本拒绝*及其补救建议*，而不是一个干巴巴的"未找到"错误。
-4. 否则返回一个非原生的 `PATH` 命中，以便派生错误能指出实际安装的是什么。
-5. 否则抛出 `CLINotFoundException`，并附上指向原生安装器的 Windows 专用提示信息。它不会推荐
-   `npm install -g @anthropic-ai/claude-code`，因为那正好会产生本 SDK 所拒绝的那种垫片。
+1. 按顺序在每个**绝对路径的** `PATH` 条目中查找 `claude.exe`。相对条目（`""`、`.`、`tools`）会被跳过：
+   它们相对于工作目录解析，而工作目录可能由另一个本地用户控制，探测它们会带来植入二进制的风险。只探测
+   确切的文件名，不做 `PATHEXT` 解析，因此早出现目录中的垫片或包装脚本永远不会遮蔽后面目录里的
+   `claude.exe`。
+2. 否则回退到 `~/.local/bin/claude.exe`。在 Windows 上刻意**不**探测那些 POSIX 风格的位置：带根但无
+   盘符的 `/usr/local/bin/claude` 会相对当前盘符解析，这是另一个植入二进制的探测点；而且无扩展名的
+   匹配也无法运行。
+3. 否则，**仅在设置了 [`allowUnsafeWindowsBatchCli(true)`](#windows批处理-cli-选择开关0122) 时**，从某个
+   绝对路径的 `PATH` 条目中返回 `claude.cmd`，其次是 `claude.bat`，让接受了该风险的调用方保留自动发现。
+   Python SDK 没有这样的选择开关，也从不返回垫片。
+4. 否则抛出 `CLINotFoundException`，并附上指向原生安装器的 Windows 专用提示信息。它不会推荐
+   `npm install -g @anthropic-ai/claude-code`，因为那正好会产生本 SDK 所拒绝的那种垫片，并且提示信息中
+   会说明这一点。
+
+在 0.2.5 之前，发现过程还会搜索相对的 `PATH` 条目，并且在未开启选择开关时，会把 `claude.cmd` 垫片或
+包装脚本作为最后手段返回，于是 `connect()` 会因批处理脚本拒绝或派生错误而失败。这样的机器现在会在构建
+传输时得到 `CLINotFoundException`。通过 `cliPath(...)` 传入的路径会按原样使用，并且仍然要经过上文的拒绝检查。
 
 POSIX 的发现顺序保持不变：`PATH`，然后是 `~/.npm-global/bin`、`/usr/local/bin`、`~/.local/bin`、
 `~/node_modules/.bin`、`~/.yarn/bin`、`~/.claude/local`。

@@ -339,6 +339,10 @@ List<SessionMessage> subAgent =
 String spawnedBy = subAgent.get(0).parentToolUseId();
 ```
 
+`getSessionMessagesFromStore`는 병렬 도구 호출이 있는 턴을 포함해 로컬 읽기와 똑같이 대화를 재구성하며,
+두 메시지 읽기 방식 모두 오프셋부터 먼저 페이지를 나눕니다(`limit`이 `null`이나 `0`이면 제한 없음).
+[세션 히스토리 → 대화가 재구성되는 방식](./feature-session-history.md#대화가-재구성되는-방식)을 참고하세요.
+
 저장소가 `listSessionSummaries`를 구현하면 `listSessionsFromStore`에 빠른 경로가 있습니다. 한 번의 배치
 요약 호출과 값싼 `listSessions` 열거로, 사이드카가 없거나 오래된 세션만 메웁니다.
 `listSessionSummaries`가 구현되지 않았다면 세션마다 한 번의 `loadAsync()`로 물러나되, **동시 호출을

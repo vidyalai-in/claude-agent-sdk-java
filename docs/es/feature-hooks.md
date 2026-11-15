@@ -51,13 +51,15 @@ var options = ClaudeAgentOptions.builder()
 
 ```java
 record HookMatcher(
-    @Nullable String matcher,        // which tools/events to match; null matches all
-    List<HookCallback> hooks,        // callbacks to run
-    @Nullable Double timeoutSeconds  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable String matcher,         // which tools/events to match; null matches all
+    List<HookCallback> hooks,         // callbacks to run
+    @Nullable Double timeoutSeconds,  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable HookOnFailure onFailure // what a failing callback does; null = CONTINUE
 )
 
 new HookMatcher(List<HookCallback> hooks)                  // matcher = null
 new HookMatcher(String matcher, List<HookCallback> hooks)  // timeoutSeconds = null
+new HookMatcher(String matcher, List<HookCallback> hooks, Double timeoutSeconds)  // onFailure = null
 ```
 
 En los eventos de herramienta, `matcher` es un nombre de herramienta (`"Bash"`), varios nombres unidos
@@ -84,10 +86,54 @@ record HookContext(
 El SDK espera al future devuelto antes de responder al CLI. Devuelve
 `CompletableFuture.completedFuture(...)` para el trabajo síncrono.
 
+Un callback que lanza una excepción, devuelve un future que se completa de forma excepcional, se
+completa con `null` o devuelve un future `null` recibe como respuesta un error. Un callback sin
+opinión devuelve `HookOutput.empty()`, nunca `null`. Que un error deje seguir adelante la acción
+depende de la [política de fallo](#política-de-fallo-onfailure) del matcher.
+
+Si el CLI abandona la llamada al hook (envía un `control_cancel_request`, por ejemplo cuando se
+interrumpe el turno), el SDK cancela el future que devolvió el callback, interrumpe el hilo que lo
+espera y no envía ninguna respuesta. Un callback que bloquea su hilo ve una `InterruptedException`;
+uno que pasa el trabajo a otro hilo puede reaccionar al future cancelado.
+
 > **Orden de despacho:** cuando hay varios matchers registrados en el mismo evento, el CLI despacha
 > todos los callbacks de hook que encajan **de forma concurrente** (en paralelo), no secuencialmente.
 > Diseña cada hook para que sea independiente: no des por hecho que uno termina antes de que empiece
 > otro (por ejemplo, no encadenes hooks limitadores de tasa que presupongan un orden de bloqueo).
+
+### Política de fallo (`onFailure`)
+
+`HookOnFailure` decide qué efecto tiene un callback que falla sobre la acción para la que se le
+llamó:
+
+| Valor | Un callback que falla |
+|-------|-----------------------|
+| `CONTINUE` (y `null`, el valor por defecto) | cuenta como ausencia de decisión: la acción sigue adelante como si el hook no se hubiera ejecutado |
+| `BLOCK` | bloquea la acción |
+
+Un callback falla cuando recibe como respuesta un error (véase arriba) o devuelve un valor que el
+CLI rechaza, como un `permissionDecision` que no reconoce. Las claves no reconocidas no son un fallo.
+Usa `BLOCK` para una protección que no debe fallar en abierto:
+
+```java
+HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), null, HookOnFailure.BLOCK);
+```
+
+`Stop` y `SubagentStop` ignoran la opción. Un bloqueo en `PermissionRequest` solo cuenta si llega
+antes de que responda `canUseTool`.
+
+La política se envía en la petición initialize como `onFailure`. Cuando algún matcher usa `BLOCK`,
+`initialize()` (y por tanto `connect()`) comprueba la respuesta del CLI, y cierra el transporte y
+lanza `CLIConnectionException` cuando:
+
+- la respuesta no informa de `hook_on_failure_supported`: el CLI es demasiado antiguo para respetar
+  la política, así que la protección fallaría en abierto; o
+- la respuesta informa de `hooks_applied: false`: una sesión que ya estaba en ejecución no registró
+  los hooks, así que la protección nunca se ejecutaría.
+
+`CONTINUE` no necesita soporte del CLI, ya que es como se comporta de todos modos un CLI antiguo.
+`Hooks.java` usa `BLOCK` para su protección contra comandos peligrosos y muestra cómo gestionar el
+rechazo.
 
 ## Entradas de los hooks
 

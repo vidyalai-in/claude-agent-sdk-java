@@ -525,7 +525,10 @@ Claude Code CLI의 사용자 지정 경로입니다.
 .cliPath(Path.of("/custom/path/to/claude"))
 ```
 
-기본값: 시스템 PATH에서 찾습니다.
+기본값: CLI를 탐색합니다. POSIX에서는 `PATH`를 먼저 보고, 이어서 흔히 쓰이는 설치 위치 몇 곳을 확인합니다.
+Windows에서는 네이티브 `claude.exe`만 찾으며, 그것도 절대 경로인 `PATH` 항목에서만 찾은 뒤
+`~/.local/bin/claude.exe`를 확인합니다. [전송 계층 → Windows CLI 탐색](./feature-transport-layer.md#windows-cli-탐색-순서-0121)을
+참고하세요.
 
 **Windows**: `.bat`/`.cmd` 경로(npm의 `claude.cmd` 심)는 거부됩니다 — OS가 이를 `cmd.exe`로 실행하고, `cmd.exe`가 명령줄을 다시 파싱하기 때문입니다. `claude.exe`를 가리키거나 아래의 `allowUnsafeWindowsBatchCli()`를 참고하세요.
 
@@ -544,6 +547,10 @@ Claude Code CLI의 사용자 지정 경로입니다.
 2. **모든 CLI 인자에서 `& | < > ^ % ! "`와 CR/LF를 거부**하고, 문제가 된 옵션을 알려 주는 `IllegalArgumentException`을 던집니다. `%`와 `!`는 JDK의 이스케이프 대상에 없고, 따옴표로 감싸도 `%VAR%` 확장을 막지 못합니다.
 3. **감수한 위험을 알리는 `WARNING`을 기록**합니다.
 
+이 옵트인을 켜면 `claude.exe`가 없을 때 CLI 탐색이 절대 경로인 `PATH` 항목에서 npm의 `claude.cmd` 심
+(또는 `claude.bat`)을 반환할 수도 있으므로, `cliPath()`를 지정하지 않아도 됩니다. 옵트인하지 않으면 탐색은
+결코 심을 반환하지 않습니다.
+
 **남는 위험**: cmd.exe는 여전히 환경에서 `%VAR%`를 확장합니다. CLI 경로와 모든 인자 값이 관리자 통제 아래에 있는 곳에서만 사용하세요. POSIX에서는 무시됩니다. [전송 계층 → 배치 CLI 옵트인](./feature-transport-layer.md#windows-배치-cli-옵트인-0122)을 참고하세요.
 
 ### settings()
@@ -557,9 +564,16 @@ Claude Code CLI의 사용자 지정 경로입니다.
 
 `sandbox()`가 없으면 값은 `--settings`에 그대로 전달됩니다. `sandbox()`도 설정되어 있으면 두 값이
 하나의 JSON 문자열로 병합됩니다: `{`로 시작하고 `}`로 끝나는 값은 JSON으로 파싱되고, 그 밖의 값은
-파일 경로로 읽힙니다(파일이 없거나 읽을 수 없으면 로그를 남기고 샌드박스 설정만 전달합니다). 이 설정은
-CLI의 "플래그 설정(flag settings)" 계층으로 로드되며, 사용자가 제어하는 설정 중 우선순위가 가장
-높습니다.
+파일 경로로 읽힙니다. 상대 경로는 `cwd()`가 설정되어 있으면 CLI와 마찬가지로 그 디렉터리를 기준으로
+해석되며, UTF-8 바이트 순서 표시(BOM)는 제거됩니다. 이 설정은 CLI의 "플래그 설정(flag settings)" 계층으로
+로드되며, 사용자가 제어하는 설정 중 우선순위가 가장 높습니다.
+
+설정을 병합할 수 없으면 `connect()`는 샌드박스 설정만으로 CLI를 실행하는 대신
+`CLIConnectionException("Failed to load settings: ...")`으로 실패합니다. 샌드박스 설정만으로 실행하면
+권한 규칙과 훅이 소리 없이 빠지기 때문입니다. 파일이 없거나 읽을 수 없는 경우, 디렉터리인 경우, (인라인이든
+파일이든) JSON이 잘못된 경우, JSON이 객체가 아닌 경우, 객체 뒤에 내용이 더 있는 경우가 모두 해당합니다.
+메시지에는 JSON 오류의 줄과 열이 담기지만, 비밀 정보가 들어 있을 수 있는 설정 텍스트는 결코 인용하지
+않습니다.
 
 ### addDirs()
 
@@ -586,13 +600,15 @@ CLI 프로세스의 환경 변수를 설정합니다.
 ))
 ```
 
-이 Map은 부모 프로세스의 환경 위에 병합됩니다: 여기 지정한 항목이 상속된 값을 재정의하고,
-상속된 집합에서 `CLAUDECODE`는 제거됩니다. 전송 계층은 다음 변수도 설정합니다:
+이 Map은 부모 프로세스의 환경 위에 병합됩니다: 여기 지정한 항목이 상속된 값을 재정의합니다. 상속된
+집합에서 `CLAUDECODE`는 제거되고, `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP`은 항상 제거됩니다. 바깥쪽 SDK
+세션에서 상속된 값은 그 세션의 애플리케이션을 가리키기 때문입니다. 전송 계층은 다음 변수도 설정합니다:
 
 | 변수 | 설정 시점 | 여기서 재정의 가능 |
 |----------|------|------------------|
 | `CLAUDE_CODE_ENTRYPOINT=sdk-java` | 항상 | 예 |
 | `CLAUDE_AGENT_SDK_VERSION` | 항상 | 아니요 |
+| `CLAUDE_AGENT_SDK_CLIENT_APP` | `clientApp(...)`이 설정된 경우([clientApp()](#clientapp) 참고) | 아니요: `clientApp()`이 우선 |
 | `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` | 이 Map이나 상속된 환경에 (대소문자와 무관하게) 이미 이름이 있지 않은 경우 | 예 |
 | `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` | `enableFileCheckpointing(true)` | — |
 | `PWD` | `cwd(...)`가 설정된 경우 | — |
@@ -602,8 +618,22 @@ CLI 프로세스의 환경 변수를 설정합니다.
 조정합니다([아키텍처 → stdin 수명 주기](./architecture.md#stdin-수명-주기와-실행의-끝) 참고):
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`는 턴 사이의 대기 시간 상한을 정하고(기본값 `600000`,
 `0`이면 제한 없음), `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`은 CLI의 `session_state_changed`
-프레임을 받도록 옵트인합니다. User-Agent 헤더에서 애플리케이션을 식별하려면
-`CLAUDE_AGENT_SDK_CLIENT_APP`(예: `"my-app/1.0.0"`)을 설정하세요.
+프레임을 받도록 옵트인합니다.
+
+### clientApp()
+
+API 요청에 전송되는 애플리케이션 또는 라이브러리 식별자입니다.
+
+```java
+.clientApp("my-app/1.0.0")
+```
+
+CLI 하위 프로세스에 `CLAUDE_AGENT_SDK_CLIENT_APP`을 설정합니다. `env()`나 상속된 환경에 있는 같은 변수의
+값보다 우선합니다. 식별자를 보내지 않으려면 `""`를 넘기세요. `null`(기본값)은 환경을 그대로 둡니다. 값은
+HTTP 헤더에서 유효해야 합니다. U+00FF보다 큰 문자가 있으면 모든 요청이 멈춥니다.
+
+Python SDK와 달리 이 SDK는 기본 식별자를 결코 유도하지 않습니다. Python은 휠에 번들된 CLI에 대해서만
+식별자를 유도하는데, 이 SDK는 번들 CLI를 제공하지 않습니다.
 
 ### extraArgs()
 
@@ -677,6 +707,15 @@ HookMatcher.HookCallback beforeRead = (input, context) -> {
 
 콜백은 타입 지정된 `HookInput`과 `HookContext`를 받아 `CompletableFuture<HookOutput>`을 반환합니다. 입력,
 출력, 훅별 출력은 [훅](./feature-hooks.md)을 참고하세요.
+
+matcher에는 타임아웃과 `onFailure` 정책도 지정할 수 있습니다. `HookOnFailure.BLOCK`이면 실패한 콜백이
+동작을 실행시키는 대신 차단합니다:
+
+```java
+new HookMatcher("Bash", List.of(guard), null, HookOnFailure.BLOCK)
+```
+
+[훅 → 실패 정책(`onFailure`)](./feature-hooks.md#실패-정책onfailure)을 참고하세요.
 
 **사용 가능한 이벤트**:
 - `PRE_TOOL_USE` — 도구 실행 전
@@ -784,7 +823,9 @@ Claude Code는 보통 프롬프트 텍스트 안의 `@/absolute/path`를 그 파
 ))
 ```
 
-**빈 목록은 모든 소스를 끕니다.** `List.of()`를 넘기면 CLI에 `--setting-sources=`(빈 값)가 전달되어 파일 시스템의 모든 설정 소스가 억제됩니다. 옵션을 **완전히 생략하면**(기본값) `--setting-sources` 플래그 자체가 붙지 않고 CLI가 자체 기본값을 적용합니다.
+**빈 목록은 모든 소스를 끕니다.** `List.of()`를 넘기면 CLI에 `--setting-sources=`(빈 값)가 전달되어 파일 시스템의 모든 설정 소스가 억제됩니다. 옵션을 **완전히 생략하면**(기본값) `--setting-sources` 플래그 자체가 붙지 않고 CLI가 모든 소스를 불러오는 자체 기본값을 적용합니다.
+
+세션을 파일 시스템 설정과 격리하려면 `List.of()`를 쓰세요. 예를 들어 `cwd`를 신뢰할 수 없을 때가 그렇습니다. 프로젝트 설정은 훅을 실행할 수 있기 때문입니다. `CLAUDE.md` 파일을 불러오려면 `SettingSource.PROJECT`를 포함하세요.
 
 ### skills() / skillsAll()
 

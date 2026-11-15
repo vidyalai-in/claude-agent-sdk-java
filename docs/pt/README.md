@@ -597,6 +597,17 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+Por padrão, um hook que falha (lança uma exceção ou completa excepcionalmente) conta como
+ausência de decisão, então o comando seria executado. Para uma proteção que não pode falhar
+aberta, dê ao matcher a política `HookOnFailure.BLOCK`:
+
+```java
+HookMatcher bashMatcher = new HookMatcher("Bash", List.of(checkBashCommand), null, HookOnFailure.BLOCK);
+```
+
+Nesse caso, `connect()` lança `CLIConnectionException` se o CLI for antigo demais para
+respeitar a política. Veja [Hooks → Política de falha](../feature-hooks.md#failure-policy-onfailure).
+
 ### Exemplo: registrando todos os usos de ferramenta
 
 ```java
@@ -934,6 +945,12 @@ transmitida — apenas o tipo `human` é aceito vindo de um host do SDK. Um tipo
 este SDK modela deixa `kind()` como null, com a string do protocolo ainda legível em
 `kindValue()`, e nunca conta como humano.
 
+`origin()` diz o que iniciou um turno, não se ele responde ao seu prompt: um prompt enviado
+enquanto um turno injetado está em execução pode ser respondido dentro desse turno. Para
+encontrar o resultado de um prompt, envie-o com um `uuid` de nível superior novo e procure esse
+uuid em `result.userMessageUuid()` ou `result.userMessageUuids()`. Veja
+[Tipos de mensagem → Associando um resultado ao seu prompt](../feature-message-types.md#matching-a-result-to-your-prompt).
+
 ### Blocos de conteúdo
 
 ```java
@@ -1146,6 +1163,8 @@ Veja o módulo `examples/` para exemplos completos e funcionais:
 - `LargeAgentsExample.java` — definições grandes de agente (260KB+) via requisição initialize
 - `SystemPromptExample.java` — uso de prompt de sistema personalizado
 - `IncludePartialMessagesExample.java` — streaming com atualizações de mensagens parciais
+- `MessageOriginExample.java` — origem das mensagens, associação de um resultado ao seu prompt pelo uuid e resets de conversa
+- `ParallelToolSessionReadsExample.java` — leitura de um turno com chamadas de ferramenta paralelas, verificada contra o CLI real
 
 ### Executando os exemplos
 

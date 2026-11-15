@@ -511,7 +511,9 @@ Claude Code CLI 的自定义路径。
 .cliPath(Path.of("/custom/path/to/claude"))
 ```
 
-默认：在系统 PATH 中搜索。
+默认：自动搜索 CLI。在 POSIX 上依次搜索 `PATH` 和几个常见的安装位置。在 Windows 上只会找到原生的
+`claude.exe`，且只在绝对路径的 `PATH` 条目中查找，然后是 `~/.local/bin/claude.exe`；参见[传输层 →
+Windows CLI 发现顺序](./feature-transport-layer.md#windowscli-发现顺序0121)。
 
 **Windows**：`.bat`/`.cmd` 路径（npm 的 `claude.cmd` 垫片）会被拒绝 —— 操作系统会通过 `cmd.exe` 运行它，而 `cmd.exe` 会重新解析命令行。请指向 `claude.exe`，或参见下面的 `allowUnsafeWindowsBatchCli()`。
 
@@ -530,6 +532,9 @@ Claude Code CLI 的自定义路径。
 2. **拒绝每个 CLI 参数中的 `& | < > ^ % ! "` 以及 CR/LF**，抛出 `IllegalArgumentException` 并指明违规的选项。`%` 和 `!` 不在 JDK 的转义集合中，而且加引号也挡不住 `%VAR%` 展开。
 3. **记录一条 `WARNING`**，说明已接受的风险。
 
+该选择开关还允许 CLI 发现在不存在 `claude.exe` 时，从某个绝对路径的 `PATH` 条目返回 npm 的 `claude.cmd`
+垫片（或 `claude.bat`），这样就可以不设置 `cliPath()`。未开启时，发现过程永远不会返回垫片。
+
 **残余风险**：cmd.exe 仍会从环境变量展开 `%VAR%`。仅在 CLI 路径和每个参数值都由管理员控制的场景下使用。在 POSIX 上会被忽略。参见[传输层 → 批处理 CLI 选择开关](./feature-transport-layer.md#windows批处理-cli-选择开关0122)。
 
 ### settings()
@@ -541,7 +546,9 @@ Claude Code CLI 的自定义路径。
 .settings("{\"permissions\": {\"allow\": [\"Read\"]}}")
 ```
 
-未设置 `sandbox()` 时，该值会原样传给 `--settings`。同时设置了 `sandbox()` 时，两者会合并为一个 JSON 字符串：以 `{` 开头并以 `}` 结尾的值按 JSON 解析，其他值按文件路径读取（文件不存在或无法读取时会记录日志，并且只传递沙箱设置）。这些设置会加载到 CLI 的"标志设置"（flag settings）层，它在用户可控的设置中优先级最高。
+未设置 `sandbox()` 时，该值会原样传给 `--settings`。同时设置了 `sandbox()` 时，两者会合并为一个 JSON 字符串：以 `{` 开头并以 `}` 结尾的值按 JSON 解析，其他值按文件路径读取。设置了 `cwd()` 时，相对路径会相对于它解析（与 CLI 的解析方式一致），并且会去掉 UTF-8 字节顺序标记（BOM）。这些设置会加载到 CLI 的"标志设置"（flag settings）层，它在用户可控的设置中优先级最高。
+
+当设置无法合并时，`connect()` 会以 `CLIConnectionException("Failed to load settings: ...")` 失败，而不是只带着沙箱设置启动 CLI —— 那样会悄无声息地丢掉你的权限规则和钩子。这涵盖了以下情况：文件不存在或无法读取、路径是目录、JSON 无效（无论是内联的还是文件中的）、JSON 不是对象，以及对象之后还有多余内容。错误消息会给出 JSON 错误所在的行和列，但从不引用设置文本，因为其中可能包含机密信息。
 
 ### addDirs()
 
@@ -568,18 +575,31 @@ Claude Code CLI 的自定义路径。
 ))
 ```
 
-该 map 会合并到父进程的环境之上：这里的条目覆盖继承来的值，并且会从继承的变量集中去掉 `CLAUDECODE`。传输层还会设置：
+该 map 会合并到父进程的环境之上：这里的条目覆盖继承来的值。`CLAUDECODE` 会从继承的变量集中去掉，`CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP` 则总是会被去掉，因为从外层 SDK 会话继承来的该变量指向的是那个会话的应用。传输层还会设置：
 
 | 变量 | 何时设置 | 能否在此覆盖 |
 |----------|------|------------------|
 | `CLAUDE_CODE_ENTRYPOINT=sdk-java` | 始终 | 能 |
 | `CLAUDE_AGENT_SDK_VERSION` | 始终 | 不能 |
+| `CLAUDE_AGENT_SDK_CLIENT_APP` | 设置了 `clientApp(...)`（参见 [clientApp()](#clientapp)） | 不能：`clientApp()` 优先 |
 | `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` | 除非此 map 或继承的环境中已经出现该变量（不区分大小写） | 能 |
 | `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` | `enableFileCheckpointing(true)` | — |
 | `PWD` | 设置了 `cwd(...)` | — |
 | `TRACEPARENT` / `TRACESTATE` | 存在活动的 OpenTelemetry span（参见 [Trace Context](./feature-trace-context.md)） | 能 |
 
-这里有两个变量用于调节一次性查询为钩子和 SDK MCP 调用保持 stdin 打开的时长（参见[架构 → stdin 的生命周期](./architecture.md#stdin-的生命周期与一次运行的结束)）：`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` 限定轮次之间的等待时间（默认 `600000`，`0` 表示不限制），`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` 则让你选择接收 CLI 的 `session_state_changed` 帧。设置 `CLAUDE_AGENT_SDK_CLIENT_APP`（例如 `"my-app/1.0.0"`）可以在 User-Agent 头中标识你的应用。
+这里有两个变量用于调节一次性查询为钩子和 SDK MCP 调用保持 stdin 打开的时长（参见[架构 → stdin 的生命周期](./architecture.md#stdin-的生命周期与一次运行的结束)）：`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` 限定轮次之间的等待时间（默认 `600000`，`0` 表示不限制），`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` 则让你选择接收 CLI 的 `session_state_changed` 帧。
+
+### clientApp()
+
+你的应用或库的标识符，会随发往 API 的请求一起发送。
+
+```java
+.clientApp("my-app/1.0.0")
+```
+
+为 CLI 子进程设置 `CLAUDE_AGENT_SDK_CLIENT_APP`。它优先于 `env()` 或继承环境中该变量的值。传入 `""` 表示不发送任何标识符；`null`（默认值）则保持环境不变。该值必须是合法的 HTTP 头取值：任何高于 U+00FF 的字符都会让所有请求失败。
+
+与 Python SDK 不同，本 SDK 从不推导默认标识符。Python 只会为其 wheel 中捆绑的 CLI 推导一个，而本 SDK 并不捆绑 CLI。
 
 ### extraArgs()
 
@@ -651,6 +671,14 @@ HookMatcher.HookCallback beforeRead = (input, context) -> {
 
 回调接收类型化的 `HookInput` 和一个 `HookContext`，并返回 `CompletableFuture<HookOutput>`。
 输入、输出以及钩子专属输出详见[钩子](./feature-hooks.md)。
+
+matcher 还可以设置超时和 `onFailure` 策略。使用 `HookOnFailure.BLOCK` 时，失败的回调会阻止该操作，而不是让它继续执行：
+
+```java
+new HookMatcher("Bash", List.of(guard), null, HookOnFailure.BLOCK)
+```
+
+参见[钩子 → 失败策略](./feature-hooks.md#失败策略onfailure)。
 
 **可用事件**：
 - `PRE_TOOL_USE` —— 工具执行前
@@ -745,7 +773,9 @@ Claude Code 通常会把提示词文本中的 `@/absolute/path` 展开为该文�
 ))
 ```
 
-**空列表会禁用所有来源。** 传入 `List.of()` 会向 CLI 发送 `--setting-sources=`（空值），从而抑制所有文件系统设置来源。而当**完全省略**该选项时（默认行为），不会添加 `--setting-sources` 标志，CLI 会应用自己的默认值。
+**空列表会禁用所有来源。** 传入 `List.of()` 会向 CLI 发送 `--setting-sources=`（空值），从而抑制所有文件系统设置来源。而当**完全省略**该选项时（默认行为），不会添加 `--setting-sources` 标志，CLI 会应用自己的默认值，即加载所有来源。
+
+使用 `List.of()` 可以把会话与文件系统设置隔离开，例如当 `cwd` 可能不受信任时：项目设置可以运行钩子。如需加载 `CLAUDE.md` 文件，请包含 `SettingSource.PROJECT`。
 
 ### skills() / skillsAll()
 

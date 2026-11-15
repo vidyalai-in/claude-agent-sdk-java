@@ -80,6 +80,34 @@ record SessionMessage(
 Só são devolvidas as mensagens de conversa de nível superior — mensagens laterais de uso de
 ferramenta, mensagens meta e mensagens de subagentes são filtradas.
 
+### Como a conversa é reconstruída
+
+Uma transcrição é uma árvore: cada entrada nomeia sua mãe em `parentUuid`, e uma conversa retomada ou
+editada deixa ramificações. `getSessionMessages()` e `getSessionMessagesFromStore()` reconstroem a
+conversa da mesma forma, igual ao SDK Python:
+
+1. **Escolher a folha.** Cada entrada para a qual nenhuma outra aponta é percorrida para trás até a
+   entrada de usuário ou de assistente mais próxima, que se torna uma folha candidata. Vence a
+   candidata mais recente da cadeia principal (que não seja uma entrada lateral, meta ou de equipe).
+   Só quando não há nenhuma vence a candidata mais recente de qualquer tipo. As flags `isSidechain`,
+   `isMeta` e `teamName` são lidas como o Python avalia valores verdadeiros, então um `teamName` vazio
+   significa nenhuma equipe.
+2. **Percorrer para trás** da folha, por `parentUuid`, até a raiz. Uma entrada cujo `uuid` não é uma
+   string é ignorada, e um `parentUuid` que não é uma string não vazia conta como ausência de mãe.
+3. **Recolocar as chamadas de ferramenta paralelas.** O CLI grava uma resposta com várias chamadas de
+   ferramenta paralelas como uma entrada de assistente por chamada, compartilhando `message.id`, e
+   grava cada resultado sob a entrada da sua própria chamada. A transcrição se bifurca nesse ponto, e
+   o percurso mantém só o ramo do qual o turno seguinte continuou. As chamadas e os resultados que ele
+   pulou são recolocados logo depois da última entrada da resposta na cadeia: as chamadas em ordem de
+   timestamp e depois os resultados na ordem em que terminaram. Um resultado é associado à sua
+   chamada pela mãe, por `sourceToolAssistantUUID` ou por `tool_use_id`, nunca entre agentes
+   diferentes, e nunca uma segunda vez para uma chamada que a cadeia já responde.
+
+Assim, um turno com chamadas de ferramenta paralelas é lido por inteiro: todas as chamadas, e cada
+resultado depois da sua chamada. `ParallelToolSessionReadsExample` executa um turno assim contra o
+CLI real e verifica os dois leitores. Transcrições de subagentes são lineares e não precisam de nada
+disso.
+
 `parentToolUseId` e `parentAgentId` são sempre nulos nos resultados de `getSessionMessages()` /
 `getSessionMessagesFromStore()`. Eles são preenchidos em `getSubagentMessages()` /
 `getSubagentMessagesFromStore()`: `parentToolUseId` é o id do bloco `tool_use` do Agent na sessão pai
@@ -218,6 +246,11 @@ List<SessionMessage> page = ClaudeSDK.getSessionMessages(
     20       // offset
 );
 ```
+
+A paginação é aplicada à conversa reconstruída, com o offset primeiro: o resultado são as mensagens
+de `offset` a `offset + limit - 1`. Um `limit` `null`, `0` ou negativo significa sem limite. Todos
+os leitores de sessão e de subagente, em disco e a partir de um `SessionStore`, paginam dessa forma,
+e as mensagens recolocadas de um turno com ferramentas paralelas contam para o limite.
 
 ## Renomeando sessões
 

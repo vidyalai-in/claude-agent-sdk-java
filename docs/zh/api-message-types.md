@@ -66,7 +66,9 @@ record AssistantMessage(
     @Nullable String messageId,                   // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,                  // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,                   // Session ID this message belongs to
-    @Nullable String uuid                         // Unique identifier in the session transcript
+    @Nullable String uuid,                        // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,             // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids       // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
@@ -80,6 +82,10 @@ record AssistantMessage(
 new AssistantMessage(content, model, parentToolUseId, error)  // usage and all later fields default to null
 new AssistantMessage(content, model, parentToolUseId, error, usage)  // messageId and later fields default to null
 ```
+
+不含 `userMessageUuid` 与 `userMessageUuids` 的 9 参数构造函数也被保留。这两个字段只会在其值被设置或
+发生变化后的第一条顶层助手消息上设置（这可能发生在某一轮的中途），在其他所有消息上都为 null。参见
+[将结果与你的提示词对应起来](#将结果与你的提示词对应起来)。
 
 ### AssistantMessageError
 
@@ -173,7 +179,9 @@ record ResultMessage(
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
     @Nullable String terminalReason,              // Why the query loop terminated
-    @Nullable MessageOrigin origin                // Origin of the triggering user message
+    @Nullable MessageOrigin origin,               // What started the turn
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message {
     String type();  // Returns "result"
 }
@@ -188,10 +196,18 @@ record ResultMessage(
 错误的值不应让调用方丢掉整个 result。
 
 对于不需要较新字段的代码，也提供了向后兼容的构造函数。最初的 11 参数构造函数（不含 `modelUsage`、
-`permissionDenials`、`deferredToolUse`、`errors`、`apiErrorStatus`、`uuid`、`terminalReason` 与
-`origin`）仍然可用；针对更早形状编写的调用方还可使用 15 参数（不含 `deferredToolUse`、
-`apiErrorStatus`、`terminalReason`、`origin`）、17 参数（不含 `terminalReason`、`origin`）以及
-18 参数（不含 `origin`）的重载。
+`permissionDenials`、`deferredToolUse`、`errors`、`apiErrorStatus`、`uuid`、`terminalReason`、
+`origin`、`userMessageUuid` 与 `userMessageUuids`）仍然可用；针对更早形状编写的调用方还可使用
+15 参数（不含 `deferredToolUse`、`apiErrorStatus`、`terminalReason` 及之后的字段）、17 参数（不含
+`terminalReason` 及之后的字段）、18 参数（不含 `origin` 及之后的字段）以及 19 参数（不含
+`userMessageUuid` 与 `userMessageUuids`）的重载。
+
+### userMessageUuid 与 userMessageUuids
+
+- **`userMessageUuid`** 是启动本轮的那条用户消息的 `uuid`（如果有多条消息被合并来启动本轮，则取最后一条）。在注入的轮次上，它是该轮运行期间接收的最后一条用户消息。
+- **`userMessageUuids`** 按顺序列出本轮接收的每条用户消息的 `uuid`：先是启动本轮的那些消息，然后是本轮运行期间发送的消息。CLI 最多列出 64 个，因此某个 uuid 不在一个已满的列表中，并不代表它没有被接收。在被中断的轮次上它可能为空列表，这与 `null` 是不同的。
+
+两者只涵盖以 map 形式发送、且带有顶层 `uuid` 字符串的消息；以纯字符串传入的提示词没有 uuid。每条消息都要使用新的 uuid，因为 CLI 可能会跳过 uuid 已见过的消息。当本轮没有接收任何此类消息时，以及在较旧的 CLI 上，两者均为 null；在某些错误结果上，以及在只报告 `userMessageUuid` 的 CLI 上，`userMessageUuids` 也为 null。它们在错误结果上同样会被设置，因此在认定你的提示词已得到回答之前，请先检查 `isError` 和 `terminalReason`。列表中的非字符串条目会被丢弃，而不会导致整个帧解析失败。参见[将结果与你的提示词对应起来](#将结果与你的提示词对应起来)。
 
 ### terminalReason
 
@@ -273,12 +289,17 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "stream_event"
     @Nullable String eventType(); // Returns event.get("type"), or null
 }
 ```
+
+4 参数构造函数被保留。`userMessageUuid` 与 `userMessageUuids` 只会在其值被设置或发生变化后的第一个
+顶层非 ping 事件上设置，在其他所有事件上都为 null。
 
 ## 内容块
 
@@ -515,7 +536,7 @@ record MessageOrigin(
 ```
 
 在流式输入模式下，同一个连接会把你的应用发送的轮次与会话自行注入的轮次交织在一起 —— 后台任务通知、
-被触发的定时任务提示词、MCP 通道消息、从对等会话转发来的消息。`origin` 可以区分它们：
+被触发的定时任务提示词、MCP 通道消息、从对等会话转发来的消息。`origin` 告诉你是什么启动了一个轮次：
 
 ```java
 MessageOrigin origin = result.origin();
@@ -525,6 +546,25 @@ if (origin == null || origin.isHuman()) {
     // follow-up turn driven by a background task
 }
 ```
+
+它并不能告诉你某个结果是否涵盖了*你的*提示词：在一个注入的轮次运行期间发送的提示词，可能会在该轮次内
+得到回答，此时结果携带的是那个注入轮次的 origin。要找到某个提示词对应的结果，请匹配它的 uuid（见下一节）。
+
+### 将结果与你的提示词对应起来
+
+通过 `ClaudeSDKClient.query(Iterator)`，把每个提示词作为带有新的顶层 `uuid` 的消息 map 发送，然后在结果上
+查找该 uuid：
+
+```java
+List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+    // this turn took in the prompt sent with myUuid
+}
+```
+
+请用 `receiveMessages()` 读取：`receiveResponse()` 会在第一个结果处停止，而那个结果可能属于某个注入的轮次。
+以纯字符串发送的提示词不携带 uuid；对于这类提示词，`origin` 为 null 或 `HUMAN` 只能作为尽力而为的判断。
+`MessageOriginExample` 以这种方式发送一个提示词，并在结果上检查它的 uuid。
 
 `origin` 为 null 表示 CLI 未标注该消息的来源。通过 `ClaudeSDK.query()` 或
 `ClaudeSDKClient.query(String)` 发送的提示词就是这样到达的，除非你自己通过

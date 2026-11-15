@@ -44,6 +44,9 @@ stdin 以流的方式发送，因此承载权限请求的控制协议在那里�
 })
 ```
 
+如果 CLI 在回调作答之前放弃了该权限请求（它会发送一条 `control_cancel_request`，例如在轮次被中断时），
+SDK 会取消回调返回的 future，中断正在等待它的线程，并且不发送任何答复。
+
 > **`canUseTool` 仅在 `"ask"` 决策时触发。** 该回调是 SDK 对交互式权限提示的替代 —— 只有当 CLI 的
 > 权限规则求值为 `"ask"` 时它才会运行。对于已经被 `allowedTools`、`permissionMode`（例如
 > `ACCEPT_EDITS`、`BYPASS_PERMISSIONS`）或设置中的 `permissions.allow` 规则放行的工具调用，它

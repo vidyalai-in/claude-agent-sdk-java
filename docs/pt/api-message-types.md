@@ -69,7 +69,9 @@ record AssistantMessage(
     @Nullable String messageId,                   // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,                  // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,                   // Session ID this message belongs to
-    @Nullable String uuid                         // Unique identifier in the session transcript
+    @Nullable String uuid,                        // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,             // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids       // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
@@ -83,6 +85,11 @@ Também há construtores compatíveis para código que não precisa dos campos m
 new AssistantMessage(content, model, parentToolUseId, error)  // usage and all later fields default to null
 new AssistantMessage(content, model, parentToolUseId, error, usage)  // messageId and later fields default to null
 ```
+
+O construtor de 9 parâmetros (sem `userMessageUuid` e `userMessageUuids`) também é mantido. Os dois
+campos são preenchidos apenas na primeira mensagem de assistente de nível superior depois que o valor
+é definido ou muda, o que pode acontecer no meio de um turno, e são nulos em todas as demais. Veja
+[Associando um resultado ao seu prompt](#associando-um-resultado-ao-seu-prompt).
 
 ### AssistantMessageError
 
@@ -178,7 +185,9 @@ record ResultMessage(
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
     @Nullable String terminalReason,              // Why the query loop terminated
-    @Nullable MessageOrigin origin                // Origin of the triggering user message
+    @Nullable MessageOrigin origin,               // What started the turn
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message {
     String type();  // Returns "result"
 }
@@ -196,10 +205,30 @@ valor malformado não pode custar ao chamador o resultado inteiro.
 
 Também há construtores compatíveis para código que não precisa dos campos mais novos. O construtor
 original de 11 parâmetros (sem `modelUsage`, `permissionDenials`, `deferredToolUse`, `errors`,
-`apiErrorStatus`, `uuid`, `terminalReason` e `origin`) continua funcionando; sobrecargas de 15
-parâmetros (sem `deferredToolUse`, `apiErrorStatus`, `terminalReason`, `origin`), 17 parâmetros (sem
-`terminalReason`, `origin`) e 18 parâmetros (sem `origin`) também estão disponíveis para quem escreveu
-contra formatos anteriores.
+`apiErrorStatus`, `uuid`, `terminalReason`, `origin`, `userMessageUuid` e `userMessageUuids`)
+continua funcionando; sobrecargas de 15 parâmetros (sem `deferredToolUse`, `apiErrorStatus`,
+`terminalReason` e os seguintes), 17 parâmetros (sem `terminalReason` e os seguintes), 18 parâmetros
+(sem `origin` e os seguintes) e 19 parâmetros (sem `userMessageUuid` e `userMessageUuids`) também
+estão disponíveis para quem escreveu contra formatos anteriores.
+
+### userMessageUuid e userMessageUuids
+
+- **`userMessageUuid`** é o `uuid` da mensagem de usuário que iniciou este turno (a última, se várias
+  foram mescladas para iniciá-lo). Em um turno injetado, é a última mensagem de usuário recebida
+  enquanto o turno estava em execução.
+- **`userMessageUuids`** lista o `uuid` de toda mensagem de usuário que o turno recebeu, em ordem: as
+  que o iniciaram e depois as enviadas enquanto ele estava em execução. O CLI lista no máximo 64,
+  então um uuid ausente de uma lista cheia ainda pode ter sido recebido. A lista pode ser vazia em um
+  turno interrompido, o que continua sendo diferente de `null`.
+
+Ambos cobrem apenas mensagens enviadas como mapas com uma string `uuid` de nível superior; prompts
+passados como string simples não têm uuid. Use um uuid novo para cada mensagem, pois o CLI pode
+ignorar uma cujo uuid já tenha visto. Ambos são nulos quando o turno não recebeu nenhuma mensagem
+desse tipo, e em CLIs mais antigos; `userMessageUuids` também é nulo em alguns resultados de erro e em
+CLIs que informam apenas `userMessageUuid`. Eles também são preenchidos em resultados de erro, então
+verifique `isError` e `terminalReason` antes de considerar seu prompt respondido. Entradas da lista
+que não são strings são descartadas em vez de invalidar o quadro. Veja
+[Associando um resultado ao seu prompt](#associando-um-resultado-ao-seu-prompt).
 
 ### terminalReason
 
@@ -289,12 +318,18 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "stream_event"
     @Nullable String eventType(); // Returns event.get("type"), or null
 }
 ```
+
+O construtor de 4 parâmetros é mantido. `userMessageUuid` e `userMessageUuids` são preenchidos apenas
+no primeiro evento de nível superior que não seja ping depois que o valor é definido ou muda, e são
+nulos em todos os demais.
 
 ## Blocos de conteúdo
 
@@ -545,7 +580,7 @@ record MessageOrigin(
 No modo de entrada por streaming, uma conexão intercala os turnos que sua aplicação envia com os
 turnos que a sessão injeta por conta própria — notificações de tarefas em segundo plano, prompts de
 tarefas agendadas que dispararam, mensagens de canais MCP, mensagens repassadas de sessões pares. O
-`origin` os diferencia:
+`origin` diz o que iniciou um turno:
 
 ```java
 MessageOrigin origin = result.origin();
@@ -555,6 +590,27 @@ if (origin == null || origin.isHuman()) {
     // follow-up turn driven by a background task
 }
 ```
+
+Ele não diz se um resultado cobre o *seu* prompt: um prompt enviado enquanto um turno injetado está em
+execução pode ser respondido dentro desse turno, e o resultado então carrega a origem do turno
+injetado. Para encontrar o resultado de um prompt, compare o uuid dele (próxima seção).
+
+### Associando um resultado ao seu prompt
+
+Envie cada prompt como um mapa de mensagem com um `uuid` de nível superior novo por meio de
+`ClaudeSDKClient.query(Iterator)` e procure esse uuid nos resultados:
+
+```java
+List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+    // this turn took in the prompt sent with myUuid
+}
+```
+
+Leia com `receiveMessages()`: `receiveResponse()` para no primeiro resultado, que pode ser o de um
+turno injetado. Prompts enviados como string simples não carregam uuid; para eles, um `origin` nulo
+ou `HUMAN` é apenas uma aproximação. `MessageOriginExample` envia um prompt dessa forma e verifica
+seu uuid no resultado.
 
 Um `origin` nulo significa que o CLI não atribuiu a mensagem. Prompts enviados por
 `ClaudeSDK.query()` ou `ClaudeSDKClient.query(String)` chegam assim, a menos que você mesmo marque

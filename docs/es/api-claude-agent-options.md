@@ -82,18 +82,19 @@ options.toBuilder()
 
 ### Entorno
 - `cwd(Path)`: directorio de trabajo
-- `cliPath(Path)`: ruta personalizada del CLI (una ruta `.bat`/`.cmd` de Windows se rechaza; véase más abajo)
-- `allowUnsafeWindowsBatchCli(boolean)`: renuncia al rechazo de scripts batch en Windows; además exige `-Djdk.lang.Process.allowAmbiguousCommands=false` y rechaza los metacaracteres de cmd.exe en todos los argumentos (por defecto `false`)
-- `settings(String)`: ruta del archivo de ajustes o cadena JSON en línea; se pasa tal cual a `--settings`, o se fusiona con `sandbox` en una única cadena JSON cuando hay un sandbox definido
+- `cliPath(Path)`: ruta personalizada del CLI (una ruta `.bat`/`.cmd` de Windows se rechaza; véase más abajo). Si no se define, el SDK busca el CLI; en Windows solo encuentra `claude.exe`, en las entradas absolutas del `PATH` y después en `~/.local/bin/claude.exe`
+- `allowUnsafeWindowsBatchCli(boolean)`: renuncia al rechazo de scripts batch en Windows; además exige `-Djdk.lang.Process.allowAmbiguousCommands=false` y rechaza los metacaracteres de cmd.exe en todos los argumentos (por defecto `false`). También permite que el descubrimiento del CLI devuelva un shim `claude.cmd`/`claude.bat` cuando no existe ningún `claude.exe`
+- `settings(String)`: ruta del archivo de ajustes o cadena JSON en línea; se pasa tal cual a `--settings`, o se fusiona con `sandbox` en una única cadena JSON cuando hay un sandbox definido. Una ruta relativa se resuelve respecto a `cwd`; si los ajustes no se pueden cargar para esa fusión, `connect()` falla con `CLIConnectionException`
 - `addDirs(List<Path>)`: directorios de contexto adicionales
-- `env(Map<String, String>)`: variables de entorno, fusionadas sobre el entorno heredado. El SDK también establece `CLAUDE_CODE_ENTRYPOINT` (sobrescribible), `CLAUDE_AGENT_SDK_VERSION` y `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` salvo que ya estén nombradas; consulta [env()](./feature-configuration-options.md#env)
+- `env(Map<String, String>)`: variables de entorno, fusionadas sobre el entorno heredado. El SDK también establece `CLAUDE_CODE_ENTRYPOINT` (sobrescribible), `CLAUDE_AGENT_SDK_VERSION` y `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` salvo que ya estén nombradas, y descarta un `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP` heredado; consulta [env()](./feature-configuration-options.md#env)
+- `clientApp(String)`: identificador de tu aplicación o biblioteca (por ejemplo, `"my-app/1.0.0"`), enviado en las peticiones a la API como `CLAUDE_AGENT_SDK_CLIENT_APP`; prevalece sobre `env` y sobre el valor heredado, y `""` no envía ninguno. Consulta [clientApp()](./feature-configuration-options.md#clientapp)
 - `extraArgs(Map<String, String>)`: flags adicionales del CLI; claves sin el `--` inicial, valor en blanco para un flag sin valor
 
 ### Callbacks
 - `stderrCallback(Consumer<String>)`: callback de stderr
 
 ### Hooks
-- `hooks(Map<HookEvent, List<HookMatcher>>)`: callbacks de hook
+- `hooks(Map<HookEvent, List<HookMatcher>>)`: callbacks de hook. Un `HookMatcher` puede definir `timeoutSeconds` y una política `onFailure` (`HookOnFailure.CONTINUE` o `BLOCK`); consulta [Hooks → Política de fallo](./feature-hooks.md#política-de-fallo-onfailure)
 - `includeHookEvents(boolean)`: cuando es `true`, el CLI envía los eventos del ciclo de vida de los hooks (`PreToolUse`, `PostToolUse`, `Stop`, …) al flujo de mensajes como objetos `HookEventMessage`. Los eventos de hook `SessionStart` y `Setup` se emiten en cualquier caso. Corresponde a `--include-hook-events`. Consulta [Hooks → Eventos del ciclo de vida en el flujo](./feature-hooks.md#eventos-del-ciclo-de-vida-de-los-hooks-en-el-flujo).
 
 ### Avanzado
@@ -102,7 +103,7 @@ options.toBuilder()
 - `verbatimPrompts(boolean)`: marca como `client_composed` todos los mensajes de usuario que envía el SDK, para que Claude Code los entregue tal como están escritos: sin expansión de `@path` ni despacho de comandos slash. Mientras está activo, sobrescribe cualquier valor por mensaje. Requiere Claude Code 2.1.248+ (el SDK avisa con CLI más antiguos). Consulta [verbatimPrompts()](./feature-configuration-options.md#verbatimprompts)
 - `forwardSubagentText(boolean)`: cuando es `true`, los bloques de texto y de razonamiento de los subagentes se reenvían al flujo de mensajes junto con los bloques `tool_use` / `tool_result`, que siempre se reenvían. Se envía en la petición de control `initialize` (sin flag de CLI). Consulta [Agentes → Observar la salida de un subagente](./feature-agents.md#observar-la-salida-de-un-subagente).
 - `agents(Map<String, AgentDefinition>)`: agentes personalizados
-- `settingSources(List<SettingSource>)`: fuentes de configuración (una lista vacía desactiva todas las fuentes con `--setting-sources=`; omitirlo mantiene los valores por defecto del CLI)
+- `settingSources(List<SettingSource>)`: fuentes de configuración (una lista vacía desactiva todas las fuentes con `--setting-sources=`, lo que aísla la sesión de los ajustes del sistema de archivos; omitirlo mantiene los valores por defecto del CLI, que cargan todas las fuentes)
 - `skills(List<String>)`: lista de skills permitidas (inyecta automáticamente `Skill(name)` en `allowedTools` y fija `settingSources` en user/project). Los nombres deben ser exactos: los comodines, los delimitadores de reglas y los espacios alrededor lanzan `IllegalArgumentException` en `connect()`
 - `skillsAll()`: habilita todas las skills detectadas (inyecta automáticamente la herramienta `Skill` sin argumentos)
 - `sandbox(SandboxSettings)`: configuración del sandbox para comandos bash; su clave `network` configura el aislamiento de red propio del sandbox (las restricciones a nivel de herramienta siguen en las reglas de permisos)

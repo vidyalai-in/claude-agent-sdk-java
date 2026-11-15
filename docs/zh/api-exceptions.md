@@ -44,6 +44,8 @@ public class CLIConnectionException extends ClaudeSDKException {
 - 进程启动失败
 - 连接超时
 - 网络问题（远程传输）
+- 为与 `sandbox` 合并而加载的 `settings` 无法加载（`"Failed to load settings: ..."`）：文件不存在或无法读取、JSON 无效，或 JSON 不是对象。参见 [settings()](./feature-configuration-options.md#settings)
+- 某个 `HookOnFailure.BLOCK` matcher 所在的 CLI 没有报告 `hook_on_failure_supported`，或报告了 `hooks_applied: false`。参见[钩子 → 失败策略](./feature-hooks.md#失败策略onfailure)
 
 ## CLINotFoundException
 
@@ -55,8 +57,12 @@ public class CLINotFoundException extends ClaudeSDKException {
 }
 ```
 
+如果找不到 CLI，会在构建传输时（派生任何进程之前）抛出。在 Windows 上只会找到位于绝对路径 `PATH` 条目中的
+原生 `claude.exe`，或 `~/.local/bin/claude.exe`；npm 的 `claude.cmd` 垫片只有在设置了
+`allowUnsafeWindowsBatchCli(true)` 时才会被找到，异常消息中也会说明这一点。
+
 **解决办法**：
-- 安装 Claude Code CLI
+- 安装 Claude Code CLI（在 Windows 上使用原生安装器）
 - 用 `.cliPath()` 指定自定义路径
 
 ## ProcessException

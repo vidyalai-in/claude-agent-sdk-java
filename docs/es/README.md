@@ -588,6 +588,17 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+Por defecto, un hook que falla (lanza una excepción o se completa de forma excepcional) cuenta
+como ausencia de decisión, así que el comando se ejecutaría. Para una protección que no debe
+fallar en abierto, asigna al matcher la política `HookOnFailure.BLOCK`:
+
+```java
+HookMatcher bashMatcher = new HookMatcher("Bash", List.of(checkBashCommand), null, HookOnFailure.BLOCK);
+```
+
+En ese caso, `connect()` lanza `CLIConnectionException` si el CLI es demasiado antiguo para
+respetar la política. Consulta [Hooks → Política de fallo](../feature-hooks.md#failure-policy-onfailure).
+
 ### Ejemplo: registrar todos los usos de herramientas
 
 ```java
@@ -925,6 +936,12 @@ transmitido: desde un host del SDK solo se acepta el tipo `human`. Un tipo más 
 este SDK modela deja `kind()` en null, con la cadena del protocolo aún legible en `kindValue()`,
 y nunca cuenta como humano.
 
+`origin()` indica qué inició un turno, no si responde a tu prompt: un prompt enviado mientras se
+ejecuta un turno inyectado puede responderse dentro de ese turno. Para encontrar el resultado de
+un prompt, envíalo con un `uuid` de nivel superior nuevo y busca ese uuid en
+`result.userMessageUuid()` o `result.userMessageUuids()`. Consulta
+[Tipos de mensaje → Asociar un resultado a tu prompt](../feature-message-types.md#matching-a-result-to-your-prompt).
+
 ### Bloques de contenido
 
 ```java
@@ -1136,6 +1153,8 @@ Consulta el módulo `examples/` para ver ejemplos completos y funcionales:
 - `LargeAgentsExample.java`: definiciones de agente grandes (más de 260KB) mediante la petición initialize
 - `SystemPromptExample.java`: uso de un prompt de sistema personalizado
 - `IncludePartialMessagesExample.java`: streaming con actualizaciones de mensajes parciales
+- `MessageOriginExample.java`: procedencia de los mensajes, asociación de un resultado a su prompt por uuid y reinicios de la conversación
+- `ParallelToolSessionReadsExample.java`: relectura de un turno con llamadas a herramientas en paralelo, contrastada con el CLI real
 
 ### Ejecutar los ejemplos
 

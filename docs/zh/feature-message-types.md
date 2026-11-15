@@ -149,11 +149,13 @@ record AssistantMessage(
     @Nullable String messageId,              // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,             // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,              // Session ID this message belongs to
-    @Nullable String uuid                    // Unique identifier in the session transcript
+    @Nullable String uuid,                   // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
-`usage` map 在可用时包含每轮的 API token 消耗数据，包括 `input_tokens`、`output_tokens` 以及缓存相关字段。`messageId`、`stopReason`、`sessionId` 和 `uuid` 字段记录 API 级别的标识符。这些字段可为 null，在部分／流式消息中不存在。也提供了不含较新字段的向后兼容构造函数。
+`usage` map 在可用时包含每轮的 API token 消耗数据，包括 `input_tokens`、`output_tokens` 以及缓存相关字段。`messageId`、`stopReason`、`sessionId` 和 `uuid` 字段记录 API 级别的标识符。这些字段可为 null，在部分／流式消息中不存在。`userMessageUuid` 和 `userMessageUuids` 只会在其值被设置或发生变化后的第一条顶层助手消息上设置；参见[将结果与你的提示词对应起来](#将结果与你的提示词对应起来)。也提供了不含较新字段的向后兼容构造函数。
 
 ### 方法
 
@@ -551,7 +553,10 @@ record ResultMessage(
     @Nullable List<String> errors,                // Error messages from the CLI
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
-    @Nullable String terminalReason               // Why the query loop terminated
+    @Nullable String terminalReason,              // Why the query loop terminated
+    @Nullable MessageOrigin origin,               // What started the turn (see Message Origin)
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message
 ```
 
@@ -632,7 +637,9 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
@@ -782,7 +789,7 @@ for (Message msg : client.receiveResponse()) {
 
 ## 消息来源
 
-`UserMessage.origin()` 和 `ResultMessage.origin()` 揭示某一轮*为何*被发起。在流式输入模式下，一条连接会把你的应用发送的轮次，与会话自行注入的轮次交织在一起 —— 后台任务通知、触发的定时任务提示、MCP 通道消息、从对等会话转发的消息。在 `ResultMessage` 上，该字段报告*触发*该轮的那条消息的来源，这正是你区分“这是对我的提示的回答”和“这是对某个后台任务的回答”的依据。
+`UserMessage.origin()` 和 `ResultMessage.origin()` 揭示某一轮*为何*被发起。在流式输入模式下，一条连接会把你的应用发送的轮次，与会话自行注入的轮次交织在一起 —— 后台任务通知、触发的定时任务提示、MCP 通道消息、从对等会话转发的消息。在 `ResultMessage` 上，该字段报告是什么*启动*了该轮，例如一条后台任务通知。
 
 ```java
 MessageOrigin origin = result.origin();
@@ -807,6 +814,30 @@ client.query(List.of(message).iterator());
 ```
 
 来自 SDK 宿主的来源中，只有 `human` 这一 kind 会被采信，且要求 Claude Code >= 2.1.210。工具结果类的用户消息永远不带 origin。
+
+### 将结果与你的提示词对应起来
+
+`origin` 并不能告诉你某个结果是否涵盖了*你的*提示词：在一个注入的轮次运行期间发送的提示词，可能会在该轮次内得到回答，此时结果携带的是那个注入轮次的 origin。要找到某个提示词对应的结果，请在你发送的消息 map 上放一个新的顶层 `uuid`，然后在 `userMessageUuid()` / `userMessageUuids()` 中查找它：
+
+```java
+String myUuid = UUID.randomUUID().toString();
+message.put("uuid", myUuid);
+client.query(List.of(message).iterator());
+
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    if (messages.next() instanceof ResultMessage result) {
+        List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+        if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+            // this turn took in the prompt sent with myUuid
+            break;
+        }
+    }
+}
+```
+
+请用 `receiveMessages()` 读取：`receiveResponse()` 会在第一个结果处停止，而那个结果可能属于某个注入的轮次。每条消息都要使用新的 uuid，因为 CLI 可能会跳过 uuid 已见过的消息。错误结果同样携带 uuid，所以在认定提示词已得到回答之前，请先检查 `isError()` 和 `terminalReason()`。在被中断的轮次上，`userMessageUuids()` 是空列表；在较旧的 CLI 上则为 null。以纯字符串发送的提示词没有 uuid；对于这类提示词，`origin` 为 null 或 `HUMAN` 只能作为尽力而为的判断。`MessageOriginExample` 演示了这一完整往返流程。字段详情：
+[ResultMessage → userMessageUuid 与 userMessageUuids](./api-message-types.md#usermessageuuid-与-usermessageuuids)。
 
 无法识别的 kind 会保持可见而不是变成错误：`kind()` 为 null，同时 `kindValue()` 保存线上字符串，`isHuman()` 为 false —— 因此未知的来源标注总是读作“非人类”。完整的 CLI 对象保留在 `raw()` 上。逐字段参考：[MessageOrigin](./api-message-types.md#messageorigin)。
 

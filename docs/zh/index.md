@@ -291,7 +291,9 @@ try (var client = ClaudeSDK.createClient(options)) {
 - 基础查询与会话
 - 自定义 MCP 工具
 - 权限回调
-- 钩子系统，包括在后台子 agent 的后续轮次中处理的钩子（`BackgroundAgentHooksExample`）
+- 钩子系统，包括在失败时进行阻止的守卫（`Hooks`、`HookOnFailure.BLOCK`），以及在后台子 agent 的后续轮次中处理的钩子（`BackgroundAgentHooksExample`）
+- 通过 uuid 将结果与启动它的提示词对应起来（`MessageOriginExample`）
+- 从磁盘以及从 `SessionStore` 读回包含并行工具调用的轮次（`ParallelToolSessionReadsExample`）
 - 流式事件
 - 错误处理
 - 系统提示词，包括 `snapshot`（`SystemPromptExample`）

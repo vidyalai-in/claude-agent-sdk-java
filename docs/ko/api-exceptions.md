@@ -44,6 +44,8 @@ public class CLIConnectionException extends ClaudeSDKException {
 - 프로세스 시작 실패
 - 연결 시간 초과
 - 네트워크 문제(원격 전송)
+- `sandbox`와 병합하기 위해 불러올 수 없는 `settings`(`"Failed to load settings: ..."`): 파일이 없거나 읽을 수 없는 경우, JSON이 잘못된 경우, JSON이 객체가 아닌 경우. [settings()](./feature-configuration-options.md#settings)를 참고하세요
+- `hook_on_failure_supported`를 보고하지 않거나 `hooks_applied: false`를 보고하는 CLI에서의 `HookOnFailure.BLOCK` matcher. [훅 → 실패 정책(`onFailure`)](./feature-hooks.md#실패-정책onfailure)을 참고하세요
 
 ## CLINotFoundException
 
@@ -55,8 +57,12 @@ public class CLINotFoundException extends ClaudeSDKException {
 }
 ```
 
+CLI를 찾지 못하면, 아무것도 실행하기 전 전송 계층을 생성하는 시점에 던져집니다. Windows에서는 절대 경로인
+`PATH` 항목에 있는 네이티브 `claude.exe`나 `~/.local/bin/claude.exe`만 찾습니다. npm의 `claude.cmd` 심은
+`allowUnsafeWindowsBatchCli(true)`일 때만 찾으며, 메시지에서 이를 알려 줍니다.
+
 **해결 방법**:
-- Claude Code CLI 설치
+- Claude Code CLI 설치(Windows에서는 네이티브 설치 프로그램)
 - `.cliPath()`로 사용자 지정 경로 지정
 
 ## ProcessException

@@ -42,7 +42,8 @@ Transport transport = new SubprocessCLITransport(options);
 - 유예 기간을 둔 정상 종료(stdin EOF 이후 SIGTERM을 보내기 전에, 서브프로세스가 세션 파일을 비울 때까지 기다림)
 - 기본적으로 `CLAUDE_CODE_ENTRYPOINT=sdk-java` 설정(`ClaudeAgentOptions.env()`로 덮어쓸 수 있음)
 - 호출자의 `env()`나 상속된 환경에 (대소문자와 무관하게) 이미 그 이름이 있지 않으면 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`을 설정해, CLI가 `sdk_host_only`가 표시된 `session_state_changed` 프레임을 보고하게 합니다. `QueryHandler`는 이를 읽어 stdin을 닫을 수 있는 시점을 판단하고, 소비자에게 닿기 전에 걸러 냅니다. [아키텍처 → stdin 수명 주기](./architecture.md#stdin-수명-주기와-실행의-끝)를 참고하세요. 전송 계층이 설정하는 변수의 전체 목록은 [구성 옵션 → env()](./feature-configuration-options.md#env)에 있습니다.
-- CLI가 2.0.0보다 오래되었을 때, 그리고 `verbatimPrompts`가 켜져 있는데 CLI가 `client_composed`를 무시하는 2.1.248 미만일 때 연결 시점에 경고(`WARNING` 로그)를 남깁니다. 버전 확인은 `<cli> -v`를 실행하며, `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK`가 설정되어 있으면 건너뜁니다.
+- CLI 버전을 첫 번째 `system`/`init` 메시지의 `claude_code_version` 필드에서 전송마다 한 번 확인하므로, `cliPath`는 세션을 시작할 때만 실행됩니다(별도의 `<cli> -v` 프로브는 없습니다). CLI가 버전을 보고하지 않으면 `WARNING`을 기록합니다. 2.0.0 미만 버전과 초기 2.0 릴리스는 버전을 보내지 않습니다. 또한 `verbatimPrompts`가 켜져 있는데 CLI가 2.1.248 미만이거나(`client_composed`를 무시함) 버전을 보고하지 않을 때도(`unknown`으로 표시) 경고합니다. `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK`를 설정하면 이 확인을 끕니다.
+- 둘 다 설정되어 있으면 `settings`를 `sandbox`와 하나의 `--settings` 값으로 병합하며, 설정을 불러올 수 없으면 설정을 버리는 대신 `connect()`를 `CLIConnectionException`으로 실패시킵니다. [구성 옵션 → settings()](./feature-configuration-options.md#settings)를 참고하세요.
 
 ### CLI 플래그 전달
 
@@ -103,8 +104,7 @@ Windows에는 shebang 메커니즘이 없습니다. CLI 경로가 `.bat`이나 `
 이 취약점 부류(CVE-2024-27980, "BatBadBut")에 대해 내놓은 것과 같은 해법입니다.
 
 `connect()`는 그 경로로 무언가를 생성하기 전에 해석된 경로를 검증하므로, 이 검사는 실행 파일에 이르는
-모든 경로를 포괄합니다: PATH 탐색, 명시적인 `ClaudeAgentOptions.cliPath(...)`, 그리고 주 프로세스
-이전에 실행되는 버전 확인입니다.
+모든 경로를 포괄합니다: PATH 탐색과 명시적인 `ClaudeAgentOptions.cliPath(...)`입니다.
 
 ```java
 // On Windows, with cliPath pointing at npm's shim:
@@ -145,22 +145,27 @@ POSIX와 Windows가 다르고, 양쪽에서 똑같이 동작하는 것은 문자
 
 ### Windows: CLI 탐색 순서 (0.1.21)
 
-탐색은 네이티브 실행 파일을 우선합니다. Windows에서 확장자 없는 `claude`는 OS가 직접 실행할 수 없는
-git-bash / WSL 래퍼 스크립트이기 때문입니다:
+Windows에서 탐색은 네이티브 `claude.exe`만 찾습니다(0.2.5부터). 확장자 없는 `claude`는 OS가 직접 실행할
+수 없는 git-bash / WSL 래퍼 스크립트이고, npm의 `claude.cmd` 심은 `connect()`가 거부합니다:
 
-1. 먼저 **`PATH` 전체**를 훑어 `claude.exe`를 찾습니다. PATH는 디렉터리 우선으로 순회되므로, 이 단계가
-   없으면 앞쪽 디렉터리의 래퍼 스크립트가 뒤쪽에 설치된 진짜 `claude.exe`를 가려 버립니다.
+1. 각 **절대 경로** `PATH` 항목에서 차례로 `claude.exe`를 찾습니다. 상대 경로 항목(`""`, `.`, `tools`)은
+   건너뜁니다. 이들은 작업 디렉터리를 기준으로 해석되는데, 그 디렉터리는 다른 로컬 사용자가 통제할 수
+   있으므로 이를 탐색하면 바이너리 심기 위험이 생깁니다. 정확한 이름만 탐색하고 `PATHEXT` 해석은 하지
+   않으므로, 앞쪽 디렉터리의 심이나 래퍼가 뒤쪽 디렉터리의 `claude.exe`를 가리는 일은 없습니다.
 2. 그렇지 않으면 `~/.local/bin/claude.exe`로 물러납니다. POSIX 형태의 위치들은 Windows에서 일부러
-   **탐색하지 않습니다**. 거기서 확장자 없는 것이 잡히면 설명이 담긴 거부 대신 알 수 없는 생성 실패가
-   먼저 일어나고, 루트로 시작하지만 드라이브가 없는 `/usr/local/bin/claude`는 현재 드라이브를 기준으로
-   해석되는데, 그곳은 다른 로컬 사용자가 만들 수 있는 위치라 바이너리 심기의 탐침이 됩니다.
-3. 그렇지 않으면 `PATH`에 `claude.cmd` / `claude.bat` 심이 있을 때 그것을 반환합니다. 이는 `connect()`가
-   맹숭맹숭한 "찾을 수 없음" 대신 배치 스크립트 거부를 *해결책과 함께* 던지게 하기 위함입니다.
-4. 그렇지 않으면 네이티브가 아닌 `PATH` 결과를 반환해, 생성 오류가 실제로 설치된 것이 무엇인지 알려
-   주도록 합니다.
-5. 그렇지 않으면 네이티브 설치 프로그램을 안내하는 Windows 전용 메시지와 함께 `CLINotFoundException`을
-   던집니다. `npm install -g @anthropic-ai/claude-code`는 권하지 않습니다. 그것이야말로 이 SDK가
-   거부하는 바로 그 심을 만들어 내기 때문입니다.
+   **탐색하지 않습니다**. 루트로 시작하지만 드라이브가 없는 `/usr/local/bin/claude`는 현재 드라이브를
+   기준으로 해석되므로 또 하나의 바이너리 심기 탐침이 되고, 확장자 없는 것이 잡혀도 실행할 수 없습니다.
+3. 그렇지 않으면, **[`allowUnsafeWindowsBatchCli(true)`](#windows-배치-cli-옵트인-0122)일 때에만** 절대 경로
+   `PATH` 항목에서 `claude.cmd`를, 그다음 `claude.bat`을 반환합니다. 그 위험을 감수한 호출자는 자동 탐색을
+   계속 쓸 수 있도록 하기 위함입니다. Python SDK에는 이런 옵트인이 없으며 심을 결코 반환하지 않습니다.
+4. 그렇지 않으면 네이티브 설치 프로그램을 안내하는 Windows 전용 메시지와 함께 `CLINotFoundException`을
+   던집니다. `npm install -g @anthropic-ai/claude-code`는 권하지 않으며 그 이유도 밝힙니다. 그것이야말로
+   이 SDK가 거부하는 바로 그 심을 만들어 내기 때문입니다.
+
+0.2.5 이전에는 탐색이 상대 경로 `PATH` 항목도 살폈고, 옵트인 없이도 최후의 수단으로 `claude.cmd` 심이나
+래퍼 스크립트를 반환했기 때문에 `connect()`가 배치 스크립트 거부나 생성 오류로 실패했습니다. 이제 그런
+환경에서는 전송 계층을 생성할 때 `CLINotFoundException`이 납니다. `cliPath(...)`로 넘긴 경로는 주어진
+그대로 쓰이며, 여전히 위의 거부 검사를 거칩니다.
 
 POSIX 탐색은 그대로입니다: `PATH`, 그다음 `~/.npm-global/bin`, `/usr/local/bin`, `~/.local/bin`,
 `~/node_modules/.bin`, `~/.yarn/bin`, `~/.claude/local`.

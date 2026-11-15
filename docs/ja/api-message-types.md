@@ -68,7 +68,9 @@ record AssistantMessage(
     @Nullable String messageId,                   // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,                  // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,                   // Session ID this message belongs to
-    @Nullable String uuid                         // Unique identifier in the session transcript
+    @Nullable String uuid,                        // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,             // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids       // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
@@ -82,6 +84,10 @@ record AssistantMessage(
 new AssistantMessage(content, model, parentToolUseId, error)  // usage and all later fields default to null
 new AssistantMessage(content, model, parentToolUseId, error, usage)  // messageId and later fields default to null
 ```
+
+9 引数のコンストラクタ（`userMessageUuid` と `userMessageUuids` なし）も残されています。この 2 つは、
+値が設定または変更された後の最初のトップレベルのアシスタントメッセージにだけ設定され（ターンの途中で
+あることもあります）、それ以外ではすべて null です。[プロンプトに対応する結果の特定](#プロンプトに対応する結果の特定)を参照してください。
 
 ### AssistantMessageError
 
@@ -176,7 +182,9 @@ record ResultMessage(
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
     @Nullable String terminalReason,              // Why the query loop terminated
-    @Nullable MessageOrigin origin                // Origin of the triggering user message
+    @Nullable MessageOrigin origin,               // What started the turn
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message {
     String type();  // Returns "result"
 }
@@ -192,9 +200,28 @@ record ResultMessage(
 
 新しいフィールドを必要としないコードのために、後方互換のコンストラクタも用意されています。元の 11 引数
 コンストラクタ（`modelUsage`、`permissionDenials`、`deferredToolUse`、`errors`、`apiErrorStatus`、
-`uuid`、`terminalReason`、`origin` なし）は引き続き動作します。以前の形に合わせて書かれた呼び出し側の
-ために、15 引数（`deferredToolUse`、`apiErrorStatus`、`terminalReason`、`origin` なし）、17 引数
-（`terminalReason`、`origin` なし）、18 引数（`origin` なし）のオーバーロードも利用できます。
+`uuid`、`terminalReason`、`origin`、`userMessageUuid`、`userMessageUuids` なし）は引き続き動作します。
+以前の形に合わせて書かれた呼び出し側のために、15 引数（`deferredToolUse`、`apiErrorStatus`、
+`terminalReason` 以降なし）、17 引数（`terminalReason` 以降なし）、18 引数（`origin` 以降なし）、
+19 引数（`userMessageUuid` と `userMessageUuids` なし）のオーバーロードも利用できます。
+
+### userMessageUuid と userMessageUuids
+
+- **`userMessageUuid`** は、このターンを開始したユーザーメッセージの `uuid` です（複数がまとめられて
+  開始した場合は最後のもの）。差し込まれたターンでは、ターンの実行中に取り込まれた最後のユーザー
+  メッセージです。
+- **`userMessageUuids`** は、そのターンが取り込んだすべてのユーザーメッセージの `uuid` を順に並べます：
+  ターンを開始したもの、続いて実行中に送られたものです。CLI は最大 64 件までしか列挙しないため、
+  上限まで埋まったリストに含まれない uuid も取り込まれている可能性があります。中断されたターンでは空に
+  なることがあり、これは `null` とは区別されます。
+
+どちらも、トップレベルの `uuid` 文字列を持つ map として送られたメッセージだけを対象とします。プレーンな
+文字列として渡したプロンプトには uuid がありません。CLI はすでに見た uuid のメッセージを読み飛ばす
+ことがあるため、メッセージごとに新しい uuid を使ってください。そのようなメッセージをターンが取り込まな
+かった場合と古い CLI では、どちらも null です。`userMessageUuids` は、一部のエラー結果や
+`userMessageUuid` しか報告しない CLI でも null になります。エラー結果にも設定されるので、自分の
+プロンプトが応答されたとみなす前に `isError` と `terminalReason` を確認してください。リスト内の文字列
+以外の要素は、フレームを失敗させるのではなく破棄されます。[プロンプトに対応する結果の特定](#プロンプトに対応する結果の特定)を参照してください。
 
 ### terminalReason
 
@@ -281,12 +308,17 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message {
     String type();              // Returns "stream_event"
     @Nullable String eventType(); // Returns event.get("type"), or null
 }
 ```
+
+4 引数のコンストラクタも残されています。`userMessageUuid` と `userMessageUuids` は、値が設定または
+変更された後の、ping 以外の最初のトップレベルのイベントにだけ設定され、それ以外ではすべて null です。
 
 ## コンテンツブロック
 
@@ -533,7 +565,7 @@ record MessageOrigin(
 
 ストリーミング入力モードでは、1 本の接続があなたのアプリケーションが送るターンと、セッションが自ら
 差し込むターン —— バックグラウンドタスクの通知、発火したスケジュールタスクのプロンプト、MCP チャネルの
-メッセージ、ピアセッションから中継されたメッセージ —— を交互に運びます。`origin` がそれらを区別します：
+メッセージ、ピアセッションから中継されたメッセージ —— を交互に運びます。`origin` はターンを何が開始したかを示します：
 
 ```java
 MessageOrigin origin = result.origin();
@@ -543,6 +575,27 @@ if (origin == null || origin.isHuman()) {
     // follow-up turn driven by a background task
 }
 ```
+
+`origin` からは、ある結果が*自分の*プロンプトを含むかどうかはわかりません。差し込まれたターンの実行中に
+送ったプロンプトはそのターンの中で応答されることがあり、その場合の結果は差し込まれたターンの出所を
+運びます。プロンプトに対応する結果を見つけるには、その uuid を照合してください（次の節）。
+
+### プロンプトに対応する結果の特定
+
+各プロンプトを、新しいトップレベルの `uuid` を付けたメッセージ map として
+`ClaudeSDKClient.query(Iterator)` から送り、結果の上でその uuid を探します：
+
+```java
+List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+    // this turn took in the prompt sent with myUuid
+}
+```
+
+`receiveMessages()` で読んでください：`receiveResponse()` は最初の結果で止まり、それが差し込まれた
+ターンの結果である可能性があります。プレーンな文字列として送ったプロンプトには uuid が付きません。
+その場合、`origin` が null または `HUMAN` であることはベストエフォートの目安にすぎません。
+`MessageOriginExample` はこの方法でプロンプトを送り、結果にその uuid があるかを確認します。
 
 `origin` が null なら、CLI がそのメッセージに出所を付与しなかったということです。`ClaudeSDK.query()`
 や `ClaudeSDKClient.query(String)` で送ったプロンプトは、`ClaudeSDKClient.query(Iterator)` を使って

@@ -530,6 +530,24 @@ QueryHandler
 이는 이론적인 이야기가 아닙니다. "unresolved compilation problem"이라는 `Error`를 품은, IDE가 컴파일한
 낡은 클래스 하나 때문에, 이 잡는 범위를 넓히기 전까지 모든 SDK MCP 제어 요청이 조용히 멈춰 있었습니다.
 
+### 취소된 제어 요청
+
+CLI는 자신이 보낸 제어 요청을 포기할 수 있습니다. 예를 들어 턴이 중단되면, 같은 `request_id`를 담은
+`control_cancel_request`를 보냅니다. `QueryHandler`는 제출하는 핸들러를 모두 `request_id`를 키로 하는
+맵에 보관하며, 핸들러는 끝날 때 자기 항목을 스스로 제거합니다. 따라서 늦게 도착하거나 알 수 없는 id를
+지목한 취소는 아무 일도 하지 않습니다. 취소가 오면 다음을 수행합니다:
+
+1. 사용자 콜백(훅, `canUseTool`, 또는 SDK MCP 서버의 응답)이 반환한 `CompletableFuture`를 취소하여, 그 위에
+   조합된 코드가 멈출 수 있게 합니다. SDK MCP 도구 호출의 경우 `SdkMcpServer`는 이에 반응해
+   `notifications/cancelled`가 그러듯 호출의 `ToolCallContext`를 취소합니다.
+2. 핸들러 스레드를 인터럽트합니다. 이는 자기 스레드를 블로킹하는 콜백에도 전달됩니다.
+3. `control_response`를 쓰지 않습니다. CLI는 더 이상 응답을 기다리지 않기 때문입니다.
+
+요청은 응답되거나 취소되거나, 정확히 한 가지 방식으로만 끝나며, 이는 한 번의 compare-and-set으로
+결정됩니다. 경쟁에서 진 핸들러는 응답을 버리고, 경쟁에서 진 취소는 아무 일도 하지 않으므로, 취소가
+stdin에 쓰이는 도중인 응답을 중간에 끊는 일은 결코 없습니다. 이는 핸들러의 태스크를 취소하고 응답을
+건너뛰는 Python SDK의 동작과 같습니다.
+
 ### stdin 수명 주기와 실행의 끝
 
 > **`controlExecutor`는 작업마다 스레드여야 합니다.** SDK MCP 도구 호출은 도구가 답할 때까지 제어

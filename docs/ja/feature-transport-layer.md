@@ -49,9 +49,16 @@ Transport transport = new SubprocessCLITransport(options);
   判断し、利用側に届く前に破棄します。[アーキテクチャ → stdin のライフサイクル](./architecture.md#stdin-のライフサイクルと実行の終了)
   を参照してください。トランスポートが設定する変数の完全な一覧は
   [設定オプション → env()](./feature-configuration-options.md#env) にあります。
-- CLI が 2.0.0 より古い場合と、`verbatimPrompts` が有効なのに CLI が `client_composed` を無視する
-  2.1.248 より古いバージョンの場合に、接続時に警告（ログの `WARNING`）を出します。バージョンの確認は
-  `<cli> -v` を実行して行い、`CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` が設定されている場合はスキップされます。
+- CLI のバージョンを、最初の `system`/`init` メッセージの `claude_code_version` フィールドから、
+  トランスポートごとに 1 回確認します。そのため `cliPath` が実行されるのはセッションを開始するときだけです
+  （別途 `<cli> -v` で探査することはありません）。CLI がバージョンを報告しない場合はログに `WARNING` を
+  出します：2.0.0 未満のバージョンと、最初期の 2.0 リリースはバージョンを送りません。また、`verbatimPrompts`
+  が有効なのに CLI が 2.1.248 より古い（`client_composed` を無視する）場合や、バージョンを報告しない
+  （`unknown` と表示されます）場合にも警告します。`CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` を設定すると
+  この確認は無効になります。
+- `settings` と `sandbox` の両方が設定されている場合、それらを 1 つの `--settings` 値にマージします。設定を
+  読み込めない場合は、それを落とすのではなく `connect()` を `CLIConnectionException` で失敗させます。
+  [設定オプション → settings()](./feature-configuration-options.md#settings) を参照してください。
 
 ### CLI フラグの転送
 
@@ -114,8 +121,7 @@ OS は生成を `cmd.exe /c` の呼び出しに書き換えて実行し、**cmd.
 Node.js がこの脆弱性クラス（CVE-2024-27980、「BatBadBut」）に対して出したのと同じ対処です。
 
 `connect()` は、そのパスで何かを生成する前に解決済みパスを検証するので、この検査は実行ファイルへの
-すべての経路をカバーします：PATH による発見、明示的な `ClaudeAgentOptions.cliPath(...)`、そして
-メインプロセスの前に走るバージョン探査です。
+すべての経路をカバーします：PATH による発見と、明示的な `ClaudeAgentOptions.cliPath(...)` です。
 
 ```java
 // On Windows, with cliPath pointing at npm's shim:
@@ -155,25 +161,31 @@ Windows で異なり、両方で同一に振る舞うのは文字列ロジック
 
 ### Windows：CLI の探索順序（0.1.21）
 
-探索はネイティブの実行ファイルを優先します。Windows における拡張子なしの `claude` は
-git-bash / WSL のラッパースクリプトであり、OS が直接実行できないからです：
+Windows では、探索はネイティブの `claude.exe` だけを見つけます（0.2.5 以降）。拡張子なしの `claude` は
+OS が直接実行できない git-bash / WSL のラッパースクリプトであり、npm の `claude.cmd` シムは `connect()`
+によって拒否されるからです：
 
-1. まず **`PATH` 全体**を走査して `claude.exe` を探します。PATH はディレクトリを主軸に走査されるため、
-   これがないと先の方のディレクトリにあるラッパースクリプトが、後ろのディレクトリにインストール
-   された本物の `claude.exe` を覆い隠してしまいます。
+1. 各**絶対パスの** `PATH` エントリを順に調べて `claude.exe` を探します。相対パスのエントリ（`""`、`.`、
+   `tools`）はスキップされます。それらは作業ディレクトリを基準に解決され、作業ディレクトリは別のローカル
+   ユーザーが制御している可能性があるため、探査するとバイナリ植え込みのリスクになるからです。探査するのは
+   正確な名前だけで、`PATHEXT` による解決は行いません。そのため、先の方のディレクトリにあるシムやラッパーが、
+   後ろのディレクトリにある `claude.exe` を覆い隠すことはありません。
 2. そうでなければ `~/.local/bin/claude.exe` にフォールバックします。POSIX 風の場所は Windows では
-   あえて探査**しません**。そこで拡張子なしのものに一致すると、説明的な拒否ではなく不可解な生成失敗
-   が先に起きてしまいますし、ルート付きでドライブなしの `/usr/local/bin/claude` は現在のドライブに
-   対して解決されます —— そこは別のローカルユーザーが作成できる場所であり、バイナリ植え込みの探査点
-   になります。
-3. そうでなければ、`PATH` 上に `claude.cmd` / `claude.bat` のシムがあればそれを返します。これは、
-   素っ気ない「見つかりません」ではなく、`connect()` にバッチスクリプトの拒否を*その対処方法とともに*
-   送出させるためです。
-4. そうでなければ、非ネイティブの `PATH` ヒットを返し、生成エラーが実際に入っているものを示せる
-   ようにします。
-5. そうでなければ、ネイティブのインストーラを案内する Windows 専用のメッセージとともに
+   あえて探査**しません**。ルート付きでドライブなしの `/usr/local/bin/claude` は現在のドライブに対して
+   解決されるため、これも別のバイナリ植え込みの探査点になりますし、拡張子なしのものに一致しても実行
+   できません。
+3. そうでなければ、**[`allowUnsafeWindowsBatchCli(true)`](#windowsバッチ-cli-のオプトイン0122) を指定した
+   場合に限り**、絶対パスの `PATH` エントリから `claude.cmd`、次に `claude.bat` を返します。これにより、
+   そのリスクを受け入れた呼び出し側は自動探索を使い続けられます。Python SDK にはこのようなオプトインはなく、
+   シムを返すことはありません。
+4. そうでなければ、ネイティブのインストーラを案内する Windows 専用のメッセージとともに
    `CLINotFoundException` を投げます。`npm install -g @anthropic-ai/claude-code` は勧めません。
-   それこそが、この SDK が拒否するシムを作り出すからです。
+   それこそが、この SDK が拒否するシムを作り出すからであり、メッセージにもそう書かれます。
+
+0.2.5 より前は、探索は相対パスの `PATH` エントリも検索し、オプトインなしでも最後の手段として
+`claude.cmd` シムやラッパースクリプトを返していたため、`connect()` はバッチスクリプトの拒否か生成エラーで
+失敗していました。そのようなマシンでは、現在はトランスポートの構築時に `CLINotFoundException` になります。
+`cliPath(...)` で渡したパスはそのまま使われ、引き続き上記の拒否の対象になります。
 
 POSIX の探索は変わりません：`PATH`、次に `~/.npm-global/bin`、`/usr/local/bin`、`~/.local/bin`、
 `~/node_modules/.bin`、`~/.yarn/bin`、`~/.claude/local`。

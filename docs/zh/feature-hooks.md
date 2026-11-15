@@ -50,13 +50,15 @@ var options = ClaudeAgentOptions.builder()
 
 ```java
 record HookMatcher(
-    @Nullable String matcher,        // which tools/events to match; null matches all
-    List<HookCallback> hooks,        // callbacks to run
-    @Nullable Double timeoutSeconds  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable String matcher,         // which tools/events to match; null matches all
+    List<HookCallback> hooks,         // callbacks to run
+    @Nullable Double timeoutSeconds,  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable HookOnFailure onFailure // what a failing callback does; null = CONTINUE
 )
 
 new HookMatcher(List<HookCallback> hooks)                  // matcher = null
 new HookMatcher(String matcher, List<HookCallback> hooks)  // timeoutSeconds = null
+new HookMatcher(String matcher, List<HookCallback> hooks, Double timeoutSeconds)  // onFailure = null
 ```
 
 对于工具事件，`matcher` 可以是一个工具名称（`"Bash"`）、用 `|` 连接的多个名称（`"Write|MultiEdit|Edit"`），
@@ -81,9 +83,44 @@ record HookContext(
 
 SDK 会等待返回的 future 完成后再答复 CLI。对于同步的工作，返回 `CompletableFuture.completedFuture(...)` 即可。
 
+如果回调抛出异常、返回的 future 以异常完成、以 `null` 完成，或者返回的是 `null` future，SDK 都会以错误作答。
+没有意见的回调应返回 `HookOutput.empty()`，而不是 `null`。错误是否会让该操作继续执行，取决于 matcher 的
+[失败策略](#失败策略onfailure)。
+
+如果 CLI 放弃了这次钩子调用（它会发送一条 `control_cancel_request`，例如在轮次被中断时），SDK 会取消回调
+返回的 future，中断正在等待它的线程，并且不发送任何答复。阻塞自身线程的回调会收到 `InterruptedException`；
+把工作交给其他线程的回调则可以对被取消的 future 作出响应。
+
 > **派发顺序：** 当同一事件上注册了多个 matcher 时，CLI 会**并发地**（并行）派发所有匹配的钩子
 > 回调，而不是顺序执行。请把每个钩子设计成彼此独立的 —— 不要依赖某一个先完成再开始另一个
 > （例如，不要串联那些假定存在门控顺序的限流钩子）。
+
+### 失败策略（`onFailure`）
+
+`HookOnFailure` 决定失败的回调会对触发它的操作产生什么影响：
+
+| 取值 | 回调失败时 |
+|-------|--------------------|
+| `CONTINUE`（以及默认值 `null`） | 视为未作决定：操作照常执行，就像钩子没有运行过一样 |
+| `BLOCK` | 阻止该操作 |
+
+当回调以错误作答（见上文），或返回了 CLI 拒绝的值（例如它无法识别的 `permissionDecision`）时，即视为失败。
+无法识别的键不算失败。对于绝不能“失败即放行”（fail open）的守卫，请使用 `BLOCK`：
+
+```java
+HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), null, HookOnFailure.BLOCK);
+```
+
+`Stop` 和 `SubagentStop` 会忽略此选项。`PermissionRequest` 的阻止只有在 `canUseTool` 作答之前生效才算数。
+
+该策略会作为 `onFailure` 随 initialize 请求发送。只要有任何 matcher 使用 `BLOCK`，`initialize()`（因而
+`connect()` 也是如此）就会检查 CLI 的回复，并在以下情况关闭传输层并抛出 `CLIConnectionException`：
+
+- 回复中没有报告 `hook_on_failure_supported`：CLI 版本过旧，无法遵循该策略，守卫将会失败即放行；或
+- 回复中报告了 `hooks_applied: false`：一个已在运行的会话没有注册这些钩子，守卫将永远不会运行。
+
+`CONTINUE` 不需要 CLI 支持，因为旧版 CLI 本来就是这样处理的。`Hooks.java` 在其危险命令守卫中使用了 `BLOCK`，
+并演示了如何处理连接被拒绝的情况。
 
 ## 钩子输入
 

@@ -640,6 +640,8 @@ Handlers que recebem apenas seus argumentos continuam funcionando exatamente com
 
 Desconectar tem o mesmo efeito: fechar o cliente abandona as chamadas ainda em andamento, então um desligamento não fica preso a uma ferramenta que nada consegue interromper.
 
+O mesmo vale para um `control_cancel_request` da requisição de controle que carregou a chamada: o contexto é cancelado e nenhuma resposta é enviada. Veja [Arquitetura → Requisições de controle canceladas](./architecture.md#requisições-de-controle-canceladas).
+
 Uma falha de handler também é registrada localmente em `WARNING` com o stack trace, de modo que uma ferramenta que quebra é depurável sem que a transcrição do modelo seja o único registro.
 
 ### Operações demoradas

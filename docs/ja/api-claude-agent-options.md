@@ -82,18 +82,19 @@ options.toBuilder()
 
 ### 環境
 - `cwd(Path)` —— 作業ディレクトリ
-- `cliPath(Path)` —— 独自の CLI パス（Windows の `.bat`/`.cmd` パスは拒否されます。下記参照）
-- `allowUnsafeWindowsBatchCli(boolean)` —— Windows のバッチスクリプト拒否を解除します。あわせて `-Djdk.lang.Process.allowAmbiguousCommands=false` が必要で、すべての引数における cmd.exe のメタ文字を拒否します（既定 `false`）
-- `settings(String)` —— 設定ファイルのパス、またはインラインの JSON 文字列。そのまま `--settings` に渡されるか、サンドボックスが設定されている場合は `sandbox` とマージして 1 つの JSON 文字列にされます
+- `cliPath(Path)` —— 独自の CLI パス（Windows の `.bat`/`.cmd` パスは拒否されます。下記参照）。未設定の場合、SDK は CLI を探索します。Windows では `claude.exe` だけを、絶対パスの `PATH` エントリ、続いて `~/.local/bin/claude.exe` の順に探します
+- `allowUnsafeWindowsBatchCli(boolean)` —— Windows のバッチスクリプト拒否を解除します。あわせて `-Djdk.lang.Process.allowAmbiguousCommands=false` が必要で、すべての引数における cmd.exe のメタ文字を拒否します（既定 `false`）。`claude.exe` が存在しない場合に、CLI の探索が `claude.cmd`/`claude.bat` のシムを返せるようにもします
+- `settings(String)` —— 設定ファイルのパス、またはインラインの JSON 文字列。そのまま `--settings` に渡されるか、サンドボックスが設定されている場合は `sandbox` とマージして 1 つの JSON 文字列にされます。相対パスは `cwd` を基準に解決されます。このマージのために設定を読み込めない場合、`connect()` は `CLIConnectionException` で失敗します
 - `addDirs(List<Path>)` —— 追加のコンテキストディレクトリ
-- `env(Map<String, String>)` —— 環境変数。継承した環境の上にマージされます。SDK は `CLAUDE_CODE_ENTRYPOINT`（上書き可能）、`CLAUDE_AGENT_SDK_VERSION` も設定し、すでに名前がある場合を除いて `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` を設定します。[env()](./feature-configuration-options.md#env) を参照してください
+- `env(Map<String, String>)` —— 環境変数。継承した環境の上にマージされます。SDK は `CLAUDE_CODE_ENTRYPOINT`（上書き可能）、`CLAUDE_AGENT_SDK_VERSION` も設定し、すでに名前がある場合を除いて `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` を設定し、継承した `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP` を取り除きます。[env()](./feature-configuration-options.md#env) を参照してください
+- `clientApp(String)` —— アプリ／ライブラリの識別子（例：`"my-app/1.0.0"`）。API リクエストで `CLAUDE_AGENT_SDK_CLIENT_APP` として送られます。`env` や継承した値より優先され、`""` の場合は何も送りません。[clientApp()](./feature-configuration-options.md#clientapp) を参照してください
 - `extraArgs(Map<String, String>)` —— 追加の CLI フラグ。キーは先頭の `--` を付けず、値なしのフラグには空白の値を指定します
 
 ### コールバック
 - `stderrCallback(Consumer<String>)` —— stderr のコールバック
 
 ### フック
-- `hooks(Map<HookEvent, List<HookMatcher>>)` —— フックのコールバック
+- `hooks(Map<HookEvent, List<HookMatcher>>)` —— フックのコールバック。`HookMatcher` には `timeoutSeconds` と `onFailure` ポリシー（`HookOnFailure.CONTINUE` または `BLOCK`）を設定できます。[フック → 失敗ポリシー](./feature-hooks.md#失敗ポリシーonfailure)を参照してください
 - `includeHookEvents(boolean)` —— `true` の場合、CLI はフックのライフサイクルイベント（`PreToolUse`、`PostToolUse`、`Stop` など）を `HookEventMessage` オブジェクトとしてメッセージストリームに流します。`SessionStart` と `Setup` のフックイベントはこの設定にかかわらず送出されます。`--include-hook-events` に対応します。[フック → ストリーム上のフックライフサイクルイベント](./feature-hooks.md#ストリーム上のフックライフサイクルイベント)を参照してください。
 
 ### 高度な設定
@@ -102,7 +103,7 @@ options.toBuilder()
 - `verbatimPrompts(boolean)` —— SDK が送るすべてのユーザーメッセージに `client_composed` の印を付け、Claude Code が書かれたとおりに届けるようにします：`@path` の展開もスラッシュコマンドのディスパッチも行いません。有効な間はメッセージごとの値を上書きします。Claude Code 2.1.248 以降が必要です（古い CLI では SDK が警告します）。[verbatimPrompts()](./feature-configuration-options.md#verbatimprompts) を参照してください
 - `forwardSubagentText(boolean)` —— `true` の場合、サブエージェントのテキストブロックと思考ブロックが、常に転送される `tool_use` / `tool_result` ブロックと並んでメッセージストリームに転送されます。`initialize` 制御リクエストで送信されます（CLI フラグはありません）。[エージェント → サブエージェントの出力の観測](./feature-agents.md#サブエージェントの出力の観測)を参照してください。
 - `agents(Map<String, AgentDefinition>)` —— カスタムエージェント
-- `settingSources(List<SettingSource>)` —— 設定の取得元（空リストは `--setting-sources=` によってすべての取得元を無効化します。省略した場合は CLI の既定値が維持されます）
+- `settingSources(List<SettingSource>)` —— 設定の取得元（空リストは `--setting-sources=` によってすべての取得元を無効化し、セッションをファイルシステム上の設定から隔離します。省略した場合は CLI の既定値が維持され、すべての取得元が読み込まれます）
 - `skills(List<String>)` —— Skills の許可リスト（`allowedTools` に `Skill(name)` を自動注入し、`settingSources` を user/project に既定設定します）。名前は厳密に一致している必要があり、ワイルドカード、ルールの区切り文字、前後の空白は `connect()` 時に `IllegalArgumentException` を投げます
 - `skillsAll()` —— 検出されたすべての skill を有効化します（裸の `Skill` ツールを自動注入）
 - `sandbox(SandboxSettings)` —— bash コマンドのサンドボックスの設定。その `network` キーはサンドボックス自身のネットワーク分離を設定します（ツールレベルの制限は権限ルールのままです）

@@ -43,7 +43,8 @@ Transport transport = new SubprocessCLITransport(options);
 - Apagado ordenado con periodo de gracia (espera a que el subproceso vuelque el archivo de sesión tras el EOF del stdin antes de enviar SIGTERM)
 - Establece `CLAUDE_CODE_ENTRYPOINT=sdk-java` por defecto (se puede sobrescribir con `ClaudeAgentOptions.env()`)
 - Establece `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` salvo que el `env()` del llamante o el entorno heredado ya la nombren (con cualquier combinación de mayúsculas y minúsculas), de modo que el CLI informa con marcos `session_state_changed` marcados con `sdk_host_only`; `QueryHandler` los lee para decidir cuándo puede cerrarse el stdin y los descarta antes de que lleguen al consumidor. Consulta [Arquitectura → Ciclo de vida del stdin](./architecture.md#ciclo-de-vida-del-stdin-y-el-final-de-una-ejecución). La lista completa de variables que establece el transporte está en [Opciones de configuración → env()](./feature-configuration-options.md#env).
-- Avisa al conectar (registro `WARNING`) cuando el CLI es anterior a la 2.0.0, y cuando `verbatimPrompts` está activo pero el CLI es anterior a la 2.1.248, que ignora `client_composed`. La comprobación de versión ejecuta `<cli> -v` y se omite cuando `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` está definida.
+- Comprueba la versión del CLI a partir del campo `claude_code_version` del primer mensaje `system`/`init`, una vez por transporte, de modo que `cliPath` solo se ejecuta para iniciar la sesión (no hay una sonda `<cli> -v` aparte). Registra un `WARNING` cuando el CLI no informa de ninguna versión: las versiones anteriores a la 2.0.0, y las primeras versiones 2.0, no la envían. También avisa cuando `verbatimPrompts` está activo y el CLI es anterior a la 2.1.248 (que ignora `client_composed`) o no informa de versión, lo que se muestra como `unknown`. Definir `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK` desactiva la comprobación.
+- Fusiona `settings` con `sandbox` en un único valor de `--settings` cuando ambos están definidos, y hace fallar `connect()` con `CLIConnectionException` cuando los ajustes no se pueden cargar, en lugar de descartarlos. Consulta [Opciones de configuración → settings()](./feature-configuration-options.md#settings).
 
 ### Reenvío de flags del CLI
 
@@ -110,9 +111,8 @@ robusta**, la misma que adoptó Node.js para esta clase de vulnerabilidad (CVE-2
 «BatBadBut»).
 
 `connect()` valida la ruta resuelta antes de crear ningún proceso con ella, así que la comprobación
-cubre todas las vías hacia el ejecutable: el descubrimiento por PATH, un
-`ClaudeAgentOptions.cliPath(...)` explícito y la comprobación de versión que se ejecuta antes del
-proceso principal.
+cubre todas las vías hacia el ejecutable: el descubrimiento por PATH y un
+`ClaudeAgentOptions.cliPath(...)` explícito.
 
 ```java
 // On Windows, with cliPath pointing at npm's shim:
@@ -154,25 +154,32 @@ nada legítimo: ningún `claude.exe` real vive bajo un directorio con nombre de 
 
 ### Windows: orden de descubrimiento del CLI (0.1.21)
 
-El descubrimiento prefiere un ejecutable nativo, porque un `claude` sin extensión en Windows es un
-script envoltorio de git-bash / WSL que el sistema operativo no puede ejecutar directamente:
+En Windows, el descubrimiento solo encuentra un `claude.exe` nativo (desde la 0.2.5). Un `claude` sin
+extensión es un script envoltorio de git-bash / WSL que el sistema operativo no puede ejecutar
+directamente, y `connect()` rechaza el shim `claude.cmd` de npm:
 
-1. Recorre **todo** el `PATH` buscando primero `claude.exe`. El PATH se recorre por directorios, así
-   que sin esto un script envoltorio en un directorio anterior ensombrecería un `claude.exe` real
-   instalado en uno posterior.
+1. Busca `claude.exe` en cada entrada **absoluta** del `PATH`, por orden. Las entradas relativas
+   (`""`, `.`, `tools`) se omiten: se resuelven respecto al directorio de trabajo, que otro usuario
+   local puede controlar, así que sondearlas supondría un riesgo de plantado de binarios. Solo se
+   sondea el nombre exacto, sin resolución por `PATHEXT`, de modo que un shim o un envoltorio en un
+   directorio anterior nunca ensombrece un `claude.exe` en uno posterior.
 2. Si no, recurre a `~/.local/bin/claude.exe`. Las ubicaciones con forma POSIX deliberadamente **no**
-   se sondean en Windows: una coincidencia sin extensión allí adelantaría al rechazo explicativo con
-   un fallo de creación de proceso opaco, y un `/usr/local/bin/claude` con raíz pero sin unidad se
-   resuelve contra la unidad actual, una ubicación que otro usuario local puede crear, lo que la
-   convierte en un vector de plantado de binarios.
-3. Si no, devuelve un shim `claude.cmd` / `claude.bat` si hay uno en el `PATH`, precisamente para que
-   `connect()` lance el rechazo de script batch *con su mitigación* en lugar de un escueto error de
-   «no encontrado».
-4. Si no, devuelve un acierto no nativo del `PATH` para que el error de creación indique qué hay
-   instalado realmente.
-5. Si no, lanza `CLINotFoundException` con un mensaje específico de Windows que apunta al instalador
+   se sondean en Windows: un `/usr/local/bin/claude` con raíz pero sin unidad se resuelve contra la
+   unidad actual, lo que es otro vector de plantado de binarios, y una coincidencia sin extensión no
+   es ejecutable.
+3. Si no, **solo con [`allowUnsafeWindowsBatchCli(true)`](#windows-habilitación-del-cli-en-batch-0122)**,
+   devuelve un `claude.cmd` y, si no, un `claude.bat`, desde una entrada absoluta del `PATH`, para que
+   quienes aceptaron ese riesgo conserven el descubrimiento automático. El SDK de Python no tiene esta
+   habilitación y nunca devuelve un shim.
+4. Si no, lanza `CLINotFoundException` con un mensaje específico de Windows que apunta al instalador
    nativo. No recomienda `npm install -g @anthropic-ai/claude-code`, porque eso produce justamente el
-   shim que este SDK rechaza.
+   shim que este SDK rechaza, y lo indica.
+
+Antes de la 0.2.5, el descubrimiento también buscaba en las entradas relativas del `PATH` y, sin la
+habilitación, devolvía como último recurso un shim `claude.cmd` o un script envoltorio, de modo que
+`connect()` fallaba con el rechazo de script batch o con un error de creación de proceso. En una
+máquina así ahora se obtiene `CLINotFoundException` al construir el transporte. Una ruta pasada con
+`cliPath(...)` se usa tal cual y sigue pasando por el rechazo descrito arriba.
 
 El descubrimiento en POSIX no cambia: `PATH`, luego `~/.npm-global/bin`, `/usr/local/bin`,
 `~/.local/bin`, `~/node_modules/.bin`, `~/.yarn/bin`, `~/.claude/local`.

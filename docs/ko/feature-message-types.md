@@ -149,11 +149,13 @@ record AssistantMessage(
     @Nullable String messageId,              // Unique message ID from the API (e.g. "msg_01HRq...")
     @Nullable String stopReason,             // Reason the model stopped (e.g. "end_turn")
     @Nullable String sessionId,              // Session ID this message belongs to
-    @Nullable String uuid                    // Unique identifier in the session transcript
+    @Nullable String uuid,                   // Unique identifier in the session transcript
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
-`usage` 맵은 가능한 경우 턴별 API 토큰 소비 데이터를 담으며 `input_tokens`, `output_tokens`, 캐시 관련 키 등이 들어갑니다. `messageId`, `stopReason`, `sessionId`, `uuid` 필드는 API 수준의 식별자를 담습니다. 이들은 null이 될 수 있고 부분/스트리밍 메시지에는 없습니다. 새 필드가 없는 하위 호환 생성자도 제공됩니다.
+`usage` 맵은 가능한 경우 턴별 API 토큰 소비 데이터를 담으며 `input_tokens`, `output_tokens`, 캐시 관련 키 등이 들어갑니다. `messageId`, `stopReason`, `sessionId`, `uuid` 필드는 API 수준의 식별자를 담습니다. 이들은 null이 될 수 있고 부분/스트리밍 메시지에는 없습니다. `userMessageUuid`와 `userMessageUuids`는 값이 설정되거나 바뀐 뒤의 첫 번째 최상위 어시스턴트 메시지에만 채워집니다. [결과를 내 프롬프트와 대응시키기](#결과를-내-프롬프트와-대응시키기)를 보세요. 새 필드가 없는 하위 호환 생성자도 제공됩니다.
 
 ### 메서드
 
@@ -552,7 +554,10 @@ record ResultMessage(
     @Nullable List<String> errors,                // Error messages from the CLI
     @Nullable Integer apiErrorStatus,             // HTTP status of failing API call when isError=true and subtype="success"
     @Nullable String uuid,                        // Unique message identifier in session
-    @Nullable String terminalReason               // Why the query loop terminated
+    @Nullable String terminalReason,              // Why the query loop terminated
+    @Nullable MessageOrigin origin,               // What started the turn (see Message Origin)
+    @Nullable String userMessageUuid,             // uuid of the user message that started the turn
+    @Nullable List<String> userMessageUuids       // uuid of every user message the turn took in
 ) implements Message
 ```
 
@@ -633,7 +638,9 @@ record StreamEvent(
     String uuid,                             // Unique event identifier
     String sessionId,                        // Session identifier
     Map<String, Object> event,               // Raw Anthropic API stream event data
-    @Nullable String parentToolUseId         // Set when inside a subagent tool use
+    @Nullable String parentToolUseId,        // Set when inside a subagent tool use
+    @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
+    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
 ) implements Message
 ```
 
@@ -783,7 +790,7 @@ for (Message msg : client.receiveResponse()) {
 
 ## 메시지 출처
 
-`UserMessage.origin()`과 `ResultMessage.origin()`은 어떤 턴이 *왜* 시작되었는지를 드러냅니다. 스트리밍 입력 모드에서는 하나의 연결 안에서 애플리케이션이 보내는 턴과 세션이 스스로 끼워 넣는 턴 — 백그라운드 태스크 알림, 발동된 예약 태스크 프롬프트, MCP 채널 메시지, 동료 세션에서 중계된 메시지 — 이 뒤섞입니다. `ResultMessage`에서 이 필드는 그 턴을 *촉발한* 메시지의 출처를 알려 주며, 덕분에 "이건 내 프롬프트에 대한 답"과 "이건 백그라운드 태스크에 대한 답"을 구분할 수 있습니다.
+`UserMessage.origin()`과 `ResultMessage.origin()`은 어떤 턴이 *왜* 시작되었는지를 드러냅니다. 스트리밍 입력 모드에서는 하나의 연결 안에서 애플리케이션이 보내는 턴과 세션이 스스로 끼워 넣는 턴 — 백그라운드 태스크 알림, 발동된 예약 태스크 프롬프트, MCP 채널 메시지, 동료 세션에서 중계된 메시지 — 이 뒤섞입니다. `ResultMessage`에서 이 필드는 백그라운드 태스크 알림처럼 그 턴을 *시작한* 것이 무엇인지 알려 줍니다.
 
 ```java
 MessageOrigin origin = result.origin();
@@ -808,6 +815,30 @@ client.query(List.of(message).iterator());
 ```
 
 SDK 호스트에서 인정되는 kind는 `human`뿐이며 Claude Code >= 2.1.210이 필요합니다. 도구 결과 성격의 사용자 메시지에는 출처가 붙지 않습니다.
+
+### 결과를 내 프롬프트와 대응시키기
+
+`origin`은 결과가 *내* 프롬프트를 다루는지 알려 주지 않습니다. 주입된 턴이 실행되는 동안 보낸 프롬프트는 그 턴 안에서 응답될 수 있고, 그러면 결과에는 주입된 턴의 출처가 실립니다. 프롬프트에 대한 결과를 찾으려면 보내는 메시지 맵에 새로운 최상위 `uuid`를 넣고, `userMessageUuid()` / `userMessageUuids()`에서 그것을 찾으세요:
+
+```java
+String myUuid = UUID.randomUUID().toString();
+message.put("uuid", myUuid);
+client.query(List.of(message).iterator());
+
+Iterator<Message> messages = client.receiveMessages();
+while (messages.hasNext()) {
+    if (messages.next() instanceof ResultMessage result) {
+        List<String> uuids = result.userMessageUuids() != null ? result.userMessageUuids() : List.of();
+        if (myUuid.equals(result.userMessageUuid()) || uuids.contains(myUuid)) {
+            // this turn took in the prompt sent with myUuid
+            break;
+        }
+    }
+}
+```
+
+`receiveMessages()`로 읽으세요. `receiveResponse()`는 첫 번째 결과에서 멈추는데, 그것이 주입된 턴의 결과일 수 있습니다. CLI는 이미 본 uuid를 가진 메시지를 건너뛸 수 있으므로 메시지마다 새 uuid를 쓰세요. 오류 결과에도 uuid가 실리므로, 프롬프트에 응답했다고 판단하기 전에 `isError()`와 `terminalReason()`을 확인하세요. `userMessageUuids()`는 중단된 턴에서는 빈 목록이고, 오래된 CLI에서는 null입니다. 일반 문자열로 보낸 프롬프트에는 uuid가 없습니다. 그런 프롬프트에 대해서는 `origin`이 null이거나 `HUMAN`인지 보는 것이 최선의 추정일 뿐입니다. `MessageOriginExample`이 이 왕복 과정을 실행합니다. 필드 세부 사항:
+[ResultMessage → userMessageUuid와 userMessageUuids](./api-message-types.md#usermessageuuid와-usermessageuuids).
 
 인식되지 않는 kind는 오류가 되는 대신 그대로 보입니다. `kind()`는 null이고 `kindValue()`가 전송된 문자열을 담으며 `isHuman()`은 false입니다 — 즉 알 수 없는 출처는 항상 "사람이 아님"으로 읽힙니다. CLI가 보낸 객체 전체는 `raw()`에 보존됩니다. 필드별 참조: [MessageOrigin](./api-message-types.md#messageorigin).
 

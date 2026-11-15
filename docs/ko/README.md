@@ -594,6 +594,18 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+기본적으로 실패한 훅(예외를 던지거나 예외로 완료된 훅)은 결정 없음으로 간주되므로, 명령은
+그대로 실행됩니다. 실패했을 때 그냥 통과(fail open)되어서는 안 되는 가드라면 matcher에
+`HookOnFailure.BLOCK` 정책을 지정하세요:
+
+```java
+HookMatcher bashMatcher = new HookMatcher("Bash", List.of(checkBashCommand), null, HookOnFailure.BLOCK);
+```
+
+그러면 CLI가 너무 오래되어 이 정책을 지원하지 못할 경우 `connect()`가
+`CLIConnectionException`을 던집니다. [훅 → 실패 정책](../feature-hooks.md#failure-policy-onfailure)을
+참고하세요.
+
 ### 예시: 모든 도구 사용 기록하기
 
 ```java
@@ -929,6 +941,13 @@ SDK 호스트에서 인정되는 종류는 `human`뿐입니다. 이 SDK가 모�
 `kind()`는 null이 되지만 프로토콜 문자열은 여전히 `kindValue()`로 읽을 수 있으며, 결코
 human으로 간주되지 않습니다.
 
+`origin()`은 무엇이 턴을 시작했는지를 알려 줄 뿐, 그 턴이 내 프롬프트에 대한 응답인지는 알려
+주지 않습니다. 주입된 턴이 실행되는 동안 보낸 프롬프트는 그 턴 안에서 응답될 수 있습니다.
+프롬프트에 대한 결과를 찾으려면 새로운 최상위 `uuid`를 붙여 보내고, `result.userMessageUuid()`
+또는 `result.userMessageUuids()`에서 그 uuid를 찾으세요.
+[메시지 타입 → 결과를 내 프롬프트와 대응시키기](../feature-message-types.md#matching-a-result-to-your-prompt)를
+참고하세요.
+
 ### 콘텐츠 블록
 
 ```java
@@ -1140,6 +1159,8 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `LargeAgentsExample.java` — initialize 요청을 통한 대용량 에이전트 정의 (260KB 이상)
 - `SystemPromptExample.java` — 사용자 정의 시스템 프롬프트 사용법
 - `IncludePartialMessagesExample.java` — 부분 메시지 업데이트를 포함한 스트리밍
+- `MessageOriginExample.java` — 메시지 출처, uuid로 결과를 해당 프롬프트와 대응시키기, 대화 리셋
+- `ParallelToolSessionReadsExample.java` — 병렬 도구 호출이 있는 턴을 다시 읽어 실제 CLI와 대조하기
 
 ### 예제 실행하기
 

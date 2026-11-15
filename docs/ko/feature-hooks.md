@@ -50,13 +50,15 @@ var options = ClaudeAgentOptions.builder()
 
 ```java
 record HookMatcher(
-    @Nullable String matcher,        // which tools/events to match; null matches all
-    List<HookCallback> hooks,        // callbacks to run
-    @Nullable Double timeoutSeconds  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable String matcher,         // which tools/events to match; null matches all
+    List<HookCallback> hooks,         // callbacks to run
+    @Nullable Double timeoutSeconds,  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable HookOnFailure onFailure // what a failing callback does; null = CONTINUE
 )
 
 new HookMatcher(List<HookCallback> hooks)                  // matcher = null
 new HookMatcher(String matcher, List<HookCallback> hooks)  // timeoutSeconds = null
+new HookMatcher(String matcher, List<HookCallback> hooks, Double timeoutSeconds)  // onFailure = null
 ```
 
 도구 이벤트에서 `matcher`는 도구 이름(`"Bash"`), `|`로 이은 여러 이름(`"Write|MultiEdit|Edit"`), 또는
@@ -82,9 +84,49 @@ record HookContext(
 SDK는 반환된 future가 완료될 때까지 기다린 뒤 CLI에 응답합니다. 동기 작업이라면
 `CompletableFuture.completedFuture(...)`를 반환하세요.
 
+예외를 던지거나, 예외로 완료되는 future를 반환하거나, `null`로 완료되거나, `null` future를 반환하는 콜백에는
+오류로 응답합니다. 의견이 없는 콜백은 `null`이 아니라 `HookOutput.empty()`를 반환해야 합니다. 오류가 났을 때
+동작이 그대로 진행되는지는 matcher의 [실패 정책](#실패-정책onfailure)에 달려 있습니다.
+
+CLI가 훅 호출을 포기하면(예를 들어 턴이 중단되어 `control_cancel_request`를 보내면), SDK는 콜백이 반환한
+future를 취소하고, 그 future를 기다리던 스레드를 인터럽트하며, 응답을 보내지 않습니다. 자기 스레드를
+블로킹하는 콜백은 `InterruptedException`을 받고, 작업을 다른 스레드에 넘기는 콜백은 취소된 future에 반응할
+수 있습니다.
+
 > **디스패치 순서:** 같은 이벤트에 여러 매처가 등록되어 있으면, CLI는 일치하는 훅 콜백을 순차적으로가
 > 아니라 **동시에**(병렬로) 디스패치합니다. 각 훅은 서로 독립적이도록 설계하세요 — 하나가 끝난 뒤에
 > 다른 하나가 시작된다고 가정하지 마세요(예: 통과 순서를 전제로 하는 속도 제한 훅을 엮지 마세요).
+
+### 실패 정책(`onFailure`)
+
+`HookOnFailure`는 실패한 콜백이 그 콜백을 호출한 동작에 어떤 영향을 줄지 결정합니다:
+
+| 값 | 실패한 콜백 |
+|-------|--------------------|
+| `CONTINUE` (그리고 기본값인 `null`) | 결정 없음으로 간주됩니다: 훅이 실행되지 않은 것처럼 동작이 진행됩니다 |
+| `BLOCK` | 동작을 차단합니다 |
+
+콜백은 오류로 응답될 때(위 참고), 또는 CLI가 거부하는 값(예: 인식하지 못하는 `permissionDecision`)을 반환할 때
+실패합니다. 인식하지 못하는 키는 실패가 아닙니다. 실패했을 때 그냥 통과(fail open)되어서는 안 되는 가드에는
+`BLOCK`을 쓰세요:
+
+```java
+HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), null, HookOnFailure.BLOCK);
+```
+
+`Stop`과 `SubagentStop`은 이 옵션을 무시합니다. `PermissionRequest`의 차단은 `canUseTool`이 답하기 전에
+도달한 경우에만 효력이 있습니다.
+
+정책은 initialize 요청에 `onFailure`로 전송됩니다. 어느 matcher든 `BLOCK`을 쓰면 `initialize()`(따라서
+`connect()`)는 CLI의 응답을 확인하고, 다음 경우 전송을 닫고 `CLIConnectionException`을 던집니다:
+
+- 응답이 `hook_on_failure_supported`를 보고하지 않는 경우: CLI가 너무 오래되어 정책을 지킬 수 없으므로
+  가드가 그냥 통과(fail open)될 것입니다.
+- 응답이 `hooks_applied: false`를 보고하는 경우: 이미 실행 중인 세션이 훅을 등록하지 않았으므로 가드가
+  결코 실행되지 않을 것입니다.
+
+`CONTINUE`는 오래된 CLI가 원래 그렇게 동작하므로 CLI 지원이 필요 없습니다. `Hooks.java`는 위험한 명령
+가드에 `BLOCK`을 쓰며, 거부를 처리하는 방법을 보여 줍니다.
 
 ## 훅 입력
 

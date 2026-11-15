@@ -51,13 +51,15 @@ var options = ClaudeAgentOptions.builder()
 
 ```java
 record HookMatcher(
-    @Nullable String matcher,        // which tools/events to match; null matches all
-    List<HookCallback> hooks,        // callbacks to run
-    @Nullable Double timeoutSeconds  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable String matcher,         // which tools/events to match; null matches all
+    List<HookCallback> hooks,         // callbacks to run
+    @Nullable Double timeoutSeconds,  // timeout for all hooks in this matcher (CLI default: 60)
+    @Nullable HookOnFailure onFailure // what a failing callback does; null = CONTINUE
 )
 
 new HookMatcher(List<HookCallback> hooks)                  // matcher = null
 new HookMatcher(String matcher, List<HookCallback> hooks)  // timeoutSeconds = null
+new HookMatcher(String matcher, List<HookCallback> hooks, Double timeoutSeconds)  // onFailure = null
 ```
 
 Para eventos de ferramenta, `matcher` é o nome de uma ferramenta (`"Bash"`), vários nomes unidos por
@@ -84,10 +86,53 @@ record HookContext(
 O SDK aguarda o future devolvido antes de responder ao CLI. Devolva
 `CompletableFuture.completedFuture(...)` para trabalho síncrono.
 
+Um callback que lança uma exceção, devolve um future que completa excepcionalmente, completa com
+`null` ou devolve um future `null` é respondido com um erro. Um callback sem opinião devolve
+`HookOutput.empty()`, nunca `null`. Se um erro deixa a ação prosseguir depende da
+[política de falha](#política-de-falha-onfailure) do matcher.
+
+Se o CLI abandonar a chamada do hook (ele envia um `control_cancel_request`, por exemplo quando o
+turno é interrompido), o SDK cancela o future que o callback devolveu, interrompe a thread que o
+aguarda e não envia resposta. Um callback que bloqueia sua thread recebe uma
+`InterruptedException`; um que repassa o trabalho a outra thread pode reagir ao future cancelado.
+
 > **Ordem de despacho:** quando há vários matchers registrados no mesmo evento, o CLI despacha todos
 > os callbacks de hook correspondentes **concorrentemente** (em paralelo), não em sequência. Projete
 > cada hook para ser independente — não conte com um terminar antes de outro começar (por exemplo,
 > não encadeie hooks de limitação de taxa que pressuponham uma ordem de bloqueio).
+
+### Política de falha (`onFailure`)
+
+`HookOnFailure` decide o que um callback que falha faz com a ação para a qual foi chamado:
+
+| Valor | Um callback que falha |
+|-------|-----------------------|
+| `CONTINUE` (e `null`, o padrão) | conta como ausência de decisão: a ação prossegue como se o hook não tivesse sido executado |
+| `BLOCK` | bloqueia a ação |
+
+Um callback falha quando é respondido com um erro (veja acima) ou devolve um valor que o CLI
+rejeita, como um `permissionDecision` que ele não reconhece. Chaves não reconhecidas não são uma
+falha. Use `BLOCK` para uma proteção que não pode falhar aberta:
+
+```java
+HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), null, HookOnFailure.BLOCK);
+```
+
+`Stop` e `SubagentStop` ignoram a opção. Um bloqueio em `PermissionRequest` só conta se chegar antes
+de `canUseTool` responder.
+
+A política é enviada na requisição initialize como `onFailure`. Quando algum matcher usa `BLOCK`,
+`initialize()` (e, portanto, `connect()`) verifica a resposta do CLI, fecha o transporte e lança
+`CLIConnectionException` quando:
+
+- a resposta não informa `hook_on_failure_supported`: o CLI é antigo demais para respeitar a
+  política, então a proteção falharia aberta; ou
+- a resposta informa `hooks_applied: false`: uma sessão já em execução não registrou os hooks, então
+  a proteção nunca seria executada.
+
+`CONTINUE` não precisa de suporte do CLI, já que é assim que um CLI mais antigo se comporta de
+qualquer forma. `Hooks.java` usa `BLOCK` em sua proteção contra comandos perigosos e mostra como
+tratar a recusa.
 
 ## Entradas de hook
 

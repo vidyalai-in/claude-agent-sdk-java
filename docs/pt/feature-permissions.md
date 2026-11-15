@@ -46,6 +46,10 @@ que carrega os pedidos de permissão também está disponível ali. Não pode se
 })
 ```
 
+Se o CLI abandonar a requisição de permissão antes que o callback responda (ele envia um
+`control_cancel_request`, por exemplo quando o turno é interrompido), o SDK cancela o future que o
+callback devolveu, interrompe a thread que o aguarda e não envia resposta.
+
 > **`canUseTool` só dispara em decisões `"ask"`.** Esse callback é o substituto, no SDK, do prompt
 > interativo de permissão — ele roda apenas quando as regras de permissão do CLI resultam em
 > `"ask"`. Ele **não** é invocado para chamadas de ferramenta já permitidas por `allowedTools`,

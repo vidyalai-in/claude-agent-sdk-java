@@ -293,7 +293,9 @@ try (var client = ClaudeSDK.createClient(options)) {
 - 기본 질의와 대화
 - 사용자 정의 MCP 도구
 - 권한 콜백
-- 백그라운드 서브에이전트의 후속 턴에서 처리되는 훅을 포함한 훅 시스템 (`BackgroundAgentHooksExample`)
+- 실패하면 차단하는 가드(`Hooks`, `HookOnFailure.BLOCK`)와 백그라운드 서브에이전트의 후속 턴에서 처리되는 훅(`BackgroundAgentHooksExample`)을 포함한 훅 시스템
+- uuid로 결과를 그 결과를 시작한 프롬프트와 대응시키기 (`MessageOriginExample`)
+- 병렬 도구 호출이 있는 턴을 디스크와 `SessionStore`에서 다시 읽기 (`ParallelToolSessionReadsExample`)
 - 스트리밍 이벤트
 - 오류 처리
 - `snapshot`을 포함한 시스템 프롬프트 (`SystemPromptExample`)

@@ -295,7 +295,9 @@ O SDK inclui mais de 30 exemplos executáveis, cobrindo:
 - Consultas e conversas básicas
 - Ferramentas MCP personalizadas
 - Callbacks de permissão
-- Sistema de hooks, incluindo hooks atendidos no turno de continuação de um subagente em segundo plano (`BackgroundAgentHooksExample`)
+- Sistema de hooks, incluindo uma proteção que bloqueia quando falha (`Hooks`, `HookOnFailure.BLOCK`) e hooks atendidos no turno de continuação de um subagente em segundo plano (`BackgroundAgentHooksExample`)
+- Associação de um resultado ao prompt que o iniciou pelo uuid (`MessageOriginExample`)
+- Leitura de um turno com chamadas de ferramenta paralelas a partir do disco e de um `SessionStore` (`ParallelToolSessionReadsExample`)
 - Eventos de streaming
 - Tratamento de erros
 - Prompts de sistema, incluindo `snapshot` (`SystemPromptExample`)

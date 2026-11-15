@@ -44,6 +44,9 @@
 })
 ```
 
+콜백이 답하기 전에 CLI가 권한 요청을 포기하면(예를 들어 턴이 중단되어 `control_cancel_request`를 보내면),
+SDK는 콜백이 반환한 future를 취소하고, 그 future를 기다리던 스레드를 인터럽트하며, 응답을 보내지 않습니다.
+
 > **`canUseTool`은 `"ask"` 결정에서만 발동합니다.** 이 콜백은 대화형 권한 프롬프트를 대신하는 SDK의
 > 수단이며, CLI의 권한 규칙이 `"ask"`로 평가될 때만 실행됩니다. `allowedTools`, `permissionMode`(예:
 > `ACCEPT_EDITS`, `BYPASS_PERMISSIONS`), 설정의 `permissions.allow` 규칙으로 이미 허용된 도구 호출에

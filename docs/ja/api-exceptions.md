@@ -44,6 +44,8 @@ public class CLIConnectionException extends ClaudeSDKException {
 - プロセスの起動に失敗した
 - 接続のタイムアウト
 - ネットワークの問題（リモートトランスポート）
+- `sandbox` とのマージのために `settings` を読み込めない（`"Failed to load settings: ..."`）：ファイルが存在しない、読み取れない、JSON が不正、またはオブジェクトではない JSON。[settings()](./feature-configuration-options.md#settings) を参照してください
+- `HookOnFailure.BLOCK` のマッチャーがあるのに、CLI が `hook_on_failure_supported` を報告しない、または `hooks_applied: false` を報告する。[フック → 失敗ポリシー](./feature-hooks.md#失敗ポリシーonfailure)を参照してください
 
 ## CLINotFoundException
 
@@ -55,8 +57,13 @@ public class CLINotFoundException extends ClaudeSDKException {
 }
 ```
 
+CLI が見つからない場合、何かを起動する前、トランスポートの構築時に投げられます。Windows では、絶対パスの
+`PATH` エントリにあるネイティブの `claude.exe`、または `~/.local/bin/claude.exe` だけが見つかります。npm の
+`claude.cmd` シムは `allowUnsafeWindowsBatchCli(true)` を指定した場合にのみ見つかり、メッセージにもそう
+書かれます。
+
 **対処**：
-- Claude Code CLI をインストールする
+- Claude Code CLI をインストールする（Windows ではネイティブインストーラーで）
 - `.cliPath()` で独自のパスを指定する
 
 ## ProcessException

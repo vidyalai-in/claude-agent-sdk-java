@@ -326,6 +326,10 @@ List<SessionMessage> subAgent =
 String spawnedBy = subAgent.get(0).parentToolUseId();
 ```
 
+`getSessionMessagesFromStore` 以与本地读取方法完全相同的方式重建对话，包括包含并行工具调用的轮次；两种
+消息读取方法都先应用偏移量再分页（`limit` 为 `null` 或 `0` 表示不限制）；参见
+[会话历史 → 对话是如何重建的](./feature-session-history.md#对话是如何重建的)。
+
 当存储实现了 `listSessionSummaries` 时，`listSessionsFromStore` 有一条快速路径：一次批量的摘要调用，
 加上一次廉价的 `listSessions` 枚举，用来补齐那些附属记录缺失或过期的会话。若未实现
 `listSessionSummaries`，它会回退为每个会话一次 `loadAsync()`，且**并发上限为 16 次调用**

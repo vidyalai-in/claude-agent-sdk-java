@@ -526,7 +526,10 @@ Caminho personalizado para o CLI do Claude Code.
 .cliPath(Path.of("/custom/path/to/claude"))
 ```
 
-Padrão: procura no PATH do sistema.
+Padrão: procura o CLI. Em POSIX, isso significa o `PATH` e depois alguns locais de instalação
+comuns. No Windows, só é encontrado um `claude.exe` nativo, e apenas nas entradas absolutas do
+`PATH`, e depois em `~/.local/bin/claude.exe`; veja [Camada de transporte →
+Descoberta do CLI no Windows](./feature-transport-layer.md#windows-ordem-de-descoberta-do-cli-0121).
 
 **Windows:** um caminho `.bat`/`.cmd` (o shim `claude.cmd` do npm) é recusado — o sistema operacional o executaria via `cmd.exe`, que reinterpreta a linha de comando. Aponte para um `claude.exe` ou veja `allowUnsafeWindowsBatchCli()` abaixo.
 
@@ -545,6 +548,10 @@ Isto **não** é um simples bypass — uma dispensa pura restauraria toda a brec
 2. **Rejeita `& | < > ^ % ! "` e CR/LF em todo argumento do CLI**, lançando `IllegalArgumentException` com o nome da opção problemática. `%` e `!` não estão no conjunto de escape do JDK, e as aspas não impedem a expansão de `%VAR%`.
 3. **Registra um `WARNING`** nomeando o risco aceito.
 
+A habilitação também permite que a descoberta do CLI retorne o shim `claude.cmd` do npm (ou um
+`claude.bat`) de uma entrada absoluta do `PATH` quando não existe nenhum `claude.exe`, de modo que
+`cliPath()` pode ficar sem definir. Sem ela, a descoberta nunca retorna um shim.
+
 **Risco residual:** o cmd.exe ainda expande `%VAR%` a partir do ambiente. Use apenas onde o caminho do CLI e todos os valores de argumento sejam controlados pelo administrador. Ignorado em POSIX. Veja [Camada de transporte → habilitação de CLI em batch](./feature-transport-layer.md#windows-habilitação-de-cli-em-batch-0122).
 
 ### settings()
@@ -558,10 +565,17 @@ Caminho para um arquivo JSON de configurações adicional, ou uma string JSON in
 
 Sem `sandbox()`, o valor é repassado como está para `--settings`. Com `sandbox()` também
 definido, os dois são mesclados em uma única string JSON: um valor que começa com `{` e termina
-com `}` é interpretado como JSON, e qualquer outro é lido como caminho de arquivo (um arquivo
-ausente ou ilegível é registrado em log e apenas as configurações do sandbox são repassadas).
-Elas são carregadas na camada de "flag settings" do CLI, a de maior prioridade entre as
-configurações controladas pelo usuário.
+com `}` é interpretado como JSON, e qualquer outro é lido como caminho de arquivo. Um caminho
+relativo é resolvido em relação a `cwd()` quando ele está definido, como o CLI o resolve, e uma
+marca de ordem de bytes (BOM) UTF-8 é removida. Elas são carregadas na camada de "flag settings" do
+CLI, a de maior prioridade entre as configurações controladas pelo usuário.
+
+Quando as configurações não podem ser mescladas, `connect()` falha com
+`CLIConnectionException("Failed to load settings: ...")` em vez de iniciar o CLI apenas com as
+configurações do sandbox, o que descartaria em silêncio suas regras de permissão e seus hooks. Isso
+cobre um arquivo ausente ou ilegível, um diretório, JSON inválido (inline ou em arquivo), JSON que
+não é um objeto e conteúdo depois do objeto. A mensagem informa a linha e a coluna de um erro de
+JSON, mas nunca cita o texto das configurações, que pode conter segredos.
 
 ### addDirs()
 
@@ -589,12 +603,15 @@ Define variáveis de ambiente para o processo do CLI.
 ```
 
 O map é mesclado sobre o ambiente do processo pai: as entradas aqui sobrescrevem os valores
-herdados, e `CLAUDECODE` é removida do conjunto herdado. O transporte também define:
+herdados. `CLAUDECODE` é removida do conjunto herdado, e `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP` é
+sempre removida, já que uma herdada de uma sessão externa do SDK nomeia o app daquela sessão. O
+transporte também define:
 
 | Variável | Quando | Pode ser sobrescrita aqui |
 |----------|--------|---------------------------|
 | `CLAUDE_CODE_ENTRYPOINT=sdk-java` | sempre | sim |
 | `CLAUDE_AGENT_SDK_VERSION` | sempre | não |
+| `CLAUDE_AGENT_SDK_CLIENT_APP` | `clientApp(...)` está definido (veja [clientApp()](#clientapp)) | não: `clientApp()` prevalece |
 | `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` | a menos que este map ou o ambiente herdado já a nomeie (com qualquer combinação de maiúsculas e minúsculas) | sim |
 | `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true` | `enableFileCheckpointing(true)` | — |
 | `PWD` | `cwd(...)` está definido | — |
@@ -604,8 +621,23 @@ Duas variáveis definidas aqui ajustam por quanto tempo uma consulta pontual man
 aberto para hooks e chamadas a servidores MCP do SDK (veja [Arquitetura → Ciclo de vida do stdin](./architecture.md#ciclo-de-vida-do-stdin-e-o-fim-de-uma-execução)):
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` limita a espera entre turnos (padrão `600000`, `0` para
 sem limite), e `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` habilita os quadros
-`session_state_changed` do CLI. Defina `CLAUDE_AGENT_SDK_CLIENT_APP` (por exemplo,
-`"my-app/1.0.0"`) para identificar sua aplicação no cabeçalho User-Agent.
+`session_state_changed` do CLI.
+
+### clientApp()
+
+O identificador do seu app ou biblioteca, enviado nas requisições à API.
+
+```java
+.clientApp("my-app/1.0.0")
+```
+
+Define `CLAUDE_AGENT_SDK_CLIENT_APP` para o subprocesso do CLI. Prevalece sobre um valor para essa
+variável em `env()` ou no ambiente herdado. Passe `""` para não enviar identificador; `null` (o
+padrão) deixa o ambiente como está. O valor precisa ser válido em um cabeçalho HTTP: um caractere
+acima de U+00FF faz toda requisição parar.
+
+Ao contrário do SDK Python, este SDK nunca deriva um identificador padrão. O Python só deriva um
+para o CLI empacotado em seu wheel, e este SDK não traz um CLI empacotado.
 
 ### extraArgs()
 
@@ -686,6 +718,15 @@ HookMatcher.HookCallback beforeRead = (input, context) -> {
 Um callback recebe o `HookInput` tipado e um `HookContext`, e retorna um
 `CompletableFuture<HookOutput>`. Veja [Hooks](./feature-hooks.md) para as
 entradas, as saídas e as saídas específicas de hook.
+
+Um matcher também pode definir um tempo limite e uma política `onFailure`. Com
+`HookOnFailure.BLOCK`, um callback que falha bloqueia a ação em vez de deixá-la ser executada:
+
+```java
+new HookMatcher("Bash", List.of(guard), null, HookOnFailure.BLOCK)
+```
+
+Veja [Hooks → Política de falha](./feature-hooks.md#política-de-falha-onfailure).
 
 **Eventos disponíveis**:
 - `PRE_TOOL_USE` — antes de executar a ferramenta
@@ -798,7 +839,9 @@ Controla quais arquivos de configuração são carregados.
 ))
 ```
 
-**Uma lista vazia desativa todas as fontes.** Passe `List.of()` para enviar `--setting-sources=` (vazio) ao CLI, suprimindo todas as fontes de configuração do sistema de arquivos. Quando a opção é **omitida por completo** (o padrão), nenhuma flag `--setting-sources` é adicionada e o CLI aplica seus próprios padrões.
+**Uma lista vazia desativa todas as fontes.** Passe `List.of()` para enviar `--setting-sources=` (vazio) ao CLI, suprimindo todas as fontes de configuração do sistema de arquivos. Quando a opção é **omitida por completo** (o padrão), nenhuma flag `--setting-sources` é adicionada e o CLI aplica seus próprios padrões, que carregam todas as fontes.
+
+Use `List.of()` para isolar uma sessão das configurações do sistema de arquivos, por exemplo quando o `cwd` pode não ser confiável: as configurações de projeto podem executar hooks. Inclua `SettingSource.PROJECT` para carregar os arquivos `CLAUDE.md`.
 
 ### skills() / skillsAll()
 

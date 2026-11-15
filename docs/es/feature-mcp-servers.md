@@ -640,6 +640,8 @@ Los handlers que solo reciben sus argumentos siguen funcionando exactamente igua
 
 Desconectar tiene el mismo efecto: cerrar el cliente abandona las llamadas aún en curso, así que un apagado no queda retenido por una herramienta que nada puede interrumpir.
 
+Lo mismo ocurre con un `control_cancel_request` para la petición de control que transportaba la llamada: el contexto se cancela y no se envía ninguna respuesta. Consulta [Arquitectura → Peticiones de control canceladas](./architecture.md#peticiones-de-control-canceladas).
+
 Un fallo del handler también se registra localmente en `WARNING` con su traza, de modo que una herramienta que se rompe es depurable sin que la transcripción del modelo sea el único registro.
 
 ### Operaciones largas

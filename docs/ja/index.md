@@ -294,7 +294,9 @@ try (var client = ClaudeSDK.createClient(options)) {
 - 基本的なクエリと会話
 - カスタム MCP ツール
 - 権限コールバック
-- フックシステム（バックグラウンドサブエージェントの後続ターンで処理されるフックを含む。`BackgroundAgentHooksExample`）
+- フックシステム（失敗時にブロックするガード —— `Hooks`、`HookOnFailure.BLOCK` —— と、バックグラウンドサブエージェントの後続ターンで処理されるフック —— `BackgroundAgentHooksExample` —— を含む）
+- uuid による、結果とそれを開始したプロンプトの対応付け（`MessageOriginExample`）
+- 並列のツール呼び出しを含むターンの、ディスクと `SessionStore` からの読み戻し（`ParallelToolSessionReadsExample`）
 - ストリーミングイベント
 - エラー処理
 - システムプロンプト（`snapshot` を含む。`SystemPromptExample`）

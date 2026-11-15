@@ -596,6 +596,17 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+既定では、失敗した（例外を投げた、または例外的に完了した）フックは判断なしとして扱われるため、
+コマンドは実行されてしまいます。フェイルオープンしてはならないガードには、マッチャーに
+`HookOnFailure.BLOCK` ポリシーを指定します：
+
+```java
+HookMatcher bashMatcher = new HookMatcher("Bash", List.of(checkBashCommand), null, HookOnFailure.BLOCK);
+```
+
+この場合、CLI が古すぎてポリシーを守れないと、`connect()` は `CLIConnectionException` を投げます。
+[フック → 失敗ポリシー](../feature-hooks.md#failure-policy-onfailure)を参照してください。
+
 ### 例：すべてのツール利用をログに記録する
 
 ```java
@@ -933,6 +944,12 @@ CLI がメッセージに出所を付与しなかった場合、`origin()` は n
 `kind()` は null になりますが、プロトコル上の文字列は `kindValue()` から読み取れます。また
 それが human とみなされることはありません。
 
+`origin()` が示すのはターンを何が開始したかであって、それが自分のプロンプトへの応答かどうかではありません：
+差し込まれたターンの実行中に送ったプロンプトは、そのターンの中で応答されることがあります。プロンプトに
+対応する結果を見つけるには、新しいトップレベルの `uuid` を付けて送り、その uuid を
+`result.userMessageUuid()` または `result.userMessageUuids()` から探してください。
+[メッセージ型 → プロンプトに対応する結果の特定](../feature-message-types.md#matching-a-result-to-your-prompt)を参照してください。
+
 ### コンテンツブロック
 
 ```java
@@ -1146,6 +1163,8 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `LargeAgentsExample.java` —— initialize リクエスト経由の大きなエージェント定義（260KB 超）
 - `SystemPromptExample.java` —— カスタムシステムプロンプトの利用
 - `IncludePartialMessagesExample.java` —— 部分メッセージ更新付きのストリーミング
+- `MessageOriginExample.java` —— メッセージの出所、uuid による結果とプロンプトの対応付け、会話のリセット
+- `ParallelToolSessionReadsExample.java` —— 並列のツール呼び出しを含むターンの読み戻し（ライブの CLI で確認）
 
 ### サンプルの実行
 
