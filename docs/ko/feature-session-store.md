@@ -536,12 +536,16 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 여전히 큐 순서대로 직렬화됩니다. 느린 어댑터가 결과 사이에 읽기 루프를 막지는 않지만, 바쁜 동안에는 프레임이 합쳐져
 보입니다. `sessionStore`가 설정되지 않으면 이 옵션은 무시됩니다.
 
-> **주의: 느린 저장소는 결과마다 스트림을 붙잡습니다.** 두 모드 모두에서 리더는 각 `ResultMessage`를 넘기기 전에 대기
-> 중인 항목이 추가되기를 기다립니다. 그동안에는 제어 응답을 포함해 CLI에서 아무것도 읽지 않으므로, 그 플러시 도중에
-> 한 `interrupt()`, `setModel()`, `getMcpStatus()` 같은 제어 호출도 함께 기다립니다. `close()`도 마찬가지로 마지막
-> 플러시를 기다립니다. 각 대기는 `TranscriptMirrorBatcher.flushTimeoutMs()`(기본 181초)로 제한됩니다
-> ([`TranscriptMirrorBatcher`](#transcriptmirrorbatcher) 참고). Python SDK도 같은 방식으로 동작합니다. `append`를 빠르게
-> 유지하거나, 느린 작업은 어댑터 안의 큐로 넘기세요.
+> **느린 저장소는 결과를 늦출 뿐 제어 호출은 늦추지 않습니다(0.2.7부터).** 두 모드 모두에서 각 `ResultMessage`는
+> 대기 중인 항목이 추가된 뒤에야 넘겨지며, 그 턴의 `MirrorErrorMessage`가 먼저 도착합니다. 그동안 결과와 그 뒤의 모든
+> 메시지는 보류되지만 리더는 계속 읽습니다: `interrupt()`, `setModel()`, `getMcpStatus()` 같은 제어 호출은 즉시 응답을
+> 받고, CLI의 `canUseTool` 및 훅 요청도 처리됩니다. 한 턴 안의 메시지는 보류되지 않지만, 이전 결과가 전달되기 전에
+> 시작된 턴(미리 보낸 스트리밍 입력 프롬프트, 백그라운드 에이전트의 후속 턴)은 그 턴의 `tool_use`를 받기 전에
+> `canUseTool`이나 훅 콜백이 실행될 수 있습니다. `receiveResponse()`가 반환된 뒤에 다음 프롬프트를 보내는 경우에는
+> 영향이 없습니다. 보류된 메시지는 `maxMsgQSize`에 포함되므로, 멈춘 저장소 때문에 메모리가 끝없이 늘어나지는
+> 않습니다. `close()`는 마지막 플러시를 기다립니다. 각 대기는 `TranscriptMirrorBatcher.flushTimeoutMs()`(기본
+> 181초)로 제한됩니다([`TranscriptMirrorBatcher`](#transcriptmirrorbatcher) 참고). 반면 Python SDK는 플러시 동안
+> 리더를 막으므로 제어 호출도 함께 기다립니다. `append`를 빠르게 유지하거나, 느린 작업은 어댑터 안의 큐로 넘기세요.
 
 ## 로컬 세션을 저장소로 가져오기
 

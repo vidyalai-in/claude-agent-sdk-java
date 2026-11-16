@@ -295,7 +295,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` 要求 `store.implementsListSessions()`。
 - `sessionStore + enableFileCheckpointing` 会被拒绝 —— 检查点只支持本地磁盘。
 
-**慢速存储会拖住消息流。** 在每个 `ResultMessage` 之前，读取线程会等待待处理的条目追加完成，在此期间不从 CLI 读取任何其他内容，因此像 `interrupt()` 这样的控制调用也会等待。`close()` 同样会等待最后一次刷写。每次等待都以批处理器的刷写超时为上限，默认 181 秒。Python SDK 的行为相同；参见 [Session Store 指南中的注意事项](./feature-session-store.md#刷写模式batched-与-eager)。
+**结果会等待存储，控制调用则不会（自 0.2.7 起）。** 每个 `ResultMessage` 及其后的每条消息都会被暂存，直到存储追加完该轮，因此你永远不会看到存储中尚未保存的结果。在此期间读取线程继续读取，因此像 `interrupt()` 这样的控制调用会立即得到应答，CLI 的 `canUseTool` 和钩子请求也会得到处理。因此，在上一个结果交付之前就开始的一轮（提前发送的流式输入提示、后台代理的后续轮次），其回调可能会在你收到它的 `tool_use` 之前运行；在 `receiveResponse()` 返回后再发送下一个提示则不受影响。`close()` 会等待最后一次刷写。每次等待都以批处理器的刷写超时为上限，默认 181 秒。参见 [Session Store 指南](./feature-session-store.md#刷写模式batched-与-eager)。
 
 ### sessionStoreFlush()
 
@@ -464,8 +464,11 @@ String wire = level.getValue(); // "xhigh"
 
 它是一个软上限（自 0.2.6 起）。当 SDK 发出的控制请求（`interrupt()`、`setModel()`、`getMcpStatus()` 等）
 在等待应答时，读取线程会越过上限继续读取，因为该应答与消息来自同一个 stdout。因此，在没有人消费队列之前
-发起的控制调用，不会再因为队列已满而超时。不会丢弃任何内容，顺序也会保持。该值必须至少为 1：更小的值会使
-`connect()`（或 `ClaudeSDK.query`）以 `IllegalArgumentException` 失败。
+发起的控制调用，不会再因为队列已满而超时。不会丢弃任何内容，顺序也会保持。为慢速 `sessionStore` 暂存的
+消息计入该上限；只要有消息被暂存，越过上限的部分就有一个 `maxMsgQSize` 四倍的硬性上限（自 0.2.7 起）：被暂存
+的消息无法被你排空，因此越过该上限后，即使有控制请求待处理，读取线程也会等待，在这种极端情况下控制调用可能
+超时。没有暂存消息时则没有该上限。该值必须至少为 1：`Builder.maxMsgQSize` 会以 `IllegalArgumentException`
+拒绝更小的值。
 
 ## 模型配置
 

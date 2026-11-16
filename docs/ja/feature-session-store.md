@@ -557,12 +557,18 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 間で読み取りループを止めることはありませんが、忙しい間はフレームがまとめられて見えます。`sessionStore` が
 未設定の場合、このオプションは無視されます。
 
-> **注意：遅いストアは result ごとにストリームを止めます。** どちらのモードでも、リーダーは各 `ResultMessage`
-> を渡す前に、保留中のエントリが追記されるのを待ちます。その間は制御レスポンスも含めて CLI から何も読まれない
-> ため、そのフラッシュ中に行われた `interrupt()`、`setModel()`、`getMcpStatus()` のような制御呼び出しも
-> 一緒に待たされます。`close()` も同様に最後のフラッシュを待ちます。それぞれの待機は
-> `TranscriptMirrorBatcher.flushTimeoutMs()`（既定では 181 秒）で上限が決まっています
-> （[`TranscriptMirrorBatcher`](#transcriptmirrorbatcher) を参照）。Python SDK も同じ挙動です。`append` を
+> **遅いストアが遅らせるのは result であり、制御呼び出しではありません（0.2.7 以降）。** どちらのモードでも、
+> 各 `ResultMessage` は保留中のエントリが追記された後に初めて渡され、そのターンの `MirrorErrorMessage` は
+> それより先に届きます。その間 result とそれ以降のすべてのメッセージは保留されますが、リーダーは読み続けます：
+> `interrupt()`、`setModel()`、`getMcpStatus()` のような制御呼び出しにはすぐに応答があり、CLI からの
+> `canUseTool` やフックのリクエストも処理されます。ターン内のメッセージが保留されることはありませんが、前の
+> result が届けられる前に始まったターン（先に送られたストリーミング入力のプロンプト、バックグラウンドエージェントの
+> 後続ターン）では、そのターンの `tool_use` を受け取る前に `canUseTool` やフックのコールバックが実行される
+> ことがあります。`receiveResponse()` が戻った後に次のプロンプトを送る場合は影響を受けません。保留中の
+> メッセージは `maxMsgQSize` に数えられるため、止まったストアがメモリを際限なく増やすことはありません。
+> `close()` は最後のフラッシュを待ちます。それぞれの待機は `TranscriptMirrorBatcher.flushTimeoutMs()`
+> （既定では 181 秒）で上限が決まっています（[`TranscriptMirrorBatcher`](#transcriptmirrorbatcher) を参照）。
+> Python SDK はフラッシュの間リーダーをブロックするため、制御呼び出しもそれと一緒に待たされます。`append` を
 > 速く保つか、遅い処理はアダプタ内のキューに渡してください。
 
 ## ローカルのセッションをストアへ取り込む

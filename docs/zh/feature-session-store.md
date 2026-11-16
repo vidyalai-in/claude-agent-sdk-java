@@ -511,11 +511,15 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 `EAGER` 会把批处理器的待处理阈值清零 —— 每入队一帧都会在 SDK 自有的排空执行器上调度一次后台排空（每个任务一个 `session-store-mirror-drain-<n>` 线程；在 Java 21+ 上是虚拟线程），由它在所配置的 `SessionStoreExecutor` 上调用你的适配器的 `appendAsync`。追加仍按入队顺序串行进行；慢速适配器不会在两次 result 之间拖住
 读取循环，但在它忙碌期间会看到帧被合并。未设置 `sessionStore` 时该选项会被忽略。
 
-> **注意：慢速存储会在每个 result 处拖住消息流。** 在两种模式下，读取线程都会在交出每个 `ResultMessage` 之前等待
-> 待处理的条目追加完成。在此期间不会从 CLI 读取任何其他内容，包括控制响应，因此在这次刷写期间发起的 `interrupt()`、
-> `setModel()` 或 `getMcpStatus()` 等控制调用也会随之等待。`close()` 同样会等待最后一次刷写。每次等待都以
-> `TranscriptMirrorBatcher.flushTimeoutMs()` 为上限，默认 181 秒（参见 [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)）。
-> Python SDK 的行为相同。请让 `append` 保持快速，或在适配器内部把慢速工作交给一个队列。
+> **慢速存储推迟的是结果，而不是控制调用（自 0.2.7 起）。** 在两种模式下，每个 `ResultMessage` 都只会在待处理的
+> 条目追加完成之后才交出，且该轮的任何 `MirrorErrorMessage` 都会先到达。在此期间，result 及其后的每条消息都会被
+> 暂存，但读取线程继续读取：`interrupt()`、`setModel()` 或 `getMcpStatus()` 等控制调用会立即得到应答，CLI 的
+> `canUseTool` 和钩子请求也会得到处理。同一轮之内的消息永远不会被暂存，但在上一个结果交付之前就开始的一轮
+> （提前发送的流式输入提示、后台代理的后续轮次），其 `canUseTool` 或钩子回调可能会在你收到该轮的 `tool_use`
+> 之前运行。在 `receiveResponse()` 返回后再发送下一个提示则不受影响。被暂存的消息计入 `maxMsgQSize`，因此卡住的
+> 存储无法让内存无限增长。`close()` 会等待最后一次刷写。每次等待都以 `TranscriptMirrorBatcher.flushTimeoutMs()`
+> 为上限，默认 181 秒（参见 [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)）。Python SDK 则会在刷写期间阻塞其
+> 读取线程，因此控制调用也会随之等待。请让 `append` 保持快速，或在适配器内部把慢速工作交给一个队列。
 
 ## 把本地会话导入存储
 

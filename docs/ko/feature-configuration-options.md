@@ -308,7 +308,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore`에는 `store.implementsListSessions()`가 필요합니다.
 - `sessionStore + enableFileCheckpointing`은 거부됩니다 — 체크포인트는 로컬 디스크 전용입니다.
 
-**느린 저장소는 스트림을 붙잡습니다.** 각 `ResultMessage` 전에 리더는 대기 중인 항목이 추가되기를 기다리며, 그동안 CLI에서 다른 것을 읽지 않으므로 `interrupt()` 같은 제어 호출도 함께 기다립니다. `close()`도 마찬가지로 마지막 플러시를 기다립니다. 각 대기는 배처의 플러시 타임아웃(기본 181초)으로 제한됩니다. Python SDK도 같은 방식으로 동작합니다. [Session Store 가이드의 주의 사항](./feature-session-store.md#플러시-모드-batched-대-eager)을 참고하세요.
+**결과는 저장소를 기다리지만 제어 호출은 기다리지 않습니다(0.2.7부터).** 각 `ResultMessage`와 그 뒤의 모든 메시지는 저장소가 그 턴을 추가할 때까지 보류되므로, 저장소에 없는 결과를 보게 되는 일은 없습니다. 그동안에도 리더는 계속 읽으므로 `interrupt()` 같은 제어 호출은 즉시 응답을 받고, CLI의 `canUseTool` 및 훅 요청도 처리됩니다. 따라서 이전 결과가 전달되기 전에 시작된 턴(미리 보낸 스트리밍 입력 프롬프트, 백그라운드 에이전트의 후속 턴)은 그 턴의 `tool_use`를 받기 전에 콜백이 실행될 수 있습니다. `receiveResponse()`가 반환된 뒤에 다음 프롬프트를 보내는 경우에는 영향이 없습니다. `close()`는 마지막 플러시를 기다립니다. 각 대기는 배처의 플러시 타임아웃(기본 181초)으로 제한됩니다. [Session Store 가이드](./feature-session-store.md#플러시-모드-batched-대-eager)를 참고하세요.
 
 ### sessionStoreFlush()
 
@@ -482,8 +482,10 @@ String wire = level.getValue(); // "xhigh"
 이는 소프트 한도입니다(0.2.6부터). SDK가 보낸 제어 요청(`interrupt()`, `setModel()`, `getMcpStatus()`, ...)이 응답을
 기다리는 동안에는 응답이 메시지와 같은 stdout으로 도착하므로 리더가 한도를 넘어 계속 읽습니다. 따라서 아무도 큐를
 비우기 전에 한 제어 호출도 더는 가득 찬 큐 뒤에서 타임아웃되지 않습니다. 버려지는 것은 없고 순서도 유지됩니다.
-값은 1 이상이어야 합니다: 더 작은 값이면 `connect()`(또는 `ClaudeSDK.query`)가 `IllegalArgumentException`으로
-실패합니다.
+느린 `sessionStore`를 위해 보류된 메시지도 한도에 포함되며, 보류된 메시지가 있는 동안에는 초과분에 `maxMsgQSize`의
+네 배인 하드 상한이 있습니다(0.2.7부터): 보류된 메시지는 비울 수 없으므로, 상한을 넘으면 제어 요청이 대기 중이어도
+리더가 기다리며, 이런 극단적인 경우에는 제어 호출이 타임아웃될 수 있습니다. 보류된 것이 없으면 상한도 없습니다.
+값은 1 이상이어야 합니다: 더 작은 값은 `Builder.maxMsgQSize`가 `IllegalArgumentException`으로 거부합니다.
 
 ## 모델 설정
 

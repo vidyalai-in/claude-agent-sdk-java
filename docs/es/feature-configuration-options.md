@@ -309,7 +309,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` requiere `store.implementsListSessions()`.
 - `sessionStore + enableFileCheckpointing` se rechaza: los checkpoints solo existen en disco local.
 
-**Un store lento retiene el flujo.** Antes de cada `ResultMessage`, el lector espera a que se anexen las entradas pendientes y, mientras tanto, no lee nada más del CLI, así que una llamada de control como `interrupt()` también espera. `close()` espera igualmente al vaciado final. Cada espera está acotada por el tiempo límite de vaciado del agrupador, 181 s por defecto. El SDK de Python se comporta del mismo modo; consulta la [advertencia en la guía del Session Store](./feature-session-store.md#modo-de-volcado-batched-frente-a-eager).
+**Los resultados esperan al store; las llamadas de control no (desde la 0.2.7).** Cada `ResultMessage`, y todos los mensajes posteriores, se retienen hasta que el store haya anexado el turno, así que nunca ves un resultado que el store no tenga. Mientras tanto el lector sigue leyendo, de modo que una llamada de control como `interrupt()` se responde de inmediato y se atienden las peticiones `canUseTool` y de hooks del CLI. Por eso, un turno que empieza antes de que se entregue el resultado anterior (prompts de entrada en streaming enviados por adelantado, un turno de seguimiento de un agente en segundo plano) puede ejecutar su callback antes de que recibas su `tool_use`; enviar el siguiente prompt después de que `receiveResponse()` devuelva no se ve afectado. `close()` espera al vaciado final. Cada espera está acotada por el tiempo límite de vaciado del agrupador, 181 s por defecto. Consulta la [guía del Session Store](./feature-session-store.md#modo-de-volcado-batched-frente-a-eager).
 
 ### sessionStoreFlush()
 
@@ -486,8 +486,13 @@ Es un límite flexible (desde la 0.2.6). Mientras una petición de control envia
 (`interrupt()`, `setModel()`, `getMcpStatus()`, ...) espera su respuesta, el lector sigue leyendo más
 allá del límite, porque esa respuesta llega por el mismo stdout que los mensajes. Por eso, una
 llamada de control hecha antes de que nadie vacíe la cola ya no agota su tiempo de espera detrás de
-una cola llena. No se descarta nada y se mantiene el orden. El valor debe ser al menos 1: uno menor
-hace fallar `connect()` (o `ClaudeSDK.query`) con `IllegalArgumentException`.
+una cola llena. No se descarta nada y se mantiene el orden. Los mensajes retenidos por un
+`sessionStore` lento cuentan para el límite y, mientras haya alguno retenido, el desbordamiento tiene
+un tope estricto de cuatro veces `maxMsgQSize` (desde la 0.2.7): los mensajes retenidos no se pueden
+vaciar, así que pasado ese tope el lector espera aunque haya una petición de control pendiente, y en
+ese caso extremo la llamada de control puede agotar su tiempo de espera. Sin nada retenido no hay
+tope. El valor debe ser al menos 1: `Builder.maxMsgQSize` rechaza uno menor con
+`IllegalArgumentException`.
 
 ## Configuración del modelo
 

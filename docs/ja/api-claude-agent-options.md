@@ -61,7 +61,7 @@ options.toBuilder()
 - `forkSession(boolean)` —— 再開したセッションをフォーク
 - `resumeSessionAt(String)` —— 切り詰めレジューム：再開する会話を、このトランスクリプトエントリ UUID までを含む範囲だけ読み込み、それより前の地点から分岐します。`resume` と、通常は `forkSession` と併用します。任意のトランスクリプトエントリ UUID を受け付けます —— 典型的にはライブで観測した `AssistantMessage.uuid()` か、`ClaudeSDK.getSessionMessages(...)` から得た `SessionMessage.uuid()` です。`--resume-session-at=<value>` として送出されます。[切り詰めレジューム](./feature-session-history.md#切り詰めレジューム)を参照してください。
 - `resumeDropsTurn(String)` —— `resumeSessionAt` と併用：この切り詰めで破棄しようとしているターンのユーザープロンプトの UUID です。CLI は読み込み時に、分岐点より後の*すべての*エントリがそのターンに属することを検証し、そうでなければ拒否します —— セッションがターンの途中で取り込んだ、キュー中のユーザーメッセージやタスク通知が黙って捨てられることは決してありません。拒否は例外として現れ、そのメッセージには `Resume rejected by --resume-drops-turn:` が含まれます。これは決定論的な結果として扱い、再試行せず普通にレジュームしてください。null でない限り常に転送されるため、空文字列も CLI に届き、そこで不正な形式として拒否されます（ガードが黙って無効化されることはありません）。`--resume-drops-turn=<value>` として送出されます。
-- `sessionStore(SessionStore)` —— トランスクリプトを外部ストアにミラーし、そこからレジュームします（[Session Store](./feature-session-store.md) を参照）。設定すると SDK は CLI に `--session-mirror` を渡し、`transcript_mirror` フレームを `store.appendAsync(...)` にルーティングします。事前検証では、`listSessions()` をサポートしない状態での `continueConversation + sessionStore` と、`sessionStore + enableFileCheckpointing` が拒否されます。遅いストアは各 `ResultMessage` の前のフラッシュの間リーダーを止め（制御呼び出しもそれに合わせて待ちます）、`close()` は最後のフラッシュを待ちます。いずれも既定では最大 181 秒です。
+- `sessionStore(SessionStore)` —— トランスクリプトを外部ストアにミラーし、そこからレジュームします（[Session Store](./feature-session-store.md) を参照）。設定すると SDK は CLI に `--session-mirror` を渡し、`transcript_mirror` フレームを `store.appendAsync(...)` にルーティングします。事前検証では、`listSessions()` をサポートしない状態での `continueConversation + sessionStore` と、`sessionStore + enableFileCheckpointing` が拒否されます。各 `ResultMessage` は、ストアがそのターンを保持してから初めて届けられます。0.2.7 以降、その間も遅いストアが制御呼び出しを止めることはありません：result とそれに続くメッセージは保留され、リーダーは読み続けます。`close()` は引き続き最後のフラッシュを待ちます。既定では最大 181 秒です。
 - `sessionStoreFlush(SessionStoreFlushMode)` —— トランスクリプトミラーのエントリを `sessionStore` にフラッシュするタイミング。`BATCHED`（既定）はエントリをまとめ、1 ターンごと、またはバッファが 500 エントリ／1 MiB を超えたときに一度フラッシュします。`EAGER` はフレームごとにバックグラウンドのフラッシュをスケジュールし、ほぼリアルタイムで届けます。`sessionStore` が未設定の場合は無視されます。[フラッシュモード](./feature-session-store.md#フラッシュモードbatched-と-eager)を参照してください。
 - `loadTimeoutMs(long)` —— レジュームのマテリアライズ中における `store.loadAsync()` / `listSubkeysAsync()` の 1 回あたりのタイムアウト（ミリ秒、既定 `60_000`）。`0` は即時タイムアウトを意味し、十分大きな値は実質的に無効化します。
 
@@ -73,7 +73,7 @@ options.toBuilder()
 - `effort(String)` —— 思考の深さのレベル（`"low"`、`"medium"`、`"high"`、`"xhigh"`、`"max"`）。`"xhigh"` は Opus 4.7 専用で、他のモデルでは `"high"` にフォールバックします。
 - `effort(EffortLevel)` —— 上と同じですが、[`EffortLevel`](feature-configuration-options.md#effortlevel-列挙型) 列挙型（`LOW`、`MEDIUM`、`HIGH`、`XHIGH`、`MAX`）を使う型安全な版です。`null` を渡すとクリアされます。
 - `maxThinkingTokens(Integer)` —— **非推奨**。`thinking()` を使ってください。新しいモデルでは値はオン／オフとして扱われます（0 = 無効、それ以外 = 適応型）
-- `maxMsgQSize(Integer)` —— メッセージキューの最大サイズ（既定は 1000、最小 1）。キューが満杯になると、メッセージを消費するまでリーダーが読み取りを止めます（バックプレッシャー）。メッセージが破棄されることはありません。これはソフトリミットです：送信側の制御リクエスト（`interrupt()`、`setModel()` など）が応答を待っている間は、応答が届くようにリーダーは上限を超えて読み続けます
+- `maxMsgQSize(Integer)` —— メッセージキューの最大サイズ（既定は 1000、最小 1）。キューが満杯になると、メッセージを消費するまでリーダーが読み取りを止めます（バックプレッシャー）。メッセージが破棄されることはありません。これはソフトリミットです：送信側の制御リクエスト（`interrupt()`、`setModel()` など）が応答を待っている間は、応答が届くようにリーダーは上限を超えて読み続けます。また、遅い `sessionStore` がメッセージを保留している間は、上限の 4 倍のハードな上限で止まるため（0.2.7 以降）、メモリは有界に保たれます
 
 ### モデル
 - `model(String)` —— AI モデル名。空文字列の場合は `--model` を送りません（`fallbackModel`、`permissionPromptToolName`、`resume`、`sessionId`、`settings` も同様）

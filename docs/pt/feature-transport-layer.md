@@ -143,7 +143,8 @@ um consumidor lento desacelera o CLI em vez de perder saída. O mesmo vale uma c
 de mensagens do `QueryHandler` (veja [Arquitetura → QueryHandler](./architecture.md#queryhandler)).
 O `maxMsgQSize` dessa fila é um limite flexível: enquanto uma requisição de controle de saída espera
 sua resposta, o `QueryHandler` continua lendo além dele, para que o `control_response` atrás das
-mensagens enfileiradas ainda possa chegar.
+mensagens enfileiradas ainda possa chegar. Enquanto um `SessionStore` lento retém mensagens, essa
+leitura adicional para num teto rígido de quatro vezes o limite.
 
 ### Windows: recusa de CLI em script batch (0.1.21)
 

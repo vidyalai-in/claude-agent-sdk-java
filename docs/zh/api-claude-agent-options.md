@@ -61,7 +61,7 @@ options.toBuilder()
 - `forkSession(boolean)` —— 分叉所恢复的会话
 - `resumeSessionAt(String)` —— 截断式恢复：所恢复的会话只加载到该会话记录条目 UUID（含）为止，从更早的时点分叉。需与 `resume` 配合使用，通常还要配合 `forkSession`。接受任意会话记录条目 UUID —— 通常是实时观察到的 `AssistantMessage.uuid()`，或来自 `ClaudeSDK.getSessionMessages(...)` 的 `SessionMessage.uuid()`。以 `--resume-session-at=<value>` 形式传出。参见[截断式恢复](./feature-session-history.md#截断式恢复)。
 - `resumeDropsTurn(String)` —— 与 `resumeSessionAt` 一起使用：本次截断打算丢弃的那一轮用户提示词的 UUID。CLI 随后会在加载时校验分叉点之后的*每一个*条目都属于该轮次，否则拒绝 —— 这样一来，会话在轮次中途吸收的排队用户消息或任务通知就绝不会被悄悄丢掉。被拒绝时会抛出异常，其消息中含有 `Resume rejected by --resume-drops-turn:`；应把它视为确定性的结果，直接改为普通恢复，而不是重试。只要非 null 就会转发，因此空字符串也会抵达 CLI，并在那里作为格式错误被拒绝，而不是悄悄使该保护失效。以 `--resume-drops-turn=<value>` 形式传出。
-- `sessionStore(SessionStore)` —— 将会话记录镜像到外部存储，并可从中恢复（参见 [Session Store](./feature-session-store.md)）。设置后，SDK 会向 CLI 传递 `--session-mirror`，并把 `transcript_mirror` 帧路由到 `store.appendAsync(...)`。预检校验会拒绝在不支持 `listSessions()` 的情况下使用 `continueConversation + sessionStore`，以及 `sessionStore + enableFileCheckpointing`。慢速存储会在每个 `ResultMessage` 之前的刷新期间阻住读取线程（控制调用也随之等待），`close()` 会等待最后一次刷新，二者默认各最多等待 181 秒。
+- `sessionStore(SessionStore)` —— 将会话记录镜像到外部存储，并可从中恢复（参见 [Session Store](./feature-session-store.md)）。设置后，SDK 会向 CLI 传递 `--session-mirror`，并把 `transcript_mirror` 帧路由到 `store.appendAsync(...)`。预检校验会拒绝在不支持 `listSessions()` 的情况下使用 `continueConversation + sessionStore`，以及 `sessionStore + enableFileCheckpointing`。每个 `ResultMessage` 都只会在存储已保存该轮之后才交付。自 0.2.7 起，慢速存储在此期间不再拖住控制调用：result 及其后的消息会被暂存，而读取线程继续读取。`close()` 仍会等待最后一次刷新，默认最多 181 秒。
 - `sessionStoreFlush(SessionStoreFlushMode)` —— 会话记录镜像条目何时刷写到 `sessionStore`。`BATCHED`（默认）会合并条目，并在每轮结束时、或缓冲区超过 500 条 / 1 MiB 时刷写一次；`EAGER` 会在每一帧之后调度一次后台刷写，以实现接近实时的投递。未设置 `sessionStore` 时该项被忽略。参见[刷写模式](./feature-session-store.md#刷写模式batched-与-eager)。
 - `loadTimeoutMs(long)` —— 在恢复物化期间，`store.loadAsync()` / `listSubkeysAsync()` 每次调用的超时（毫秒，默认 `60_000`）。取值 `0` 表示立即超时；取很大的值相当于禁用超时。
 
@@ -73,7 +73,7 @@ options.toBuilder()
 - `effort(String)` —— 思考深度级别（`"low"`、`"medium"`、`"high"`、`"xhigh"`、`"max"`）。`"xhigh"` 是 Opus 4.7 专有的，在其他模型上会回退为 `"high"`。
 - `effort(EffortLevel)` —— 同上，但使用 [`EffortLevel`](feature-configuration-options.md#effortlevel-枚举) 枚举（`LOW`、`MEDIUM`、`HIGH`、`XHIGH`、`MAX`）以获得类型安全。传入 `null` 可清除。
 - `maxThinkingTokens(Integer)` —— **已废弃**，请改用 `thinking()`。在较新的模型上，该值只被视为开/关（0 = 禁用，其他任何值 = 自适应）
-- `maxMsgQSize(Integer)` —— 消息队列最大长度（默认 1000，至少为 1）。队列满时，读取线程会暂停，直到你消费一条消息（背压）；不会丢弃任何消息。这是一个软上限：当一个出站控制请求（`interrupt()`、`setModel()` 等）在等待应答时，读取线程会越过上限继续读取，以便应答能够到达
+- `maxMsgQSize(Integer)` —— 消息队列最大长度（默认 1000，至少为 1）。队列满时，读取线程会暂停，直到你消费一条消息（背压）；不会丢弃任何消息。这是一个软上限：当一个出站控制请求（`interrupt()`、`setModel()` 等）在等待应答时，读取线程会越过上限继续读取，以便应答能够到达；而当慢速 `sessionStore` 暂存着消息时，读取会在上限的四倍处遇到硬性上限而停止（自 0.2.7 起），从而使内存保持有界
 
 ### 模型
 - `model(String)` —— AI 模型名称；空字符串不发送 `--model`（`fallbackModel`、`permissionPromptToolName`、`resume`、`sessionId` 和 `settings` 同理）

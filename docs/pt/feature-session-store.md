@@ -568,14 +568,21 @@ por tarefa; virtual no Java 21+), que chama o `appendAsync` do seu adaptador no
 trava o laço de leitura entre resultados, mas verá quadros agrupados enquanto estiver ocupado. A opção
 é ignorada quando `sessionStore` não está definido.
 
-> **Ressalva: um store lento segura o fluxo a cada resultado.** Nos dois modos, o leitor espera as
-> entradas pendentes serem gravadas antes de entregar cada `ResultMessage`. Nada mais é lido do CLI
-> nesse meio-tempo, respostas de controle inclusive, então uma chamada de controle como `interrupt()`,
-> `setModel()` ou `getMcpStatus()` feita durante essa gravação espera junto. O `close()` da mesma
-> forma espera a gravação final. Cada espera é limitada por `TranscriptMirrorBatcher.flushTimeoutMs()`,
-> 181 s por padrão (veja [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)). O SDK Python se
-> comporta da mesma forma. Mantenha o `append` rápido, ou repasse o trabalho lento a uma fila dentro
-> do seu adaptador.
+> **Um store lento atrasa os resultados, não as chamadas de controle (desde a 0.2.7).** Nos dois
+> modos, cada `ResultMessage` só é entregue depois que as entradas pendentes são anexadas, e qualquer
+> `MirrorErrorMessage` desse turno chega antes. O resultado, e toda mensagem depois dele, fica retido
+> nesse meio-tempo, mas o leitor continua lendo: uma chamada de controle como `interrupt()`,
+> `setModel()` ou `getMcpStatus()` é respondida na hora, e as requisições `canUseTool` e de hook do
+> CLI são atendidas. Mensagens dentro de um turno nunca ficam retidas, mas um turno que começa antes
+> de o resultado anterior ser entregue (prompts de entrada em streaming enviados adiantados, um turno
+> de continuação de um agente em segundo plano) pode ter seu callback `canUseTool` ou de hook
+> executado antes de você receber o `tool_use` desse turno. Enviar o próximo prompt depois que
+> `receiveResponse()` retorna não é afetado. As mensagens retidas contam para `maxMsgQSize`, então um
+> store travado não consegue fazer a memória crescer sem limite. O `close()` espera a gravação final.
+> Cada espera é limitada por `TranscriptMirrorBatcher.flushTimeoutMs()`, 181 s por padrão (veja
+> [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)). O SDK Python, em vez disso, bloqueia seu
+> leitor durante a gravação, então as chamadas de controle esperam junto. Mantenha o `append` rápido,
+> ou repasse o trabalho lento a uma fila dentro do seu adaptador.
 
 ## Importando sessões locais para um store
 

@@ -119,7 +119,7 @@ SDK MCP 回调内部调用 `disconnect()`/`close()` 时同样如此；该回调�
 
 完整的行不可能被后续数据补全，因此损坏的行是错误，而不是需要继续缓冲的内容：该异常会结束消息流，与 Python SDK 一致，消费者的迭代器会重新抛出它。在 0.2.6 之前，一行格式错误的数据会悄无声息地吞掉其后的每一条消息。被流的结束截断的最后一行，若能解析则交付，否则丢弃。当 stdout 正常结束时，非零的 CLI 退出码会以 `ProcessException` 报告。
 
-**背压**：读取线程会等待其队列腾出空间，而不是丢弃消息，因此慢速的消费者会让 CLI 变慢，而不会丢失输出。上一层 `QueryHandler` 的消息队列也是如此（参见[架构 → QueryHandler](./architecture.md#queryhandler)）。该队列的 `maxMsgQSize` 是一个软上限：当一个出站控制请求在等待应答时，`QueryHandler` 会越过上限继续读取，从而让排在已入队消息后面的 `control_response` 仍能到达。
+**背压**：读取线程会等待其队列腾出空间，而不是丢弃消息，因此慢速的消费者会让 CLI 变慢，而不会丢失输出。上一层 `QueryHandler` 的消息队列也是如此（参见[架构 → QueryHandler](./architecture.md#queryhandler)）。该队列的 `maxMsgQSize` 是一个软上限：当一个出站控制请求在等待应答时，`QueryHandler` 会越过上限继续读取，从而让排在已入队消息后面的 `control_response` 仍能到达。当慢速 `SessionStore` 暂存着消息时，这种越限读取会在上限的四倍处遇到硬性上限而停止。
 
 ### Windows：拒绝批处理脚本 CLI（0.1.21）
 

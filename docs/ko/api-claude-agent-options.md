@@ -61,7 +61,7 @@ options.toBuilder()
 - `forkSession(boolean)` — 재개한 세션을 포크
 - `resumeSessionAt(String)` — 잘라내기 재개: 재개하는 대화를 이 트랜스크립트 항목 UUID까지만(해당 항목 포함) 불러와 그보다 이른 지점에서 분기합니다. `resume`과 함께, 보통 `forkSession`과도 함께 사용합니다. 어떤 트랜스크립트 항목 UUID든 받을 수 있습니다 — 보통은 실시간으로 관찰한 `AssistantMessage.uuid()`이거나 `ClaudeSDK.getSessionMessages(...)`에서 얻은 `SessionMessage.uuid()`입니다. `--resume-session-at=<value>`로 전달됩니다. [잘라내기 재개](./feature-session-history.md#잘라내기-재개)를 참고하세요.
 - `resumeDropsTurn(String)` — `resumeSessionAt`과 함께: 이번 잘라내기로 버리려는 턴의 사용자 프롬프트 UUID입니다. 그러면 CLI는 불러오는 시점에 분기점 이후의 *모든* 항목이 그 턴에 속하는지 검증하고, 아니면 거부합니다 — 세션이 턴 도중에 흡수한 대기 중인 사용자 메시지나 작업 알림이 조용히 사라지는 일은 결코 없습니다. 거부는 메시지에 `Resume rejected by --resume-drops-turn:`가 들어 있는 예외로 나타납니다. 이는 결정론적인 결과이므로 재시도하지 말고 그냥 평범하게 재개하세요. null이 아니면 항상 전달되므로 빈 문자열도 CLI에 도달해 잘못된 형식으로 거부되며, 보호 장치가 조용히 무력화되지 않습니다. `--resume-drops-turn=<value>`로 전달됩니다.
-- `sessionStore(SessionStore)` — 트랜스크립트를 외부 저장소로 미러링하고 거기서 재개합니다([Session Store](./feature-session-store.md) 참고). 설정하면 SDK가 CLI에 `--session-mirror`를 전달하고 `transcript_mirror` 프레임을 `store.appendAsync(...)`로 보냅니다. 사전 검증은 `listSessions()`를 지원하지 않는 상태의 `continueConversation + sessionStore`와 `sessionStore + enableFileCheckpointing`를 거부합니다. 저장소가 느리면 각 `ResultMessage` 앞의 플러시 동안 리더가 붙잡히고(제어 호출도 함께 기다립니다), `close()`는 마지막 플러시를 기다립니다. 두 경우 모두 기본적으로 최대 181초입니다.
+- `sessionStore(SessionStore)` — 트랜스크립트를 외부 저장소로 미러링하고 거기서 재개합니다([Session Store](./feature-session-store.md) 참고). 설정하면 SDK가 CLI에 `--session-mirror`를 전달하고 `transcript_mirror` 프레임을 `store.appendAsync(...)`로 보냅니다. 사전 검증은 `listSessions()`를 지원하지 않는 상태의 `continueConversation + sessionStore`와 `sessionStore + enableFileCheckpointing`를 거부합니다. 각 `ResultMessage`는 저장소가 그 턴을 받은 뒤에야 전달됩니다. 0.2.7부터는 그동안 느린 저장소가 제어 호출을 더는 붙잡지 않습니다: 결과와 그 뒤의 메시지는 보류되고 리더는 계속 읽습니다. `close()`는 여전히 마지막 플러시를 기다리며, 기본적으로 최대 181초입니다.
 - `sessionStoreFlush(SessionStoreFlushMode)` — 트랜스크립트 미러 항목을 `sessionStore`로 플러시하는 시점입니다. `BATCHED`(기본)는 항목을 모아 턴마다 또는 버퍼가 500개 항목 / 1 MiB를 넘을 때 한 번 플러시합니다. `EAGER`는 프레임마다 백그라운드 플러시를 예약해 거의 실시간으로 전달합니다. `sessionStore`가 설정되지 않으면 무시됩니다. [플러시 모드](./feature-session-store.md#플러시-모드-batched-대-eager)를 참고하세요.
 - `loadTimeoutMs(long)` — 재개를 구체화하는 동안 `store.loadAsync()` / `listSubkeysAsync()` 호출마다 적용되는 타임아웃(밀리초, 기본 `60_000`). `0`은 즉시 타임아웃을 뜻하고, 아주 큰 값은 사실상 비활성화합니다.
 
@@ -73,7 +73,7 @@ options.toBuilder()
 - `effort(String)` — 사고 깊이 수준(`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`). `"xhigh"`는 Opus 4.7 전용이며 다른 모델에서는 `"high"`로 대체됩니다.
 - `effort(EffortLevel)` — 위와 같지만 [`EffortLevel`](feature-configuration-options.md#effortlevel-열거형) 열거형(`LOW`, `MEDIUM`, `HIGH`, `XHIGH`, `MAX`)을 사용하는 타입 안전한 형태입니다. `null`을 넘기면 해제됩니다.
 - `maxThinkingTokens(Integer)` — **더 이상 권장되지 않음**. `thinking()`을 사용하세요. 최신 모델에서는 이 값이 켜기/끄기로만 취급됩니다(0 = 비활성화, 그 밖의 값 = adaptive)
-- `maxMsgQSize(Integer)` — 메시지 큐 최대 크기(기본 1000, 최소 1). 큐가 가득 차면 메시지를 소비할 때까지 리더가 멈춥니다(백프레셔). 버려지는 메시지는 없습니다. 이는 소프트 한도입니다: 나가는 제어 요청(`interrupt()`, `setModel()`, ...)이 응답을 기다리는 동안에는 응답이 도착할 수 있도록 리더가 한도를 넘어 계속 읽습니다
+- `maxMsgQSize(Integer)` — 메시지 큐 최대 크기(기본 1000, 최소 1). 큐가 가득 차면 메시지를 소비할 때까지 리더가 멈춥니다(백프레셔). 버려지는 메시지는 없습니다. 이는 소프트 한도입니다: 나가는 제어 요청(`interrupt()`, `setModel()`, ...)이 응답을 기다리는 동안에는 응답이 도착할 수 있도록 리더가 한도를 넘어 계속 읽고, 느린 `sessionStore`가 메시지를 보류하는 동안에는 한도의 네 배인 하드 상한에서 멈추므로(0.2.7부터) 메모리 사용량이 제한됩니다
 
 ### 모델
 - `model(String)` — AI 모델 이름. 빈 문자열이면 `--model`을 보내지 않습니다(`fallbackModel`, `permissionPromptToolName`, `resume`, `sessionId`, `settings`도 마찬가지입니다)

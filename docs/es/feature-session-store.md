@@ -575,13 +575,21 @@ configurado. Las adiciones siguen serializadas en el orden de encolado; un adapt
 bucle de lectura entre resultados, pero verá marcos agrupados mientras esté ocupado. La opción se
 ignora cuando `sessionStore` no está definido.
 
-> **Advertencia: un store lento retiene el flujo en cada resultado.** En ambos modos, el lector espera
-> a que se anexen las entradas pendientes antes de entregar cada `ResultMessage`. Mientras tanto no se
-> lee nada más del CLI, tampoco las respuestas de control, así que una llamada de control como
-> `interrupt()`, `setModel()` o `getMcpStatus()` hecha durante ese volcado espera con él. `close()`
-> espera igualmente al volcado final. Cada espera está acotada por
+> **Un store lento retrasa los resultados, no las llamadas de control (desde la 0.2.7).** En ambos
+> modos, cada `ResultMessage` se entrega solo después de que se anexen las entradas pendientes, y
+> cualquier `MirrorErrorMessage` de ese turno llega antes. Mientras tanto se retienen el resultado y
+> todos los mensajes posteriores, pero el lector sigue leyendo: una llamada de control como
+> `interrupt()`, `setModel()` o `getMcpStatus()` se responde de inmediato, y se atienden las
+> peticiones `canUseTool` y de hooks del CLI. Los mensajes dentro de un turno nunca se retienen, pero
+> un turno que empieza antes de que se entregue el resultado anterior (prompts de entrada en streaming
+> enviados por adelantado, un turno de seguimiento de un agente en segundo plano) puede ejecutar su
+> callback de `canUseTool` o de hook antes de que recibas el `tool_use` de ese turno. Enviar el
+> siguiente prompt después de que `receiveResponse()` devuelva no se ve afectado. Los mensajes
+> retenidos cuentan para `maxMsgQSize`, así que un store atascado no puede hacer crecer la memoria sin
+> límite. `close()` espera al volcado final. Cada espera está acotada por
 > `TranscriptMirrorBatcher.flushTimeoutMs()`, 181 s por defecto (consulta
-> [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)). El SDK de Python se comporta del mismo modo.
+> [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)). El SDK de Python, en cambio, bloquea su
+> lector durante el volcado, así que las llamadas de control esperan con él.
 > Mantén `append` rápido, o pasa el trabajo lento a una cola dentro de tu adaptador.
 
 ## Importar sesiones locales a un store

@@ -155,7 +155,8 @@ Python SDK と同様、例外はメッセージストリームを終了させ、
 出力を失う代わりに CLI を遅くします。1 つ上の層、`QueryHandler` のメッセージキューでも同じです
 （[アーキテクチャ → QueryHandler](./architecture.md#queryhandler) を参照）。そのキューの `maxMsgQSize` は
 ソフトリミットです：送信側の制御リクエストが応答を待っている間、`QueryHandler` は上限を超えて読み続ける
-ため、キューに溜まったメッセージの後ろにある `control_response` も届くことができます。
+ため、キューに溜まったメッセージの後ろにある `control_response` も届くことができます。遅い `SessionStore` が
+メッセージを保留している間は、この読み進めは上限の 4 倍のハードな上限で止まります。
 
 ### Windows：バッチスクリプト CLI の拒否（0.1.21）
 

@@ -152,7 +152,8 @@ arriba, en la cola de mensajes de `QueryHandler` (consulta
 [Arquitectura → QueryHandler](./architecture.md#queryhandler)). El `maxMsgQSize` de esa cola es un
 límite flexible: mientras una petición de control saliente espera su respuesta, `QueryHandler` sigue
 leyendo más allá de él, de modo que la `control_response` que hay detrás de los mensajes encolados
-todavía puede llegar.
+todavía puede llegar. Mientras un `SessionStore` lento retiene mensajes, esa lectura adicional se
+detiene en un tope estricto de cuatro veces el límite.
 
 ### Windows: rechazo de un CLI en script batch (0.1.21)
 

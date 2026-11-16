@@ -307,7 +307,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` には `store.implementsListSessions()` が必要です。
 - `sessionStore + enableFileCheckpointing` は拒否されます — チェックポイントはローカルディスク専用です。
 
-**遅いストアはストリームを止めます。** 各 `ResultMessage` の前に、リーダーは保留中のエントリが追記されるのを待ち、その間 CLI から他には何も読みません。そのため、`interrupt()` のような制御呼び出しも待たされます。`close()` も同様に最後のフラッシュを待ちます。それぞれの待機はバッチャーのフラッシュタイムアウト（既定では 181 秒）で上限が決まっています。Python SDK も同じ挙動です。[Session Store ガイドの注意点](./feature-session-store.md#フラッシュモードbatched-と-eager)を参照してください。
+**result はストアを待ちますが、制御呼び出しは待ちません（0.2.7 以降）。** 各 `ResultMessage` とそれ以降のすべてのメッセージは、ストアがそのターンを追記し終えるまで保留されるため、ストアにない result を目にすることはありません。その間もリーダーは読み続けるため、`interrupt()` のような制御呼び出しにはすぐに応答があり、CLI からの `canUseTool` やフックのリクエストも処理されます。そのため、前の result が届けられる前に始まったターン（先に送られたストリーミング入力のプロンプト、バックグラウンドエージェントの後続ターン）では、その `tool_use` を受け取る前にコールバックが実行されることがあります。`receiveResponse()` が戻った後に次のプロンプトを送る場合は影響を受けません。`close()` は最後のフラッシュを待ちます。それぞれの待機はバッチャーのフラッシュタイムアウト（既定では 181 秒）で上限が決まっています。[Session Store ガイド](./feature-session-store.md#フラッシュモードbatched-と-eager)を参照してください。
 
 ### sessionStoreFlush()
 
@@ -480,8 +480,12 @@ String wire = level.getValue(); // "xhigh"
 これはソフトリミットです（0.2.6 以降）。SDK が送った制御リクエスト（`interrupt()`、`setModel()`、
 `getMcpStatus()` など）が応答を待っている間、その応答はメッセージと同じ stdout で届くため、リーダーは上限を
 超えて読み続けます。したがって、誰もキューを取り出す前に行われた制御呼び出しが、満杯のキューの後ろでタイム
-アウトすることはもうありません。何も破棄されず、順序も保たれます。値は 1 以上でなければなりません：それより
-小さい値は `IllegalArgumentException` で `connect()`（または `ClaudeSDK.query`）を失敗させます。
+アウトすることはもうありません。何も破棄されず、順序も保たれます。遅い `sessionStore` のために保留された
+メッセージは上限に数えられ、保留中のものがある間、超過分には `maxMsgQSize` の 4 倍というハードな上限があります
+（0.2.7 以降）：保留中のメッセージは取り出せないため、それを超えると制御リクエストが保留中であってもリーダーは
+待ち、その極端な場合には制御呼び出しがタイムアウトすることがあります。何も保留していなければ上限はありません。
+値は 1 以上でなければなりません：`Builder.maxMsgQSize` はそれより小さい値を `IllegalArgumentException` で
+拒否します。
 
 ## モデルの設定
 

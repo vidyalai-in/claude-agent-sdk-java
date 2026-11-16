@@ -170,9 +170,15 @@ El SDK sigue una arquitectura por capas con una separación clara de responsabil
   - **Esperas del espejo de transcripciones**: el vaciado previo a cada `result`, al final del flujo y
     al cerrar se espera sin límite externo (antes de la 0.2.6 se cortaba a los 5 s), así que el store
     ya tiene el turno cuando el consumidor ve su resultado, y cualquier `MirrorErrorMessage` del turno
-    llega antes de su `ResultMessage`. El vaciado previo al resultado se ejecuta en el hilo lector, así
-    que un store lento también retrasa las respuestas de control hasta que termina. El propio
-    agrupador acota cada vaciado; consulta [TranscriptMirrorBatcher](#transcriptmirrorbatcher-interno)
+    llega antes de su `ResultMessage`. Desde la 0.2.7, el lector no espera al vaciado previo al
+    resultado: el resultado y los mensajes que le siguen se retienen en segmentos ordenados, cada uno
+    liberado cuando termina su vaciado, mientras los marcos de control siguen fluyendo. Los errores del
+    espejo se enrutan por número de drenaje (`MirrorErrorSink`) al segmento cuyo resultado preceden.
+    Los mensajes retenidos cuentan para el límite flexible de la cola y, mientras haya alguno retenido,
+    el lector se detiene en un tope estricto de cuatro veces `maxMsgQSize` aunque haya una petición de
+    control pendiente (sin nada retenido no hay tope, ya que el consumidor puede vaciar la cola). El
+    final del flujo se publica solo después de todos los segmentos retenidos y del vaciado final. El
+    propio agrupador acota cada vaciado; consulta [TranscriptMirrorBatcher](#transcriptmirrorbatcher-interno)
 
 **Patrón de diseño**: petición/respuesta asíncrona + Observer (para los hooks)
 
