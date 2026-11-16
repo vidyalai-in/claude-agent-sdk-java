@@ -149,6 +149,52 @@ class SessionImportTest {
 
     @SuppressWarnings("null")
     @Test
+    void importsLinesWithoutATypeInsteadOfAborting() throws Exception {
+        // Python imports every line as an opaque dict; a SessionStoreEntry
+        // used to require a non-empty string "type" and aborted the import here.
+        if (hasEnvOverride()) {
+            return;
+        }
+        String sessionId = UUID.randomUUID().toString();
+        String projectKey = "myproj";
+        writeMainTranscript(projectKey, sessionId, List.of(
+                json("user", "u1", "First"),
+                "{\"uuid\":\"no-type\",\"note\":\"untyped\"}",
+                "{\"type\":7,\"uuid\":\"numeric-type\"}",
+                json("user", "u2", "Second")));
+
+        InMemorySessionStore store = new InMemorySessionStore();
+        SessionImport.importSessionToStore(sessionId, store, null, false, 0);
+
+        List<SessionStoreEntry> loaded = store.load(new SessionKey(projectKey, sessionId, null));
+        assertThat(loaded).extracting(SessionStoreEntry::uuid)
+                .containsExactly("u1", "no-type", "numeric-type", "u2");
+        assertThat(loaded.get(1).type()).isNull();
+        assertThat(loaded.get(2).asMap()).containsEntry("type", 7);
+    }
+
+    @SuppressWarnings("null")
+    @Test
+    void skipsNonObjectLinesInsteadOfAborting() throws Exception {
+        if (hasEnvOverride()) {
+            return;
+        }
+        String sessionId = UUID.randomUUID().toString();
+        String projectKey = "myproj";
+        writeMainTranscript(projectKey, sessionId, List.of(
+                json("user", "u1", "First"),
+                "[1,2,3]",
+                json("user", "u2", "Second")));
+
+        InMemorySessionStore store = new InMemorySessionStore();
+        SessionImport.importSessionToStore(sessionId, store, null, false, 0);
+
+        assertThat(store.load(new SessionKey(projectKey, sessionId, null)))
+                .extracting(SessionStoreEntry::uuid).containsExactly("u1", "u2");
+    }
+
+    @SuppressWarnings("null")
+    @Test
     void invalidUuidRaises() {
         InMemorySessionStore store = new InMemorySessionStore();
         assertThatThrownBy(

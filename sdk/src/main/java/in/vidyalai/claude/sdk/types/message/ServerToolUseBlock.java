@@ -15,7 +15,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param id    unique identifier for this server tool use
  * @param name  the server tool name (one of {@link ServerToolName} values, kept as
  *              a raw string for forward compatibility)
- * @param input the input parameters for the tool
+ * @param input the input parameters for the tool; null when the block has no
+ *              {@code input} or it is not a JSON object
  */
 public record ServerToolUseBlock(
         @JsonProperty("id") String id,

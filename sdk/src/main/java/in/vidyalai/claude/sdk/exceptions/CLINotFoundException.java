@@ -50,6 +50,18 @@ public class CLINotFoundException extends CLIConnectionException {
     }
 
     /**
+     * Creates a new exception with the specified message, CLI path and cause.
+     *
+     * @param message the detail message
+     * @param cliPath the path that was searched
+     * @param cause   the spawn failure that showed the CLI is missing
+     */
+    public CLINotFoundException(String message, String cliPath, Throwable cause) {
+        super(message + ": " + cliPath, cause);
+        this.cliPath = cliPath;
+    }
+
+    /**
      * Gets the CLI path that was searched.
      *
      * @return the CLI path, or null if not specified

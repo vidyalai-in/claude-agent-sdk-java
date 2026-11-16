@@ -5,7 +5,6 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.text.Normalizer;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -64,9 +63,6 @@ public final class SessionStores {
             "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
             Pattern.CASE_INSENSITIVE);
 
-    private static final Pattern UNICODE_STRIP_RE = Pattern.compile(
-            "[​-‏‪-‮⁦-⁩﻿-]");
-
     private static final Set<String> TRANSCRIPT_ENTRY_TYPES = Set.of(
             "user", "assistant", "attachment", "system", "progress");
 
@@ -81,13 +77,9 @@ public final class SessionStores {
     // -------------------------------------------------------------------------
 
     private static String canonicalizePath(@Nullable String dir) {
-        Path p = Path.of(dir != null ? dir : ".").toAbsolutePath().normalize();
-        try {
-            p = p.toRealPath();
-        } catch (IOException ignored) {
-            // Fall through to the absolute/normalized path.
-        }
-        return Normalizer.normalize(p.toString(), Normalizer.Form.NFC);
+        // One canonicalization for disk and store paths, so a project key
+        // always matches the on-disk project directory name.
+        return Sessions.canonicalizePath((dir != null) ? dir : ".");
     }
 
     /**
@@ -226,6 +218,13 @@ public final class SessionStores {
 
     /**
      * Read metadata for a single session from a {@link SessionStore}.
+     *
+     * <p>The entries are serialized to JSONL and run through the same lite
+     * parse as the local-disk path, so {@code fileSize} is the JSONL byte size,
+     * {@code firstPrompt}/{@code createdAt} come from its first 64 KB, and
+     * {@code lastModified} is the last entry's {@code timestamp} (now when it
+     * has none). An exception thrown by {@code store.load()} propagates; it is
+     * not reported as "not found".
      */
     @Nullable
     public static SDKSessionInfo getSessionInfoFromStore(
@@ -236,8 +235,15 @@ public final class SessionStores {
             return null;
         }
         Objects.requireNonNull(sessionStore, "sessionStore must not be null");
+        SessionKey key = new SessionKey(projectKeyForDirectory(directory), sessionId, null);
+        List<SessionStoreEntry> entries = sessionStore.load(key);
+        if (entries == null || entries.isEmpty()) {
+            return null;
+        }
+        String jsonl = entriesToJsonl(entries);
         String projectPath = canonicalizePath(directory);
-        return deriveInfoViaLoad(sessionStore, sessionId, directory, projectPath, null);
+        return Sessions.parseSessionInfoFromLite(
+                sessionId, jsonlToLite(jsonl, mtimeFromJsonlTail(jsonl)), projectPath);
     }
 
     /**
@@ -445,7 +451,9 @@ public final class SessionStores {
         if (tag == null) {
             tagValue = "";
         } else {
-            String sanitized = sanitizeUnicode(tag).strip();
+            // Same sanitizer as the local-disk tagSession (NFKC plus Cf/Co/Cn
+            // and explicit ranges), so both paths store the same tag.
+            String sanitized = SessionMutations.sanitizeUnicode(tag).strip();
             if (sanitized.isEmpty()) {
                 throw new IllegalArgumentException("tag must be non-empty (use null to clear)");
             }
@@ -495,6 +503,9 @@ public final class SessionStores {
         if (!UUID_RE.matcher(sessionId).matches()) {
             throw new IllegalArgumentException("Invalid session_id: " + sessionId);
         }
+        if ((upToMessageId != null) && upToMessageId.isEmpty()) {
+            upToMessageId = null; // "" means no cutoff, as in Python's `if up_to_message_id`
+        }
         if (upToMessageId != null && !UUID_RE.matcher(upToMessageId).matches()) {
             throw new IllegalArgumentException("Invalid up_to_message_id: " + upToMessageId);
         }
@@ -514,8 +525,9 @@ public final class SessionStores {
         for (SessionStoreEntry entry : loaded) {
             Map<String, Object> map = new LinkedHashMap<>(entry.asMap());
             raw.add(map);
-            String entryType = (String) map.get("type");
-            if (TRANSCRIPT_TYPES_FORK.contains(entryType) && map.get("uuid") instanceof String) {
+            String entryType = entry.type();
+            if (entryType != null && TRANSCRIPT_TYPES_FORK.contains(entryType)
+                    && map.get("uuid") instanceof String) {
                 transcript.add(map);
             } else if ("content-replacement".equals(entryType)
                     && sessionId.equals(map.get("sessionId"))
@@ -591,38 +603,17 @@ public final class SessionStores {
         return view;
     }
 
-    @Nullable
-    private static SDKSessionInfo deriveInfoViaLoad(
-            SessionStore sessionStore,
-            String sessionId,
-            @Nullable String directory,
-            @Nullable String projectPath,
-            @Nullable Long knownMtime) {
-        SessionKey key = new SessionKey(projectKeyForDirectory(directory), sessionId, null);
-        List<SessionStoreEntry> entries;
-        try {
-            entries = sessionStore.load(key);
-        } catch (RuntimeException e) {
-            // Adapter errors degrade to an empty summary entry instead of failing the whole list.
-            return knownMtime != null
-                    ? new SDKSessionInfo(sessionId, "", knownMtime, null, null, null, null, projectPath, null, null)
-                    : null;
-        }
-        if (entries == null || entries.isEmpty()) {
-            return null;
-        }
-        long mtime = knownMtime != null ? knownMtime : mtimeFromEntriesTail(entries);
-        // Build the summary by folding entries — produces same fields as lite-parse path.
-        SessionSummaryEntry folded = SessionSummary.foldSessionSummary(null, key, entries);
-        SessionSummaryEntry stamped = new SessionSummaryEntry(folded.sessionId(), mtime, folded.data());
-        return SessionSummary.summaryEntryToSdkInfo(stamped, projectPath);
-    }
-
     /**
      * Derive {@link SDKSessionInfo} for each slot in {@code slots} via
      * concurrent {@code store.loadAsync()} calls, bounded by
      * {@link #STORE_LIST_LOAD_CONCURRENCY}. Returns a {@code sessionId →
      * SDKSessionInfo} map; sidechain/empty-summary sessions are absent.
+     *
+     * <p>Each session's entries are serialized to JSONL and lite-parsed exactly
+     * as the disk path parses a transcript file, with {@code lastModified} set
+     * to the listing's mtime. A load that fails yields a sentinel row (empty
+     * summary, listing mtime, every other field null) instead of failing the
+     * listing.
      *
      * <p>Mirrors Python's {@code _derive_infos_via_load} which uses
      * {@code asyncio.gather} with a {@code Semaphore(16)}.
@@ -666,25 +657,20 @@ public final class SessionStores {
                 sem.release();
                 issued.add(slot);
                 futures.add(java.util.concurrent.CompletableFuture.completedFuture(
-                        sentinelOnError(slot, projectPath)));
+                        sentinelOnError(slot)));
                 continue;
             }
             issued.add(slot);
             futures.add(load.handle((entries, err) -> {
                 sem.release();
                 if (err != null) {
-                    return sentinelOnError(slot, projectPath);
+                    return sentinelOnError(slot);
                 }
                 if (entries == null || entries.isEmpty()) {
                     return null;
                 }
-                long mtime = slot.mtime() != 0
-                        ? slot.mtime()
-                        : mtimeFromEntriesTail(entries);
-                SessionSummaryEntry folded = SessionSummary.foldSessionSummary(null, key, entries);
-                SessionSummaryEntry stamped = new SessionSummaryEntry(
-                        folded.sessionId(), mtime, folded.data());
-                return SessionSummary.summaryEntryToSdkInfo(stamped, projectPath);
+                return Sessions.parseSessionInfoFromLite(
+                        slot.sessionId(), jsonlToLite(entriesToJsonl(entries), slot.mtime()), projectPath);
             }));
         }
 
@@ -706,33 +692,135 @@ public final class SessionStores {
         return result;
     }
 
-    @Nullable
-    private static SDKSessionInfo sentinelOnError(Slot slot, @Nullable String projectPath) {
-        return slot.mtime() != 0
-                ? new SDKSessionInfo(slot.sessionId(), "", slot.mtime(),
-                        null, null, null, null, projectPath, null, null)
-                : null;
+    /**
+     * The row a listing keeps for a session whose load failed: empty summary,
+     * the listing's mtime, and every other field (cwd included) null. Matches
+     * Python's {@code SDKSessionInfo(session_id=sid, summary="", last_modified=mtime)}.
+     */
+    private static SDKSessionInfo sentinelOnError(Slot slot) {
+        return new SDKSessionInfo(slot.sessionId(), "", slot.mtime(),
+                null, null, null, null, null, null, null);
     }
 
-    private static long mtimeFromEntriesTail(List<SessionStoreEntry> entries) {
-        for (int i = entries.size() - 1; i >= 0; i--) {
-            String ts = entries.get(i).timestamp();
-            if (ts != null) {
-                try {
-                    String norm = ts.endsWith("Z") ? ts.substring(0, ts.length() - 1) + "+00:00" : ts;
-                    return java.time.OffsetDateTime.parse(norm).toInstant().toEpochMilli();
-                } catch (java.time.format.DateTimeParseException ignored) {
-                    // Try previous entry
+    /** JSON writer for {@link #entriesToJsonl}: escapes non-ASCII, as Python's {@code json.dumps} does. */
+    private static final ObjectMapper JSONL_MAPPER = new ObjectMapper()
+            .configure(com.fasterxml.jackson.core.json.JsonWriteFeature.ESCAPE_NON_ASCII.mappedFeature(), true);
+
+    /**
+     * Serialize store entries to a JSONL string, one compact JSON object per
+     * line, with {@code type} hoisted to the front.
+     *
+     * <p>The {@code SessionStore.load} contract lets adapters reorder object
+     * keys (e.g. Postgres JSONB), but the lite parser looks for
+     * <code>{"type":"tag"</code> as a line prefix, so hoisting {@code type} gives
+     * the store path the byte shape the disk path sees. Non-ASCII characters are
+     * written as JSON unicode escapes, as Python's {@code json.dumps} does by
+     * default, so {@code fileSize} matches the Python SDK for the same entries.
+     * Mirrors Python's {@code _entries_to_jsonl}.
+     */
+    static String entriesToJsonl(List<SessionStoreEntry> entries) {
+        StringBuilder sb = new StringBuilder();
+        for (SessionStoreEntry entry : entries) {
+            Map<String, Object> data = entry.asMap();
+            Map<String, Object> ordered = data;
+            if (data.containsKey("type")) {
+                ordered = new LinkedHashMap<>();
+                ordered.put("type", data.get("type"));
+                ordered.putAll(data);
+            }
+            try {
+                sb.append(JSONL_MAPPER.writeValueAsString(ordered));
+            } catch (JsonProcessingException e) {
+                // Not JSON-safe; the adapter contract rules this out. Keep the
+                // line count so the tail line stays the last entry.
+                sb.append("{}");
+            }
+            sb.append('\n');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Build the head/tail/size lite shape from an in-memory JSONL string, with
+     * the byte semantics of {@code Sessions.readSessionLite}: the head and tail
+     * are the first and last {@link Sessions#LITE_READ_BUF_SIZE} bytes, decoded
+     * with replacement. Mirrors Python's {@code _jsonl_to_lite}.
+     */
+    static Sessions.LiteSessionFile jsonlToLite(String jsonl, long mtime) {
+        byte[] buf = jsonl.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int size = buf.length;
+        int headLen = Math.min(size, Sessions.LITE_READ_BUF_SIZE);
+        String head = new String(buf, 0, headLen, java.nio.charset.StandardCharsets.UTF_8);
+        String tail = size > Sessions.LITE_READ_BUF_SIZE
+                ? new String(buf, size - Sessions.LITE_READ_BUF_SIZE, Sessions.LITE_READ_BUF_SIZE,
+                        java.nio.charset.StandardCharsets.UTF_8)
+                : head;
+        return new Sessions.LiteSessionFile(mtime, size, head, tail);
+    }
+
+    /**
+     * Best-effort mtime: the {@code timestamp} of the last JSONL line, or the
+     * current time when that line has none or it does not parse. Only the last
+     * line is consulted, as in Python's {@code _mtime_from_jsonl_tail}.
+     */
+    static long mtimeFromJsonlTail(String jsonl) {
+        String trimmed = jsonl.stripTrailing();
+        String lastLine = trimmed.substring(trimmed.lastIndexOf('\n') + 1);
+        try {
+            @SuppressWarnings("null")
+            Object obj = MAPPER.readValue(lastLine, Object.class);
+            if (obj instanceof Map<?, ?> m) {
+                Long ms = isoToEpochMs(m.get("timestamp"));
+                if (ms != null) {
+                    return ms;
                 }
             }
+        } catch (JsonProcessingException ignored) {
+            // Fall through to now.
         }
         return System.currentTimeMillis();
+    }
+
+    /**
+     * Parse an ISO-8601 timestamp to epoch milliseconds, or {@code null} when
+     * {@code ts} is not a string or does not parse.
+     *
+     * <p>Accepts a {@code Z} or numeric offset, and also a timestamp with no
+     * offset at all (date-time or bare date), which Python's
+     * {@code datetime.fromisoformat} accepts too. Python then reads such a
+     * naive value in the host's local zone; this reads it as UTC instead, so
+     * the result does not depend on the machine. The CLI always writes
+     * {@code Z} timestamps, so the difference only touches hand-written entries.
+     */
+    public static @Nullable Long isoToEpochMs(@Nullable Object ts) {
+        if (!(ts instanceof String s)) {
+            return null;
+        }
+        String norm = s.endsWith("Z") ? s.substring(0, s.length() - 1) + "+00:00" : s;
+        try {
+            return java.time.OffsetDateTime.parse(norm).toInstant().toEpochMilli();
+        } catch (java.time.format.DateTimeParseException ignored) {
+            // Try the offset-less forms below.
+        }
+        try {
+            return java.time.LocalDateTime.parse(norm)
+                    .toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
+        } catch (java.time.format.DateTimeParseException ignored) {
+            // Try a bare date.
+        }
+        try {
+            return java.time.LocalDate.parse(norm)
+                    .atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli();
+        } catch (java.time.format.DateTimeParseException ignored) {
+            return null;
+        }
     }
 
     private static List<Map<String, Object>> filterTranscriptEntries(List<SessionStoreEntry> entries) {
         List<Map<String, Object>> result = new ArrayList<>();
         for (SessionStoreEntry e : entries) {
-            if (TRANSCRIPT_ENTRY_TYPES.contains(e.type()) && e.uuid() != null) {
+            String type = e.type();
+            if (type != null && TRANSCRIPT_ENTRY_TYPES.contains(type) && e.uuid() != null) {
                 result.add(new LinkedHashMap<>(e.asMap()));
             }
         }
@@ -770,8 +858,17 @@ public final class SessionStores {
         return Sessions.applyLimitOffset(messages, limit, offset);
     }
 
+    /**
+     * Mirror the disk path's head/tail title scan over parsed entry objects.
+     *
+     * <p>Last occurrence wins for both {@code customTitle} and {@code aiTitle};
+     * {@code customTitle} beats {@code aiTitle}; the first user prompt is the
+     * final fallback, taken with the disk path's head extractor over the
+     * entries re-serialized as JSONL so skip patterns and truncation match.
+     * Mirrors Python's {@code _derive_title_from_entries}.
+     */
     @Nullable
-    private static String deriveTitleFromEntries(List<Map<String, Object>> raw) {
+    static String deriveTitleFromEntries(List<Map<String, Object>> raw) {
         String custom = null;
         String ai = null;
         for (Map<String, Object> e : raw) {
@@ -790,24 +887,21 @@ public final class SessionStores {
         if (ai != null) {
             return ai;
         }
-        return null;
+        // Python serializes every entry here, not only the first 64 KB.
+        StringBuilder jsonl = new StringBuilder();
+        for (Map<String, Object> e : raw) {
+            try {
+                jsonl.append(MAPPER.writeValueAsString(e)).append('\n');
+            } catch (JsonProcessingException ignored) {
+                // An entry Jackson cannot write cannot hold the first prompt either.
+            }
+        }
+        String firstPrompt = Sessions.extractFirstPromptFromHead(jsonl.toString());
+        return firstPrompt == null || firstPrompt.isEmpty() ? null : firstPrompt;
     }
 
     private static String isoNow() {
         return DateTimeFormatter.ISO_INSTANT.format(Instant.now());
-    }
-
-    private static String sanitizeUnicode(String value) {
-        String previous;
-        String current = value;
-        for (int i = 0; i < 10; i++) {
-            previous = current;
-            current = UNICODE_STRIP_RE.matcher(Normalizer.normalize(current, Normalizer.Form.NFC)).replaceAll("");
-            if (current.equals(previous)) {
-                break;
-            }
-        }
-        return current;
     }
 
     /**

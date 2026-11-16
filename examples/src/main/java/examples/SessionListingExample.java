@@ -22,7 +22,7 @@ import in.vidyalai.claude.sdk.types.message.SessionMessage;
  * <li>{@link ClaudeSDK#listSessions()} — list all sessions across all
  * projects</li>
  * <li>{@link ClaudeSDK#listSessions(Path)} — list sessions for a specific
- * project directory</li>
+ * project directory and its git worktrees</li>
  * <li>{@link ClaudeSDK#getSessionMessages(String)} — retrieve full message
  * history for a session</li>
  * </ul>

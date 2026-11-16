@@ -117,8 +117,15 @@ public final class ToolResult {
      * resource and any unrecognized block are dropped with a warning, because
      * there is nothing useful to show a model.
      *
+     * <p>
+     * A malformed block — text without {@code text}, an image without
+     * {@code data} or {@code mimeType} — is not dropped: it throws, so a tool
+     * handler that builds one fails with an {@code isError} result saying
+     * what is missing, as in the Python SDK.
+     *
      * @param content the content blocks
      * @return a new tool result
+     * @throws IllegalArgumentException if a block is malformed
      */
     public static ToolResult ofContent(List<Map<String, Object>> content) {
         Builder builder = builder();
@@ -293,6 +300,10 @@ public final class ToolResult {
          *
          * @param block the content block
          * @return this builder
+         * @throws IllegalArgumentException if a text block has no string
+         *                                  {@code text}, or an image block no
+         *                                  string {@code data} or
+         *                                  {@code mimeType}
          */
         @SuppressWarnings("unchecked")
         public Builder addContent(Map<String, Object> block) {
@@ -302,30 +313,35 @@ public final class ToolResult {
                 return this;
             }
             switch (type) {
-                case TEXT -> {
-                    String text = asText(block.get(TEXT));
-                    if (text != null) {
-                        addText(text);
-                    }
-                }
-                case IMAGE -> {
-                    String data = asText(block.get(DATA));
-                    String mimeType = asText(block.get(MIME_TYPE));
-                    if ((data != null) && (mimeType != null)) {
-                        addImage(data, mimeType);
-                    }
-                }
+                case TEXT -> addText(required(block, TEXT, TEXT));
+                case IMAGE -> addImage(required(block, IMAGE, DATA), required(block, IMAGE, MIME_TYPE));
                 case RESOURCE_LINK -> addResourceLink(
                         asText(block.get(NAME)), asText(block.get(URI)), asText(block.get(DESCRIPTION)));
-                case RESOURCE -> {
-                    if (block.get(RESOURCE) instanceof Map<?, ?> resource) {
-                        addResource((Map<String, Object>) resource);
-                    }
-                }
+                case RESOURCE -> addResource((block.get(RESOURCE) instanceof Map<?, ?> resource)
+                        ? (Map<String, Object>) resource
+                        : Map.of());
                 default -> logger.log(Level.WARNING,
                         "Unsupported content type ''{0}'' in tool result, skipping", type);
             }
             return this;
+        }
+
+        /**
+         * The string field {@code key} of a {@code type} block.
+         *
+         * <p>
+         * A block that lacks it is malformed, and the Python SDK fails the
+         * call with an {@code isError} result naming the key rather than
+         * quietly dropping the block. Thrown from inside a tool handler, this
+         * becomes that result.
+         */
+        private static String required(Map<String, Object> block, String type, String key) {
+            Object value = block.get(key);
+            if (value instanceof String text) {
+                return text;
+            }
+            throw new IllegalArgumentException("Malformed '" + type + "' content block: '" + key + "' "
+                    + ((value == null) ? "is missing" : "must be a string"));
         }
 
         /**

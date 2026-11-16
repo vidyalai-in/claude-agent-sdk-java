@@ -21,7 +21,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * PDFs of any size means raising {@code ClaudeAgentOptions.maxBufferSize} above its 1 MB default.
  *
  * @param source the raw source map, e.g. {@code {type: "base64", media_type: "application/pdf",
- *               data: "..."}}
+ *               data: "..."}}; null when the block has no {@code source} or it is not a
+ *               JSON object
  */
 public record DocumentBlock(
         @JsonProperty("source") Map<String, Object> source) implements ContentBlock {

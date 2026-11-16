@@ -127,7 +127,10 @@ public class AgentsExample {
                 "Creates and runs tests",
                 "You are a testing expert. Write comprehensive tests and ensure code quality.",
                 List.of("Read", "Write", "Bash"),
-                AIModel.SONNET.getValue());
+                AIModel.SONNET.getValue())
+                // Effort can be a level name ("high") or a number, which is
+                // sent to the CLI as a JSON number.
+                .withEffort(32000);
 
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()
                 .agents(Map.of(

@@ -38,6 +38,9 @@ public final class SessionImport {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    private static final java.util.logging.Logger logger =
+            java.util.logging.Logger.getLogger(SessionImport.class.getName());
+
     private static final Pattern UUID_RE = Pattern.compile(
             "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
             Pattern.CASE_INSENSITIVE);
@@ -147,14 +150,26 @@ public final class SessionImport {
                 if (line.isEmpty()) {
                     continue;
                 }
+                Object parsed;
                 try {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> map = (Map<String, Object>) MAPPER.readValue(line, Map.class);
-                    batch.add(SessionStoreEntry.of(map));
-                    nbytes += line.length();
+                    @SuppressWarnings("null")
+                    Object value = MAPPER.readValue(line, Object.class);
+                    parsed = value;
                 } catch (JsonProcessingException e) {
                     throw new IOException("Failed to parse line in " + filePath + ": " + e.getMessage(), e);
                 }
+                if (!(parsed instanceof Map<?, ?> m)) {
+                    // Valid JSON but not an object: a SessionStoreEntry cannot
+                    // hold it (Python would pass it to append() as-is). Skip it
+                    // rather than abort the import partway.
+                    logger.warning("[SessionStore] import: skipping non-object line in " + filePath);
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = (Map<String, Object>) m;
+                // Entries need no "type": untyped lines are imported as-is.
+                batch.add(SessionStoreEntry.of(map));
+                nbytes += line.length();
                 if (batch.size() >= batchSize || nbytes >= TranscriptMirrorBatcher.MAX_PENDING_BYTES) {
                     store.append(key, batch);
                     batch = new ArrayList<>();

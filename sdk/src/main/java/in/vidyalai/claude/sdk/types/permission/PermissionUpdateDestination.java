@@ -25,7 +25,14 @@ public enum PermissionUpdateDestination {
     /**
      * Session-only (not persisted).
      */
-    SESSION("session");
+    SESSION("session"),
+
+    /**
+     * Rules that came from the command line (the CLI's {@code --allowedTools}
+     * and similar flags), as the TypeScript SDK names them. The CLI can offer
+     * a suggestion with this destination.
+     */
+    CLI_ARG("cliArg");
 
     private final String value;
 

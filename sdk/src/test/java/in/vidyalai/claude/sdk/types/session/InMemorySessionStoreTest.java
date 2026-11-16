@@ -149,10 +149,39 @@ class InMemorySessionStoreTest {
     }
 
     @Test
-    void sessionStoreEntry_requiresType() {
+    void sessionStoreEntry_acceptsEntriesWithoutAStringType() {
+        // Python's SessionStoreEntry is an unvalidated dict; entries without a
+        // "type" are carried through, and type() reports null for them.
         Map<String, Object> noType = new LinkedHashMap<>();
         noType.put("uuid", "abc");
-        assertThatThrownBy(() -> SessionStoreEntry.of(noType))
+        SessionStoreEntry untyped = SessionStoreEntry.of(noType);
+        assertThat(untyped.type()).isNull();
+        assertThat(untyped.uuid()).isEqualTo("abc");
+
+        Map<String, Object> numericType = new LinkedHashMap<>();
+        numericType.put("type", 7);
+        assertThat(SessionStoreEntry.of(numericType).type()).isNull();
+        assertThat(SessionStoreEntry.of(numericType).asMap()).containsEntry("type", 7);
+
+        InMemorySessionStore store = new InMemorySessionStore();
+        SessionKey key = new SessionKey("proj", "sess", null);
+        store.append(key, List.of(untyped));
+        assertThat(store.load(key)).containsExactly(untyped);
+    }
+
+    @Test
+    void sessionStoreEntry_ofKeepsKeyOrder() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        for (String k : List.of("z", "type", "a", "m", "uuid", "b")) {
+            data.put(k, k);
+        }
+        assertThat(SessionStoreEntry.of(data).asMap().keySet())
+                .containsExactly("z", "type", "a", "m", "uuid", "b");
+    }
+
+    @Test
+    void sessionStoreEntry_rejectsNullData() {
+        assertThatThrownBy(() -> new SessionStoreEntry(null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

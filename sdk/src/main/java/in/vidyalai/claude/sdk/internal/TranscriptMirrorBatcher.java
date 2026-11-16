@@ -5,11 +5,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -48,6 +47,45 @@ import in.vidyalai.claude.sdk.types.session.SessionStoreExecutor;
  * durable so the session must continue unaffected. Adapters should dedupe by
  * {@code entry.uuid()} when present (some entry types lack a uuid) since a
  * retried batch may partially overlap a prior partial write.
+ *
+ * <p><b>Ordering:</b> drains are strictly FIFO. A drain detaches the pending
+ * buffer and is chained behind every earlier drain in the same critical
+ * section, so two eager flushes, or an eager flush and an explicit
+ * {@link #flush()}, append in enqueue order: never interleaved, never
+ * duplicated. The Python SDK gets the same guarantee by detaching and then
+ * queueing on a FIFO lock with no suspension point in between.
+ *
+ * <p><b>Bounded completion:</b> the futures returned by {@link #flush()} and
+ * {@link #close()} always complete, normally, within {@link #flushTimeoutMs()}
+ * of the call. The bound is
+ * {@code MIRROR_APPEND_MAX_ATTEMPTS × sendTimeoutMs + Σ MIRROR_APPEND_BACKOFF_MS},
+ * which is {@code 3 × 60 000 + 200 + 800 = 181 000 ms} with the defaults: the
+ * worst case for one file path, where two attempts fail just inside the
+ * per-append timeout and the third times out. When the cap is reached first
+ * (several slow paths in one batch, or a backlog of earlier eager drains on a
+ * slow store), the future completes anyway and a warning is logged. The drains
+ * keep running in the background, still in order, and report any dropped
+ * batch through {@code onError}. Callers can therefore wait on these futures
+ * without an outer timeout of their own. The adapter's {@code appendAsync} is
+ * invoked off the drain thread, so an adapter that blocks inside
+ * {@code appendAsync} itself, rather than in the future it returns, is still
+ * cut off at {@code sendTimeoutMs}.
+ *
+ * <p><b>Errors before the result:</b> the futures returned by {@link #flush()}
+ * and {@link #close()} complete only after every drain scheduled so far,
+ * eager ones included, has appended <em>and</em> reported its dropped batches
+ * through {@code onError}. A {@code mirror_error} therefore always reaches the
+ * message stream ahead of the {@code result} the flush precedes. The reports
+ * are chained on their own, behind the appends they describe, so a slow
+ * {@code onError} never holds up a later append; it only delays the flush
+ * that waits for it.
+ *
+ * <p><b>A slow store holds up the stream.</b> The receive loop waits for
+ * {@link #flush()} before it yields each {@code result}, so while a store is
+ * slow (up to {@link #flushTimeoutMs()}, 181 s by default) no further message
+ * or control response is read; an outbound control request such as
+ * {@code interrupt()} waits too, and {@code close()} waits for
+ * {@link #close()} up to the same bound. The Python SDK behaves the same way.
  */
 public final class TranscriptMirrorBatcher {
 
@@ -85,6 +123,8 @@ public final class TranscriptMirrorBatcher {
      * so it never holds the JVM open. The adapter itself still runs on
      * {@code executor}: that is the caller's lever for bounding their own store
      * work, and this only keeps the SDK's blocking coordinator out of it.
+     * Ordering does not come from this executor: drains are chained one behind
+     * the other (see {@link #scheduleDrain()}).
      */
     private static final Executor DRAIN_EXECUTOR =
             Threads.newThreadPerTaskExecutor("session-store-mirror-drain-");
@@ -101,8 +141,23 @@ public final class TranscriptMirrorBatcher {
     private int pendingEntries = 0;
     private int pendingBytes = 0;
 
-    /** Serializes flushes and lets {@link #flush()} await any in-flight drain. */
-    private final ReentrantLock drainLock = new ReentrantLock();
+    /**
+     * The append phase of the most recently scheduled drain. Each new drain is
+     * chained behind it under this object's monitor, so drains run strictly in
+     * the order they detached their buffers. Never completes exceptionally.
+     * Guarded by {@code this}.
+     */
+    private CompletableFuture<?> drainTail = CompletableFuture.completedFuture(null);
+
+    /**
+     * The error-reporting phase of the most recently scheduled drain. Each
+     * drain's {@code onError} reports run behind its own appends and behind the
+     * previous drain's reports, so reports are FIFO too, but this chain is
+     * separate from {@link #drainTail}: appends never wait for a report.
+     * Completing it therefore means every drain scheduled so far has appended
+     * and reported. Never completes exceptionally. Guarded by {@code this}.
+     */
+    private CompletableFuture<?> reportTail = CompletableFuture.completedFuture(null);
 
     private volatile boolean closed = false;
 
@@ -161,63 +216,115 @@ public final class TranscriptMirrorBatcher {
     }
 
     /**
-     * Flush all pending entries. Awaits any in-flight eager flush first.
+     * Flush all pending entries, serialized after any in-flight drain.
+     *
+     * <p>The future completes once every drain scheduled so far (eager drains
+     * included) has finished its appends and delivered its {@code onError}
+     * reports, or once {@link #flushTimeoutMs()} has passed.
+     *
+     * <p>Never completes exceptionally, and always completes within
+     * {@link #flushTimeoutMs()} (see the class Javadoc).
      */
     public CompletableFuture<Void> flush() {
-        return scheduleDrain();
+        return bounded(scheduleDrain(), "flush");
     }
 
     /**
-     * Final flush before teardown. Never raises.
+     * Final flush before teardown. Never raises; bounded like {@link #flush()}.
+     * Frames enqueued after this call are dropped.
      */
     public CompletableFuture<Void> close() {
         closed = true;
-        return flush().exceptionally(e -> {
-            logger.log(Level.FINE, "[TranscriptMirrorBatcher] close flush failed", e);
-            return null;
-        });
-    }
-
-    private CompletableFuture<Void> scheduleDrain() {
-        // CompletableFuture does not emit "exception was never retrieved" warnings
-        // like asyncio does, so no done-callback to swallow CancellationException
-        // is needed here. drainAndReport catches everything internally; close()
-        // wraps with .exceptionally().
-        return CompletableFuture.runAsync(this::drainAndReport, DRAIN_EXECUTOR);
+        return bounded(scheduleDrain(), "close flush");
     }
 
     /**
-     * Detach the pending buffer, await any prior flush, then send. Never
-     * raises — adapter and {@code onError} callback errors are caught and
-     * logged.
+     * Upper bound, in milliseconds, on the time the futures returned by
+     * {@link #flush()} and {@link #close()} take to complete:
+     * {@code MIRROR_APPEND_MAX_ATTEMPTS × sendTimeoutMs + Σ MIRROR_APPEND_BACKOFF_MS}
+     * (181 000 ms with the default {@link #SEND_TIMEOUT_MS}).
      */
-    private void drainAndReport() {
-        List<MirrorEntry> items;
-        synchronized (this) {
-            if (pending.isEmpty()) {
-                return;
-            }
-            items = new ArrayList<>(pending);
-            pending.clear();
-            pendingEntries = 0;
-            pendingBytes = 0;
+    public long flushTimeoutMs() {
+        long backoff = 0L;
+        for (long b : MIRROR_APPEND_BACKOFF_MS) {
+            backoff += b;
         }
+        return MIRROR_APPEND_MAX_ATTEMPTS * Math.max(0L, sendTimeoutMs) + backoff;
+    }
+
+    /**
+     * A future that completes normally when {@code drain} does, or after
+     * {@link #flushTimeoutMs()}, whichever comes first.
+     */
+    private CompletableFuture<Void> bounded(CompletableFuture<?> drain, String what) {
+        long capMs = flushTimeoutMs();
+        CompletableFuture<Void> out = new CompletableFuture<>();
+        drain.whenComplete((r, e) -> out.complete(null));
+        // completeOnTimeout uses the JDK's shared delay scheduler; it starts
+        // no thread per call.
+        out.completeOnTimeout(null, capMs, TimeUnit.MILLISECONDS);
+        out.whenComplete((r, e) -> {
+            if (!drain.isDone()) {
+                logger.warning("[TranscriptMirrorBatcher] " + what + " did not finish within "
+                        + capMs + "ms; returning while the remaining appends continue in order "
+                        + "in the background");
+            }
+        });
+        return out;
+    }
+
+    /**
+     * Detach the pending buffer and chain its drain behind every earlier one.
+     *
+     * <p>Detaching and chaining happen in one critical section, which is what
+     * makes drains FIFO: a later drain can never overtake an earlier one.
+     *
+     * <p>The returned future is {@link #reportTail}: it covers this drain and
+     * every earlier one, each one's appends and then its {@code onError}
+     * reports. With nothing pending it still waits for the in-flight drains
+     * and their reports, so {@link #flush()} serializes after them. The
+     * reports are not part of the append chain, so a slow {@code onError}
+     * callback cannot hold up later drains.
+     */
+    private synchronized CompletableFuture<?> scheduleDrain() {
+        if (pending.isEmpty()) {
+            return reportTail;
+        }
+        List<MirrorEntry> items = new ArrayList<>(pending);
+        pending.clear();
+        pendingEntries = 0;
+        pendingBytes = 0;
+        CompletableFuture<List<KeyError>> appended =
+                drainTail.thenApplyAsync(ignored -> appendAll(items), DRAIN_EXECUTOR);
+        drainTail = appended.handle((r, e) -> null);
+        CompletableFuture<List<KeyError>> errors =
+                appended.handle((r, e) -> ((r != null) ? r : List.<KeyError>of()));
+        reportTail = reportTail
+                .thenCombineAsync(errors, (ignored, errs) -> {
+                    reportErrors(errs);
+                    return null;
+                }, DRAIN_EXECUTOR)
+                .handle((r, e) -> null);
+        return reportTail;
+    }
+
+    /** Send one detached batch. Never raises. */
+    private List<KeyError> appendAll(List<MirrorEntry> items) {
         List<KeyError> errors = new ArrayList<>();
-        drainLock.lock();
         try {
             doFlush(items, errors);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             logger.log(Level.SEVERE, "[TranscriptMirrorBatcher] doFlush raised", e);
-            return;
-        } finally {
-            drainLock.unlock();
         }
-        // Report errors after releasing the lock so a slow onError callback
-        // cannot block subsequent drains.
+        return errors;
+    }
+
+    /** Report dropped batches through {@code onError}. Never raises. */
+    private void reportErrors(List<KeyError> errors) {
         for (KeyError ke : errors) {
             try {
                 onError.accept(ke.key, ke.message);
-            } catch (Exception cb) {
+            } catch (RuntimeException cb) {
                 logger.log(Level.SEVERE, "[TranscriptMirrorBatcher] onError callback raised", cb);
             }
         }
@@ -263,7 +370,12 @@ public final class TranscriptMirrorBatcher {
                     }
                 }
                 try {
-                    store.appendAsync(key, entries, executor)
+                    // Invoke appendAsync off this thread: an adapter that blocks
+                    // inside appendAsync itself would otherwise never reach the
+                    // timed get below, and would stall every later drain with it.
+                    CompletableFuture.supplyAsync(
+                            () -> store.appendAsync(key, entries, executor), DRAIN_EXECUTOR)
+                            .thenCompose(f -> f)
                             .get(sendTimeoutMs, TimeUnit.MILLISECONDS);
                     succeeded = true;
                     break;
@@ -275,13 +387,17 @@ public final class TranscriptMirrorBatcher {
                             "[TranscriptMirrorBatcher] append timed out after "
                                     + sendTimeoutMs + "ms for " + filePath + " — not retrying");
                     break;
-                } catch (CompletionException ce) {
-                    lastErr = ce.getCause() != null ? ce.getCause() : ce;
-                    logger.fine("[TranscriptMirrorBatcher] append attempt "
-                            + (attempt + 1) + "/" + MIRROR_APPEND_MAX_ATTEMPTS
-                            + " failed for " + filePath + ": " + lastErr.getMessage());
-                } catch (Exception ex) {
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    lastErr = ie;
+                    break;
+                } catch (ExecutionException | RuntimeException ex) {
                     lastErr = ex.getCause() != null ? ex.getCause() : ex;
+                    // supplyAsync + thenCompose wrap the adapter's own failure once more.
+                    if (lastErr instanceof java.util.concurrent.CompletionException
+                            && lastErr.getCause() != null) {
+                        lastErr = lastErr.getCause();
+                    }
                     logger.fine("[TranscriptMirrorBatcher] append attempt "
                             + (attempt + 1) + "/" + MIRROR_APPEND_MAX_ATTEMPTS
                             + " failed for " + filePath + ": " + lastErr.getMessage());

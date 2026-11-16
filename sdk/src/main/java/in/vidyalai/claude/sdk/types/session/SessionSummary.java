@@ -1,17 +1,14 @@
 package in.vidyalai.claude.sdk.types.session;
 
-import java.time.OffsetDateTime;
-import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 import org.jspecify.annotations.Nullable;
 
+import in.vidyalai.claude.sdk.internal.FirstPrompt;
+import in.vidyalai.claude.sdk.internal.SessionStores;
 import in.vidyalai.claude.sdk.types.message.SDKSessionInfo;
 
 /**
@@ -32,13 +29,6 @@ import in.vidyalai.claude.sdk.types.message.SDKSessionInfo;
  * placeholder; the adapter is expected to overwrite it.
  */
 public final class SessionSummary {
-
-    private static final Pattern SKIP_FIRST_PROMPT_PATTERN = Pattern.compile(
-            "^(?:<local-command-stdout>|<local-command-stderr>|<local-command-control>" +
-                    "|<bash-input>|<bash-stdout>|<bash-stderr>)");
-
-    private static final Pattern COMMAND_NAME_RE = Pattern.compile(
-            "<command-name>(.*?)</command-name>");
 
     /** Map of JSONL entry keys to summary data keys for last-wins string fields. */
     private static final Map<String, String> LAST_WINS_FIELDS = Map.of(
@@ -190,17 +180,33 @@ public final class SessionSummary {
         return (v instanceof String s && !s.isEmpty()) ? s : null;
     }
 
+    /**
+     * Epoch ms for an ISO-8601 timestamp; one with no offset is read as UTC.
+     * See {@link SessionStores#isoToEpochMs(Object)}.
+     */
     @Nullable
     private static Long isoToEpochMs(@Nullable Object ts) {
-        if (!(ts instanceof String s)) {
-            return null;
+        return SessionStores.isoToEpochMs(ts);
+    }
+
+    /** Python truthiness, for the JSON values a summary's data map can hold. */
+    private static boolean isFalsy(@Nullable Object v) {
+        if (v == null || Boolean.FALSE.equals(v)) {
+            return true;
         }
-        try {
-            String norm = s.endsWith("Z") ? s.substring(0, s.length() - 1) + "+00:00" : s;
-            return OffsetDateTime.parse(norm).toInstant().toEpochMilli();
-        } catch (DateTimeParseException e) {
-            return null;
+        if (v instanceof String s) {
+            return s.isEmpty();
         }
+        if (v instanceof Number n) {
+            return n.doubleValue() == 0.0;
+        }
+        if (v instanceof java.util.Collection<?> c) {
+            return c.isEmpty();
+        }
+        if (v instanceof Map<?, ?> m) {
+            return m.isEmpty();
+        }
+        return false;
     }
 
     @SuppressWarnings("unchecked")
@@ -230,46 +236,19 @@ public final class SessionSummary {
             }
         }
 
-        for (String raw : entryTextBlocks(content)) {
-            String result = raw.replace("\n", " ").strip();
-            if (result.isEmpty()) {
-                continue;
+        // Same per-text rules (skip pattern, command fallback, truncation) as
+        // the disk path's head scan: one shared implementation.
+        String result = FirstPrompt.fromTexts(FirstPrompt.textBlocks(content), name -> {
+            // Falsy, not absent: a stored "" (or null) is replaced, as in
+            // Python's `if not data.get("command_fallback")`.
+            if (isFalsy(data.get("command_fallback"))) {
+                data.put("command_fallback", name);
             }
-            Matcher cmdMatch = COMMAND_NAME_RE.matcher(result);
-            if (cmdMatch.find()) {
-                if (!data.containsKey("command_fallback")) {
-                    data.put("command_fallback", cmdMatch.group(1));
-                }
-                continue;
-            }
-            if (SKIP_FIRST_PROMPT_PATTERN.matcher(result).find()) {
-                continue;
-            }
-            if (result.length() > 200) {
-                result = result.substring(0, 200).stripTrailing() + "…";
-            }
+        });
+        if (result != null) {
             data.put("first_prompt", result);
             data.put("first_prompt_locked", Boolean.TRUE);
-            return;
         }
-    }
-
-    private static List<String> entryTextBlocks(@Nullable Object content) {
-        if (content instanceof String s) {
-            return List.of(s);
-        }
-        if (content instanceof List<?> list) {
-            List<String> out = new java.util.ArrayList<>();
-            for (Object block : list) {
-                if (block instanceof Map<?, ?> b
-                        && "text".equals(b.get("type"))
-                        && b.get("text") instanceof String s) {
-                    out.add(s);
-                }
-            }
-            return out;
-        }
-        return List.of();
     }
 
     // Suppress unused warning for shared fields-extracted-by-helpers.

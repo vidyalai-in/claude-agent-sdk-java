@@ -1,11 +1,9 @@
 package in.vidyalai.claude.sdk.mcp;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
-import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -84,6 +82,14 @@ public final class SdkMcpServer implements McpMessageHandler {
      * The MCP protocol versions this server actually implements, newest first.
      *
      * <p>
+     * {@code 2025-11-25} is claimed because nothing it adds is mandatory for a
+     * tools-only server: icons, tasks, URL elicitation and sampling with tools
+     * are optional or capability-gated; input validation failures are
+     * already reported as tool execution errors (SEP-1303); and JSON Schema
+     * 2020-12, now the default dialect (SEP-1613), is already the dialect
+     * arguments are validated against.
+     *
+     * <p>
      * {@code 2025-06-18} is claimed because every delta it brings for a
      * tools-only server is honored here: batching was <i>removed</i>, a tool's
      * {@code title} moved to the top level (emitted below), {@code _meta} on a
@@ -97,7 +103,7 @@ public final class SdkMcpServer implements McpMessageHandler {
      * not honor would be a lie the client acts on.
      */
     private static final List<String> SUPPORTED_PROTOCOL_VERSIONS =
-            List.of("2025-06-18", "2024-11-05");
+            List.of("2025-11-25", "2025-06-18", "2024-11-05");
 
     private static final String LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS.get(0);
     private static final String KEY_CAPABILITIES = "capabilities";
@@ -112,11 +118,6 @@ public final class SdkMcpServer implements McpMessageHandler {
     private static final String KEY_ANNOTATIONS = "annotations";
     private static final String KEY_TITLE = "title";
     private static final String KEY_REQUEST_ID = "requestId";
-
-    // Schema keys
-    private static final String KEY_TYPE = "type";
-    private static final String KEY_OBJECT = "object";
-    private static final String KEY_PROPERTIES = "properties";
 
     // MCP method names
     private static final String METHOD_INITIALIZE = "initialize";
@@ -149,7 +150,16 @@ public final class SdkMcpServer implements McpMessageHandler {
 
     private final String name;
     private final String version;
+
+    /** The tools by name, in registration order (which is the listing order). */
     private final Map<String, SdkMcpTool<?>> tools;
+
+    /**
+     * The {@code inputSchema} each tool is published and validated with: what
+     * it declared when that is a full JSON Schema, or the expansion of the
+     * {@code {name: type}} shorthand (see {@link SdkMcpTool#inputSchema()}).
+     */
+    private final Map<String, Map<String, Object>> wireSchemas;
 
     /**
      * Compiled {@code inputSchema} per tool name, used to validate arguments
@@ -170,21 +180,25 @@ public final class SdkMcpServer implements McpMessageHandler {
     private final Map<String, String> schemaFailures;
 
     /**
-     * Tool calls the CLI has not been answered about yet, keyed by JSON-RPC
-     * request id, so {@code notifications/cancelled} can find one.
+     * The session {@link #handleMessage} and {@link #close()} act on when the
+     * server is called directly rather than through {@link #openSession()}.
      */
-    private final Map<String, InFlight> inFlight = new ConcurrentHashMap<>();
+    private final Session defaultSession = new Session();
 
     private SdkMcpServer(String name, String version, List<SdkMcpTool<?>> tools) {
         this.name = name;
         this.version = version;
-        this.tools = new ConcurrentHashMap<>();
+        Map<String, SdkMcpTool<?>> byName = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> schemas = new LinkedHashMap<>();
         for (SdkMcpTool<?> tool : tools) {
-            this.tools.put(tool.name(), tool);
+            byName.put(tool.name(), tool);
+            schemas.put(tool.name(), ToolSchemas.wireSchema(tool.name(), tool.inputSchema()));
         }
+        this.tools = Collections.unmodifiableMap(byName);
+        this.wireSchemas = Collections.unmodifiableMap(schemas);
         Map<String, Schema> compiled = new HashMap<>();
         Map<String, String> failures = new HashMap<>();
-        compileInputSchemas(this.tools.values(), compiled, failures);
+        compileInputSchemas(this.wireSchemas, compiled, failures);
         this.inputSchemas = Map.copyOf(compiled);
         this.schemaFailures = Map.copyOf(failures);
     }
@@ -198,13 +212,14 @@ public final class SdkMcpServer implements McpMessageHandler {
     }
 
     private static void compileInputSchemas(
-            Collection<SdkMcpTool<?>> tools,
+            Map<String, Map<String, Object>> schemas,
             Map<String, Schema> compiled,
             Map<String, String> failures) {
         Map<SpecificationVersion, SchemaRegistry> registries = new HashMap<>();
-        for (SdkMcpTool<?> tool : tools) {
-            Map<String, Object> schema = tool.inputSchema();
-            if ((schema == null) || schema.isEmpty()) {
+        for (Map.Entry<String, Map<String, Object>> toolSchema : schemas.entrySet()) {
+            String toolName = toolSchema.getKey();
+            Map<String, Object> schema = toolSchema.getValue();
+            if (schema.isEmpty()) {
                 continue;
             }
             try {
@@ -216,19 +231,19 @@ public final class SdkMcpServer implements McpMessageHandler {
 
                 String invalid = describeSchemaErrors(registry, dialect, node);
                 if (invalid != null) {
-                    logger.warning(() -> "Tool '" + tool.name() + "' declares an inputSchema that is "
+                    logger.warning(() -> "Tool '" + toolName + "' declares an inputSchema that is "
                             + "not valid JSON Schema, so it cannot be called: " + invalid);
-                    failures.put(tool.name(), invalid);
+                    failures.put(toolName, invalid);
                     continue;
                 }
 
-                compiled.put(tool.name(), registry.getSchema(node));
+                compiled.put(toolName, registry.getSchema(node));
             } catch (RuntimeException e) {
                 logger.log(Level.WARNING,
-                        "Tool '" + tool.name() + "' has an inputSchema this server cannot compile, "
+                        "Tool '" + toolName + "' has an inputSchema this server cannot compile, "
                                 + "so it cannot be called: " + e.getMessage(),
                         e);
-                failures.put(tool.name(), describeFailure(e));
+                failures.put(toolName, ToolSchemas.describeFailure(e));
             }
         }
     }
@@ -285,7 +300,7 @@ public final class SdkMcpServer implements McpMessageHandler {
             errors = schema.validate(MAPPER.valueToTree(arguments));
         } catch (RuntimeException e) {
             logger.log(Level.WARNING, "Could not validate arguments for tool '" + toolName + "'", e);
-            return "Tool '" + toolName + "' could not validate its arguments: " + describeFailure(e);
+            return "Tool '" + toolName + "' could not validate its arguments: " + ToolSchemas.describeFailure(e);
         }
         if ((errors == null) || errors.isEmpty()) {
             return null;
@@ -355,15 +370,25 @@ public final class SdkMcpServer implements McpMessageHandler {
      * <ul>
      * <li>Methods with {@code Map<String, Object>} parameter receive an empty
      * object schema</li>
-     * <li>Parameter types are mapped to JSON Schema types (String → "string",
-     * int → "integer", etc.)</li>
-     * <li>All parameters are marked as required in the generated schema</li>
+     * <li>Parameter types are mapped to JSON Schema from their generic type:
+     * {@code String} and {@code char} to strings, the integer and floating
+     * point types to {@code integer} and {@code number}, {@code boolean},
+     * an enum to a string limited to its constants, {@code List<T>},
+     * {@code Set<T>} and arrays to an array of {@code T}, {@code Map<String, V>}
+     * to an object of {@code V}, a record to a nested object, and value types
+     * such as {@code UUID}, {@code URI}, {@code Path} and the
+     * {@code java.time} types to strings</li>
+     * <li>Every parameter is required, except an {@code Optional} one or one
+     * marked {@link ToolParam#required() @ToolParam(required = false)}</li>
+     * <li>{@link ToolParam#description() @ToolParam(description = ...)} puts
+     * a description on the property</li>
      * </ul>
+     * Arguments are validated against that schema and then converted into the
+     * declared parameter types before the method runs.
      *
      * <p>
-     * <b>Note:</b> Compile with the {@code -parameters} flag to enable parameter
-     * name
-     * reflection for automatic schema generation.
+     * <b>Note:</b> parameter names come from the {@code -parameters} compiler
+     * flag, or from {@link ToolParam#name()}.
      *
      * <pre>{@code
      *     public class MyTools {
@@ -416,10 +441,11 @@ public final class SdkMcpServer implements McpMessageHandler {
             String schemaJson = toolAnnotation.inputSchema();
 
             // Parse input schema
+            ToolSchemas.MethodBinding binding = ToolSchemas.bindMethod(method);
             Map<String, Object> inputSchema;
             if (schemaJson.isEmpty()) {
                 // Generate schema from method parameters if not provided
-                inputSchema = generateSchemaFromMethod(method);
+                inputSchema = binding.schema();
             } else {
                 try {
                     inputSchema = MAPPER.readValue(schemaJson, new TypeReference<>() {
@@ -446,7 +472,7 @@ public final class SdkMcpServer implements McpMessageHandler {
             method.setAccessible(true);
             SdkMcpTool<Map<String, Object>> tool = SdkMcpTool.create(
                     toolName, description, title, inputSchema,
-                    (args, context) -> invokeToolMethod(instance, method, args, context),
+                    (args, context) -> invokeToolMethod(instance, method, binding.arguments(), args, context),
                     annotations);
             tools.add(tool);
         }
@@ -459,20 +485,33 @@ public final class SdkMcpServer implements McpMessageHandler {
     }
 
     private static CompletableFuture<ToolResult> invokeToolMethod(
-            Object instance, Method method, Map<String, Object> args, ToolCallContext context) {
+            Object instance, Method method, ToolSchemas.ArgumentBuilder arguments,
+            Map<String, Object> args, ToolCallContext context) {
         try {
-            Object[] orderedArgs = buildMethodArguments(method, args, context);
-            Object result = method.invoke(instance, orderedArgs);
+            Object result = method.invoke(instance, arguments.build(args, context));
 
+            // A null result from a non-void method (or a future completing
+            // with null) is answered as an isError "no result", as the Python
+            // SDK answers a handler returning None. A void method keeps its
+            // historical text result.
+            boolean isVoid = (method.getReturnType() == void.class) || (method.getReturnType() == Void.class);
+            boolean isVoidFuture = (method.getGenericReturnType() instanceof java.lang.reflect.ParameterizedType pt)
+                    && (pt.getActualTypeArguments().length == 1) && (pt.getActualTypeArguments()[0] == Void.class);
             if (result instanceof CompletableFuture<?> future) {
                 return future.thenApply(r -> {
                     if (r instanceof ToolResult tr) {
                         return tr;
                     }
+                    if (r == null) {
+                        // CompletableFuture<Void> is the async void: success.
+                        return isVoidFuture ? ToolResult.text(String.valueOf((Object) null)) : null;
+                    }
                     return ToolResult.text(String.valueOf(r));
                 });
             } else if (result instanceof ToolResult tr) {
                 return CompletableFuture.completedFuture(tr);
+            } else if ((result == null) && !isVoid) {
+                return CompletableFuture.completedFuture(null);
             } else {
                 return CompletableFuture.completedFuture(ToolResult.text(String.valueOf(result)));
             }
@@ -480,197 +519,13 @@ public final class SdkMcpServer implements McpMessageHandler {
             logger.log(Level.WARNING,
                     "Tool method invocation failed: %s#%s".formatted(instance.getClass().getName(), method.getName()),
                     e);
-            Throwable cause = ((e.getCause() != null) ? e.getCause() : e);
-            return CompletableFuture.completedFuture(ToolResult.error(cause.getMessage()));
+            // What the method threw, not the reflection wrapper around it; and
+            // its class name when it carries no message, never "null".
+            Throwable cause = (((e instanceof InvocationTargetException) && (e.getCause() != null))
+                    ? e.getCause()
+                    : e);
+            return CompletableFuture.completedFuture(ToolResult.error(ToolSchemas.describeFailure(cause)));
         }
-    }
-
-    /**
-     * Whether this parameter is the injected {@link ToolCallContext} rather
-     * than a tool argument.
-     */
-    private static boolean isContextParameter(Parameter parameter) {
-        return ToolCallContext.class.isAssignableFrom(parameter.getType());
-    }
-
-    /** The parameters that come from the caller's arguments, context aside. */
-    private static List<Parameter> declaredParameters(Parameter[] parameters) {
-        List<Parameter> declared = new ArrayList<>();
-        for (Parameter parameter : parameters) {
-            if (!isContextParameter(parameter)) {
-                declared.add(parameter);
-            }
-        }
-        return declared;
-    }
-
-    private static Object[] buildMethodArguments(
-            Method method, Map<String, Object> args, ToolCallContext context) {
-        Parameter[] parameters = method.getParameters();
-        List<Parameter> declared = declaredParameters(parameters);
-        Object[] values = new Object[parameters.length];
-
-        if ((declared.size() == 1) && Map.class.isAssignableFrom(declared.get(0).getType())) {
-            // Special case: method(Map<String,Object>), with or without a
-            // ToolCallContext alongside it.
-            for (int i = 0; i < parameters.length; i++) {
-                values[i] = (isContextParameter(parameters[i]) ? context : args);
-            }
-            return values;
-        }
-
-        for (int i = 0; i < parameters.length; i++) {
-            Parameter param = parameters[i];
-            if (isContextParameter(param)) {
-                values[i] = context;
-                continue;
-            }
-            if (!param.isNamePresent()) {
-                logger.warning("Parameter names not available for method " + method.getName()
-                        + ". Compile with -parameters flag for enabling dynamic calling.");
-                // Fall back to method(Map<String,Object>)
-                return new Object[] { args };
-            }
-
-            String name = param.getName(); // requires -parameters
-            Class<?> targetType = param.getType();
-
-            Object rawValue = args.get(name);
-
-            if (rawValue == null) {
-                values[i] = null;
-                continue;
-            }
-
-            // Convert into correct Java type
-            Object converted = MAPPER.convertValue(rawValue, targetType);
-            values[i] = converted;
-        }
-
-        return values;
-    }
-
-    /**
-     * Generates MCP-compliant JSON Schema from method parameters.
-     *
-     * <p>
-     * This method inspects the method parameters and generates a JSON Schema
-     * object that complies with the MCP protocol specification (2020-12).
-     *
-     * <p>
-     * If the method has a single parameter of type Map<String, Object>,
-     * returns an empty object schema per MCP specification.
-     *
-     * <p>
-     * Otherwise, generates schema with properties based on parameter types:
-     * <ul>
-     * <li>String → "string"</li>
-     * <li>Integer types (int, Integer, long, Long, etc.) → "integer"</li>
-     * <li>Floating point types (float, Float, double, Double, etc.) → "number"</li>
-     * <li>Boolean types → "boolean"</li>
-     * <li>Map → "object"</li>
-     * <li>List, arrays → "array"</li>
-     * </ul>
-     *
-     * @param method the method to generate schema for
-     * @return MCP-compliant JSON Schema object
-     */
-    private static Map<String, Object> generateSchemaFromMethod(Method method) {
-        // A ToolCallContext parameter is injected by the server, not supplied
-        // by the caller, so it never appears in the published schema.
-        List<Parameter> parameters = declaredParameters(method.getParameters());
-
-        // If method accepts Map<String, Object> (standard pattern), use empty object
-        // schema
-        if ((parameters.size() == 1) && Map.class.isAssignableFrom(parameters.get(0).getType())) {
-            // MCP-compliant: type=object with empty properties
-            return Map.of(
-                    KEY_TYPE, KEY_OBJECT,
-                    KEY_PROPERTIES, Map.of());
-        }
-
-        // Generate schema from typed parameters
-        Map<String, Object> properties = new LinkedHashMap<>();
-        List<String> required = new ArrayList<>();
-
-        for (Parameter param : parameters) {
-            if (!param.isNamePresent()) {
-                logger.warning("Parameter names not available for method " + method.getName()
-                        + ". Compile with -parameters flag for automatic schema generation.");
-                // Fall back to empty object schema
-                return Map.of(
-                        KEY_TYPE, KEY_OBJECT,
-                        KEY_PROPERTIES, Map.of());
-            }
-
-            String paramName = param.getName();
-            Class<?> paramType = param.getType();
-
-            Map<String, Object> propertySchema = generatePropertySchema(paramType);
-            properties.put(paramName, propertySchema);
-
-            // All parameters are required by default
-            required.add(paramName);
-        }
-
-        // Build MCP-compliant schema
-        Map<String, Object> schema = new LinkedHashMap<>();
-        schema.put(KEY_TYPE, KEY_OBJECT);
-        schema.put(KEY_PROPERTIES, properties);
-        if (!required.isEmpty()) {
-            schema.put("required", required);
-        }
-
-        return schema;
-    }
-
-    /**
-     * Maps Java types to JSON Schema type definitions per MCP specification.
-     *
-     * @param javaType the Java class type
-     * @return JSON Schema property definition
-     */
-    private static Map<String, Object> generatePropertySchema(Class<?> javaType) {
-        // String types
-        if ((javaType == String.class) || (javaType == CharSequence.class)) {
-            return Map.of(KEY_TYPE, "string");
-        }
-
-        // Integer types
-        if ((javaType == int.class) || (javaType == Integer.class)
-                || (javaType == long.class) || (javaType == Long.class)
-                || (javaType == short.class) || (javaType == Short.class)
-                || (javaType == byte.class) || (javaType == Byte.class)
-                || (javaType == BigInteger.class)) {
-            return Map.of(KEY_TYPE, "integer");
-        }
-
-        // Number types (floating point)
-        if ((javaType == double.class) || (javaType == Double.class)
-                || (javaType == float.class) || (javaType == Float.class)
-                || (javaType == BigDecimal.class)
-                || (Number.class.isAssignableFrom(javaType))) {
-            return Map.of(KEY_TYPE, "number");
-        }
-
-        // Boolean types
-        if ((javaType == boolean.class) || (javaType == Boolean.class)) {
-            return Map.of(KEY_TYPE, "boolean");
-        }
-
-        // Array types
-        if (javaType.isArray() || Collection.class.isAssignableFrom(javaType)) {
-            return Map.of(KEY_TYPE, "array", "items", Map.of("type", "object"));
-        }
-
-        // Object types
-        if (Map.class.isAssignableFrom(javaType)) {
-            return Map.of(KEY_TYPE, KEY_OBJECT, "additionalProperties", true);
-        }
-
-        // Default to object for complex types
-        logger.warning("Unknown parameter type: " + javaType.getName() + ", defaulting to 'object'");
-        return Map.of(KEY_TYPE, KEY_OBJECT);
     }
 
     // Getters
@@ -706,82 +561,291 @@ public final class SdkMcpServer implements McpMessageHandler {
      * <b>response</b>, or junk; this server sends the CLI no requests, so
      * nothing here is its to match, and it is ignored rather than answered.
      *
+     * <p>
+     * Called on the server itself, this serves one shared default session.
+     * The SDK does not: each client gets its own {@link #openSession()
+     * session}, so concurrent clients never see each other's request ids,
+     * cancellations or shutdown.
+     *
      * @param message the JSON-RPC message
      * @return a future with the response, or with null when no reply is due
      */
     @Override
     public CompletableFuture<@Nullable Map<String, Object>> handleMessage(Map<String, Object> message) {
-        Object id = message.get(KEY_ID);
-        try {
-            if (!(message.get(KEY_METHOD) instanceof String method)) {
-                logger.fine(() -> "Ignoring a message with no method for SDK MCP server '"
-                        + name + "': " + message.keySet());
-                return completed(null);
-            }
-
-            // The MCP specification forbids a null request id, so "no id" and
-            // "id: null" both mean notification.
-            if (id == null) {
-                handleNotification(method, asMap(message.get(KEY_PARAMS)));
-                return completed(null);
-            }
-
-            return switch (method) {
-                case METHOD_INITIALIZE -> handleInitialize(id, asMap(message.get(KEY_PARAMS)));
-                case METHOD_PING -> completed(successResponse(id, Map.of()));
-                case METHOD_LIST_TOOLS -> handleListTools(id);
-                case METHOD_CALL_TOOL -> handleCallTool(id, message.get(KEY_PARAMS));
-                // Everything else, resources and prompts included. That is the
-                // right answer, not an omission: this server advertises only
-                // the "tools" capability, so a spec-conformant client never
-                // asks for the rest.
-                default -> completed(errorResponse(
-                        id, ERROR_CODE_METHOD_NOT_FOUND, "Method not found: " + method));
-            };
-        } catch (RuntimeException e) {
-            // Nothing malformed the CLI sends may escape this method
-            // synchronously; the caller has no id to answer with once it does.
-            logger.log(Level.WARNING,
-                    "SDK MCP server '" + name + "' could not dispatch a message", e);
-            return completed(errorResponse(id, ERROR_CODE_INTERNAL_ERROR, describeFailure(e)));
-        }
-    }
-
-    private void handleNotification(String method, @Nullable Map<String, Object> params) {
-        switch (method) {
-            case METHOD_INITIALIZED ->
-                logger.fine(() -> "SDK MCP server '" + name + "' initialized");
-            case METHOD_CANCELLED -> handleCancelled(params);
-            default -> logger.fine(() -> "Dropping a " + method
-                    + " notification for SDK MCP server '" + name + "': not supported");
-        }
+        return defaultSession.handleMessage(message);
     }
 
     /**
-     * Settles the call the CLI has given up on.
+     * Abandons the calls still in flight on the default session.
      *
      * <p>
-     * The pending request is answered {@code -32800}, and the handler's
-     * {@link ToolCallContext} is cancelled so a tool that is watching can
-     * stop. Nothing is sent in reply to the notification itself.
+     * Not a permanent shutdown, and it never touches a session opened with
+     * {@link #openSession()}: those belong to their clients, and each is
+     * closed by the client that opened it. Idempotent.
      */
-    private void handleCancelled(@Nullable Map<String, Object> params) {
-        Object requestId = ((params != null) ? params.get(KEY_REQUEST_ID) : null);
-        if (requestId == null) {
-            logger.fine("Ignoring a notifications/cancelled that names no requestId");
-            return;
+    @Override
+    public void close() {
+        defaultSession.close();
+    }
+
+    /**
+     * Opens a session of this server for one connection.
+     *
+     * <p>
+     * The session shares the tools and schemas, and owns everything that is
+     * per-connection: the table of calls in flight (so two clients may use
+     * the same JSON-RPC ids at once), the {@code notifications/cancelled}
+     * that settle them, and {@link McpMessageHandler#close() close()}, which
+     * abandons only that session's calls. The Python SDK keeps the same split
+     * with one {@code SdkMcpBridge} per query.
+     *
+     * @return a new session
+     */
+    @Override
+    public McpMessageHandler openSession() {
+        return new Session();
+    }
+
+    /** One connection's view of the server. */
+    private final class Session implements McpMessageHandler {
+
+        /**
+         * Tool calls the CLI has not been answered about yet, keyed by
+         * JSON-RPC request id, so {@code notifications/cancelled} can find
+         * one.
+         */
+        private final Map<String, InFlight> inFlight = new ConcurrentHashMap<>();
+
+        @Override
+        public CompletableFuture<@Nullable Map<String, Object>> handleMessage(Map<String, Object> message) {
+            Object id = message.get(KEY_ID);
+            try {
+                if (!(message.get(KEY_METHOD) instanceof String method)) {
+                    logger.fine(() -> "Ignoring a message with no method for SDK MCP server '"
+                            + name + "': " + message.keySet());
+                    return completed(null);
+                }
+
+                // The MCP specification forbids a null request id, so "no id"
+                // and "id: null" both mean notification.
+                if (id == null) {
+                    handleNotification(method, asMap(message.get(KEY_PARAMS)));
+                    return completed(null);
+                }
+
+                return switch (method) {
+                    case METHOD_INITIALIZE -> handleInitialize(id, asMap(message.get(KEY_PARAMS)));
+                    case METHOD_PING -> completed(successResponse(id, Map.of()));
+                    case METHOD_LIST_TOOLS -> handleListTools(id);
+                    case METHOD_CALL_TOOL -> handleCallTool(id, message.get(KEY_PARAMS));
+                    // Everything else, resources and prompts included. That is
+                    // the right answer, not an omission: this server advertises
+                    // only the "tools" capability, so a spec-conformant client
+                    // never asks for the rest. -32601 is JSON-RPC's code for
+                    // it, deliberately; the Python SDK's mcp library answers
+                    // -32602.
+                    default -> completed(errorResponse(
+                            id, ERROR_CODE_METHOD_NOT_FOUND, "Method not found: " + method));
+                };
+            } catch (RuntimeException e) {
+                // Nothing malformed the CLI sends may escape this method
+                // synchronously; the caller has no id to answer with once it
+                // does.
+                logger.log(Level.WARNING,
+                        "SDK MCP server '" + name + "' could not dispatch a message", e);
+                return completed(errorResponse(id, ERROR_CODE_INTERNAL_ERROR, ToolSchemas.describeFailure(e)));
+            }
         }
-        InFlight entry = inFlight.remove(idKey(requestId));
-        if (entry == null) {
-            // Already finished, or never ours. Either way a notification is
-            // never answered, not even to say so.
-            logger.fine(() -> "No in-flight request " + requestId + " to cancel on SDK MCP server '"
-                    + name + "'");
-            return;
+
+        private void handleNotification(String method, @Nullable Map<String, Object> params) {
+            switch (method) {
+                case METHOD_INITIALIZED ->
+                    logger.fine(() -> "SDK MCP server '" + name + "' initialized");
+                case METHOD_CANCELLED -> handleCancelled(params);
+                default -> logger.fine(() -> "Dropping a " + method
+                        + " notification for SDK MCP server '" + name + "': not supported");
+            }
         }
-        Object reason = ((params != null) ? params.get("reason") : null);
-        logger.fine(() -> "Cancelling " + entry.toolName() + " (request " + requestId + "): " + reason);
-        cancel(entry);
+
+        /**
+         * Settles the call the CLI has given up on.
+         *
+         * <p>
+         * The pending request is answered {@code -32800}, and the handler's
+         * {@link ToolCallContext} is cancelled so a tool that is watching can
+         * stop. Nothing is sent in reply to the notification itself.
+         */
+        private void handleCancelled(@Nullable Map<String, Object> params) {
+            Object requestId = ((params != null) ? params.get(KEY_REQUEST_ID) : null);
+            if (requestId == null) {
+                logger.fine("Ignoring a notifications/cancelled that names no requestId");
+                return;
+            }
+            InFlight entry = inFlight.remove(idKey(requestId));
+            if (entry == null) {
+                // Already finished, or never ours. Either way a notification
+                // is never answered, not even to say so.
+                logger.fine(() -> "No in-flight request " + requestId + " to cancel on SDK MCP server '"
+                        + name + "'");
+                return;
+            }
+            Object reason = ((params != null) ? params.get("reason") : null);
+            logger.fine(() -> "Cancelling " + entry.toolName() + " (request " + requestId + "): " + reason);
+            cancel(entry);
+        }
+
+        /**
+         * Abandons this session's calls still in flight. Idempotent, and the
+         * session stays usable.
+         */
+        @Override
+        public void close() {
+            for (InFlight entry : List.copyOf(inFlight.values())) {
+                if (inFlight.remove(idKey(entry.id()), entry)) {
+                    cancel(entry);
+                }
+            }
+        }
+
+        /** A session of the same server opens a sibling, not a sub-session. */
+        @Override
+        public McpMessageHandler openSession() {
+            return SdkMcpServer.this.openSession();
+        }
+
+        private CompletableFuture<@Nullable Map<String, Object>> handleCallTool(
+                Object id, @Nullable Object rawParams) {
+            Map<String, Object> params = asMap(rawParams);
+            if (params == null) {
+                return completed(errorResponse(
+                        id, ERROR_CODE_INVALID_PARAMS, "Invalid params: expected an object"));
+            }
+            if (!(params.get(KEY_NAME) instanceof String toolName)) {
+                return completed(errorResponse(id, ERROR_CODE_INVALID_PARAMS,
+                        "Invalid params: 'name' is required and must be a string"));
+            }
+            // Absent and explicitly null mean no arguments; anything else that
+            // is not an object is a malformed request, as the Python SDK's mcp
+            // library reports it.
+            Object rawArguments = params.get(KEY_ARGUMENTS);
+            Map<String, Object> arguments = asMap(rawArguments);
+            if ((arguments == null) && (rawArguments != null)) {
+                return completed(errorResponse(id, ERROR_CODE_INVALID_PARAMS,
+                        "Invalid params: 'arguments' must be an object"));
+            }
+            if (arguments == null) {
+                arguments = Map.of();
+            }
+
+            SdkMcpTool<?> tool = tools.get(toolName);
+            if (tool == null) {
+                // A tool-execution error, not a protocol one, matching the
+                // Python SDK. The model reads an isError result and can correct
+                // itself; a JSON-RPC error it never sees.
+                return completed(successResponse(
+                        id, toolErrorResult("Tool '" + toolName + "' not found")));
+            }
+
+            // "Servers MUST validate all tool inputs" (MCP spec, Security
+            // Considerations). Reported as a tool-execution error so the text
+            // reaches the model as tool output it can act on -- an unreadable
+            // JVM ClassCastException from a handler that was handed arguments
+            // it never agreed to accept helps nobody, and running the handler
+            // at all risks half-applying a side effect before it throws.
+            String validationError = validateArguments(toolName, arguments);
+            if (validationError != null) {
+                String text = (schemaFailures.containsKey(toolName)
+                        ? validationError
+                        : "Input validation error: " + validationError);
+                return completed(successResponse(id, toolErrorResult(text)));
+            }
+
+            return invokeTool(id, toolName, tool, arguments);
+        }
+
+        private CompletableFuture<@Nullable Map<String, Object>> invokeTool(
+                Object id, String toolName, SdkMcpTool<?> tool, Map<String, Object> arguments) {
+
+            CallContext context = new CallContext();
+            CompletableFuture<@Nullable Map<String, Object>> response = new CompletableFuture<>();
+            InFlight entry = new InFlight(id, toolName, context, response);
+            String key = idKey(id);
+
+            if (inFlight.putIfAbsent(key, entry) != null) {
+                // Ids are unique among a session's unanswered requests, and
+                // every client has a session of its own, so this is the CLI
+                // reusing an id it has not had an answer for. Refusing is what
+                // the Python SDK does, and it beats delivering a response to
+                // the wrong caller.
+                logger.warning(() -> "SDK MCP server '" + name + "' already has request id " + id
+                        + " in flight on this connection");
+                return completed(errorResponse(id, ERROR_CODE_INTERNAL_ERROR,
+                        "Request id " + id + " is already in flight"));
+            }
+            // A caller that cancels the response has given up on the call,
+            // just as notifications/cancelled says: QueryHandler does so when
+            // the CLI sends control_cancel_request for the control request
+            // carrying it.
+            response.whenComplete((ignored, ex) -> {
+                if ((ex instanceof CancellationException) && inFlight.remove(key, entry)) {
+                    context.cancel();
+                }
+            });
+
+            CompletableFuture<ToolResult> result;
+            try {
+                @SuppressWarnings("rawtypes")
+                SdkMcpTool rawTool = tool;
+                @SuppressWarnings("unchecked")
+                CompletableFuture<ToolResult> invoked = rawTool.invoke(arguments, context);
+                result = invoked;
+            } catch (RuntimeException e) {
+                // The handler threw instead of returning a future.
+                settle(entry, key, toolErrorResult(ToolSchemas.describeFailure(e)), e);
+                return response;
+            }
+            if (result == null) {
+                settle(entry, key, toolErrorResult("Tool '" + toolName + "' returned no result"), null);
+                return response;
+            }
+
+            result.whenComplete((toolResult, ex) -> {
+                // Whatever happens in here, the response must complete: an
+                // exception escaping this callback is swallowed by the future,
+                // and the CLI would wait for the call forever.
+                try {
+                    if (ex != null) {
+                        Throwable cause = unwrap(ex);
+                        settle(entry, key, toolErrorResult(ToolSchemas.describeFailure(cause)), cause);
+                    } else if (toolResult == null) {
+                        // The Python SDK reports a handler that returns
+                        // nothing as an isError result too.
+                        settle(entry, key,
+                                toolErrorResult("Tool '" + toolName + "' completed with no result"), null);
+                    } else {
+                        settle(entry, key, toolResult.toMap(), null);
+                    }
+                } catch (RuntimeException | java.lang.Error e) {
+                    settle(entry, key, toolErrorResult(ToolSchemas.describeFailure(e)), e);
+                }
+            });
+
+            return response;
+        }
+
+        /**
+         * Answers one call, unless it was already answered (cancelled), in
+         * which case the late result is dropped -- the whole contract.
+         */
+        private void settle(InFlight entry, String key, Map<String, Object> result, @Nullable Throwable failure) {
+            inFlight.remove(key, entry);
+            if (!entry.response().complete(successResponse(entry.id(), result))) {
+                logger.fine(() -> "Discarding the late result of cancelled tool " + entry.toolName());
+            } else if (failure != null) {
+                logger.log(Level.WARNING, "Tool execution failed: " + entry.toolName(), failure);
+            }
+        }
+
     }
 
     /** Cancels one call: signal the handler first, then settle the request. */
@@ -789,22 +853,6 @@ public final class SdkMcpServer implements McpMessageHandler {
         entry.context().cancel();
         entry.response().complete(errorResponse(
                 entry.id(), ERROR_CODE_REQUEST_CANCELLED, "Request cancelled"));
-    }
-
-    /**
-     * Abandons the calls still in flight for a connection that is going away.
-     *
-     * <p>
-     * Not a permanent shutdown: one server can be registered with more than
-     * one client, and stays usable for the next one. Idempotent.
-     */
-    @Override
-    public void close() {
-        for (InFlight entry : List.copyOf(inFlight.values())) {
-            if (inFlight.remove(idKey(entry.id()), entry)) {
-                cancel(entry);
-            }
-        }
     }
 
     private CompletableFuture<@Nullable Map<String, Object>> handleInitialize(
@@ -832,18 +880,18 @@ public final class SdkMcpServer implements McpMessageHandler {
     }
 
     private CompletableFuture<@Nullable Map<String, Object>> handleListTools(Object id) {
-        List<Map<String, Object>> toolList = tools.values().stream()
-                .map(SdkMcpServer::describeTool)
-                .toList();
-
+        List<Map<String, Object>> toolList = new ArrayList<>();
+        for (Map.Entry<String, SdkMcpTool<?>> tool : tools.entrySet()) {
+            toolList.add(describeTool(tool.getValue(), wireSchemas.getOrDefault(tool.getKey(), Map.of())));
+        }
         return completed(successResponse(id, Map.of(KEY_TOOLS, toolList)));
     }
 
-    private static Map<String, Object> describeTool(SdkMcpTool<?> tool) {
+    private static Map<String, Object> describeTool(SdkMcpTool<?> tool, Map<String, Object> inputSchema) {
         Map<String, Object> toolInfo = new HashMap<>();
         toolInfo.put(KEY_NAME, tool.name());
         toolInfo.put(KEY_DESCRIPTION, tool.description());
-        toolInfo.put(KEY_INPUT_SCHEMA, tool.inputSchema());
+        toolInfo.put(KEY_INPUT_SCHEMA, inputSchema);
 
         // A tool may carry a title without carrying any hint, so ask even when
         // no annotations were declared -- reading this off tool.annotations()
@@ -886,102 +934,6 @@ public final class SdkMcpServer implements McpMessageHandler {
         return Map.of("anthropic/maxResultSizeChars", maxResultSize);
     }
 
-    private CompletableFuture<@Nullable Map<String, Object>> handleCallTool(Object id, @Nullable Object rawParams) {
-        Map<String, Object> params = asMap(rawParams);
-        if (params == null) {
-            return completed(errorResponse(
-                    id, ERROR_CODE_INVALID_PARAMS, "Invalid params: expected an object"));
-        }
-        if (!(params.get(KEY_NAME) instanceof String toolName)) {
-            return completed(errorResponse(id, ERROR_CODE_INVALID_PARAMS,
-                    "Invalid params: 'name' is required and must be a string"));
-        }
-        // Absent, explicitly null, and "not an object" all mean no arguments.
-        Map<String, Object> arguments = asMap(params.get(KEY_ARGUMENTS));
-        if (arguments == null) {
-            arguments = Map.of();
-        }
-
-        SdkMcpTool<?> tool = tools.get(toolName);
-        if (tool == null) {
-            // A tool-execution error, not a protocol one, matching the Python
-            // SDK. The model reads an isError result and can correct itself; a
-            // JSON-RPC error it never sees.
-            return completed(successResponse(
-                    id, toolErrorResult("Tool '" + toolName + "' not found")));
-        }
-
-        // "Servers MUST validate all tool inputs" (MCP spec, Security
-        // Considerations). Reported as a tool-execution error so the text
-        // reaches the model as tool output it can act on -- an unreadable JVM
-        // ClassCastException from a handler that was handed arguments it never
-        // agreed to accept helps nobody, and running the handler at all risks
-        // half-applying a side effect before it throws.
-        String validationError = validateArguments(toolName, arguments);
-        if (validationError != null) {
-            String text = (schemaFailures.containsKey(toolName)
-                    ? validationError
-                    : "Input validation error: " + validationError);
-            return completed(successResponse(id, toolErrorResult(text)));
-        }
-
-        return invokeTool(id, toolName, tool, arguments);
-    }
-
-    private CompletableFuture<@Nullable Map<String, Object>> invokeTool(
-            Object id, String toolName, SdkMcpTool<?> tool, Map<String, Object> arguments) {
-
-        CallContext context = new CallContext();
-        CompletableFuture<@Nullable Map<String, Object>> response = new CompletableFuture<>();
-        InFlight entry = new InFlight(id, toolName, context, response);
-        String key = idKey(id);
-
-        if (inFlight.putIfAbsent(key, entry) != null) {
-            // Ids are unique among a session's unanswered requests, so this
-            // means two sessions share one server. Refusing is what the Python
-            // SDK does, and it beats delivering a response to the wrong caller.
-            logger.warning(() -> "SDK MCP server '" + name + "' already has request id " + id
-                    + " in flight (is the same server registered under two names?)");
-            return completed(errorResponse(id, ERROR_CODE_INTERNAL_ERROR,
-                    "Request id " + id + " is already in flight"));
-        }
-        // A caller that cancels the response has given up on the call, just
-        // as notifications/cancelled says: QueryHandler does so when the CLI
-        // sends control_cancel_request for the control request carrying it.
-        response.whenComplete((ignored, ex) -> {
-            if ((ex instanceof CancellationException) && inFlight.remove(key, entry)) {
-                context.cancel();
-            }
-        });
-
-        try {
-            @SuppressWarnings("rawtypes")
-            SdkMcpTool rawTool = tool;
-            @SuppressWarnings("unchecked")
-            CompletableFuture<ToolResult> result = rawTool.invoke(arguments, context);
-            result.whenComplete((toolResult, ex) -> {
-                inFlight.remove(key, entry);
-                Map<String, Object> settled = ((ex != null)
-                        ? successResponse(id, toolErrorResult(describeFailure(unwrap(ex))))
-                        : successResponse(id, toolResult.toMap()));
-                // False means the call was already answered -- cancelled. The
-                // late result is dropped, which is the whole contract.
-                if (!response.complete(settled)) {
-                    logger.fine(() -> "Discarding the late result of cancelled tool " + toolName);
-                } else if (ex != null) {
-                    logger.log(Level.WARNING, "Tool execution failed: " + toolName, unwrap(ex));
-                }
-            });
-        } catch (RuntimeException e) {
-            // The handler threw instead of returning a future.
-            inFlight.remove(key, entry);
-            logger.log(Level.WARNING, "Tool invocation failed: " + toolName, e);
-            response.complete(successResponse(id, toolErrorResult(describeFailure(e))));
-        }
-
-        return response;
-    }
-
     private static Throwable unwrap(Throwable ex) {
         return ((ex.getCause() != null) ? ex.getCause() : ex);
     }
@@ -997,14 +949,6 @@ public final class SdkMcpServer implements McpMessageHandler {
      */
     private static Map<String, Object> toolErrorResult(String message) {
         return ToolResult.builder().addText(message).isError(true).build().toMap();
-    }
-
-    /** Exception text for a model to read; never null, never empty. */
-    private static String describeFailure(Throwable cause) {
-        String message = cause.getMessage();
-        return ((message != null) && !message.isBlank())
-                ? message
-                : cause.getClass().getSimpleName();
     }
 
     private static CompletableFuture<@Nullable Map<String, Object>> completed(

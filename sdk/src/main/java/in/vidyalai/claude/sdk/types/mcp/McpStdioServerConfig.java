@@ -5,7 +5,9 @@ import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 
 /**
  * Stdio-based MCP server configuration.
@@ -14,12 +16,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param args    command arguments
  * @param env     environment variables
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonPropertyOrder({ "type" })
 public record McpStdioServerConfig(
         @JsonProperty("command") String command,
         @JsonProperty("args") @Nullable List<String> args,
         @JsonProperty("env") @Nullable Map<String, String> env) implements McpServerConfig, McpServerStatusConfig {
 
     @Override
+    @JsonProperty("type")
     public String type() {
         return "stdio";
     }

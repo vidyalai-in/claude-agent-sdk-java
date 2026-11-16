@@ -1,6 +1,9 @@
 package in.vidyalai.claude.sdk.types.mcp;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 
 import in.vidyalai.claude.sdk.mcp.McpMessageHandler;
 import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
@@ -33,11 +36,14 @@ import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
  * @param name     the server name
  * @param instance the handler serving this server (not serialized to CLI)
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonPropertyOrder({ "type" })
 public record McpSdkServerConfig(
         String name,
         @JsonIgnore McpMessageHandler instance) implements McpServerConfig {
 
     @Override
+    @JsonProperty("type")
     public String type() {
         return "sdk";
     }

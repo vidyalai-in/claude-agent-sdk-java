@@ -378,9 +378,6 @@ public class AdvancedFeatures {
                 // Extra CLI arguments
                 .extraArgs(Map.of("verbose", ""))
 
-                // User identification
-                .user("example-user")
-
                 // Beta features
                 .betas(List.of(SdkBeta.CONTEXT_1M))
 

@@ -12,7 +12,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * server tool's result schema can inspect {@code content.get("type")}.
  *
  * @param toolUseId the ID of the server tool use this result corresponds to
- * @param content   the raw result content (opaque map from the API)
+ * @param content   the raw result content (opaque map from the API); null when
+ *                  the block has no {@code content} or it is not a JSON object
  */
 public record ServerToolResultBlock(
         @JsonProperty("tool_use_id") String toolUseId,

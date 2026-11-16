@@ -175,6 +175,21 @@ public final class SdkMcpTool<T> {
         return title;
     }
 
+    /**
+     * The input schema as declared.
+     *
+     * <p>
+     * A map with a string {@code "type"} is a JSON Schema and is published
+     * as is. Any other map is the shorthand the Python SDK's {@code @tool}
+     * also takes: each key is a required argument, and its value is the
+     * argument's Java type, e.g.
+     * {@code Map.of("text", String.class, "count", int.class)}, or a Jackson
+     * {@code TypeReference} for a generic type such as
+     * {@code new TypeReference<List<String>>() {}}. The server expands the
+     * shorthand into the object schema it publishes and validates against.
+     *
+     * @return the declared input schema
+     */
     public Map<String, Object> inputSchema() {
         return inputSchema;
     }
@@ -257,7 +272,9 @@ public final class SdkMcpTool<T> {
         }
 
         /**
-         * Sets the JSON schema for input validation.
+         * Sets the JSON schema for input validation, or the
+         * {@code {name: type}} shorthand described at
+         * {@link SdkMcpTool#inputSchema()}.
          *
          * @param inputSchema the JSON schema
          */

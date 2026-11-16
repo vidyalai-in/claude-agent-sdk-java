@@ -5,7 +5,10 @@ import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
+import com.fasterxml.jackson.annotation.JacksonInject;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.OptBoolean;
 
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 
@@ -36,6 +39,9 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
  *                              for hooks that fire within a tool-use context
  *                              (PreToolUse, PostToolUse, Stop, SubagentStop,
  *                              etc.) on models that support effort
+ * @param raw the CLI's original hook input, every key included (also the
+ *            ones this record does not model); empty when constructed
+ *            directly
  */
 public record PermissionRequestHookInput(
         @JsonProperty("session_id") String sessionId,
@@ -48,7 +54,36 @@ public record PermissionRequestHookInput(
         @JsonProperty("agent_id") @Nullable String agentId,
         @JsonProperty("agent_type") @Nullable String agentType,
         @JsonProperty("prompt_id") @Nullable String promptId,
-        @JsonProperty("effort") @Nullable HookEffort effort) implements HookInput {
+        @JsonProperty("effort") @Nullable HookEffort effort,
+        @JsonIgnore @JacksonInject(value = HookInput.RAW_INJECTABLE_ID, useInput = OptBoolean.FALSE,
+                optional = OptBoolean.TRUE) Map<String, Object> raw) implements HookInput {
+
+    /**
+     * Copies {@code raw} (the CLI's original input) into an unmodifiable
+     * map; {@code null} reads as empty.
+     */
+    public PermissionRequestHookInput {
+        raw = HookInputRaw.copy(raw);
+    }
+
+    /**
+     * Constructor without {@code raw}: {@link #raw()} is empty.
+     */
+    public PermissionRequestHookInput(String sessionId,
+            String transcriptPath,
+            String cwd,
+            @Nullable String permissionMode,
+            String toolName,
+            Map<String, Object> toolInput,
+            @Nullable List<Object> permissionSuggestions,
+            @Nullable String agentId,
+            @Nullable String agentType,
+            @Nullable String promptId,
+            @Nullable HookEffort effort) {
+        this(sessionId, transcriptPath, cwd, permissionMode, toolName, toolInput,
+                permissionSuggestions, agentId, agentType, promptId, effort,
+                null);
+    }
 
     /**
      * Backwards-compatible constructor without {@code promptId},

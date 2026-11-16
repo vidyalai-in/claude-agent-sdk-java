@@ -10,9 +10,11 @@ import java.lang.annotation.Target;
  *
  * <p>
  * Use this annotation on methods to define them as MCP tools.
- * The annotated method must accept a single {@code Map<String, Object>}
- * parameter
- * and return a {@link ToolResult} or {@code CompletableFuture<ToolResult>}.
+ * The annotated method either accepts a single {@code Map<String, Object>}
+ * parameter holding every argument, or declares one typed parameter per
+ * argument (optionally described with {@link ToolParam}), plus an optional
+ * {@link ToolCallContext}. It returns a {@link ToolResult} or
+ * {@code CompletableFuture<ToolResult>}.
  *
  * <h2>Example Usage</h2>
  *
@@ -51,15 +53,28 @@ import java.lang.annotation.Target;
  * <ul>
  * <li>Methods with {@code Map<String, Object>} parameter get an empty object
  * schema</li>
- * <li>Java types are mapped to JSON Schema types (String → "string", int →
- * "integer", etc.)</li>
- * <li>All parameters are marked as required</li>
+ * <li>Java types are mapped to JSON Schema from their generic type
+ * ({@code String} → "string", {@code int} → "integer",
+ * {@code List<String>} → array of strings, an enum → a string limited to its
+ * constants, a record → a nested object, and so on; see
+ * {@link SdkMcpServer#fromAnnotatedMethods(String, Object)})</li>
+ * <li>All parameters are marked as required, except {@code Optional} ones and
+ * those marked {@link ToolParam#required() @ToolParam(required = false)}</li>
  * </ul>
  *
+ * <pre>{@code
+ * @Tool(name = "paint", description = "Paint some walls")
+ * public ToolResult paint(
+ *         @ToolParam(description = "Walls to paint") List<String> walls,
+ *         @ToolParam(description = "Paint color") Color color) {
+ *     ...
+ * }
+ * }</pre>
+ *
  * <p>
- * <b>Note:</b> Automatic generation requires compiling with the
- * {@code -parameters} flag
- * to preserve parameter names.
+ * <b>Note:</b> automatic generation names arguments after the Java
+ * parameters, which needs the {@code -parameters} compiler flag, unless each
+ * is named with {@link ToolParam#name()}.
  *
  * <h3>Explicit Schema</h3>
  * <p>
@@ -122,7 +137,8 @@ public @interface Tool {
     /**
      * JSON Schema for the tool's input parameters.
      * <p>
-     * Optional. If not specified, an empty object schema is used.
+     * Optional. If not specified, the schema is generated from the method's
+     * parameters.
      * <p>
      * Example:
      *

@@ -26,9 +26,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * <em>either</em> a {@link TaskNotificationMessage} or a {@code TaskUpdatedMessage}.
  *
  * <p>
- * Like the other typed task messages, this is a system message: {@link #type()}
- * returns {@code "system"} and the {@code subtype} and {@code data} fields remain
- * populated with the raw payload.
+ * <b>Not a {@link SystemMessage} instance.</b> On the wire this is a
+ * {@code system} message, and {@link #type()} returns {@code "system"}, but
+ * Java records cannot extend one another, so it is a sibling record in the
+ * sealed {@link Message} hierarchy: {@code instanceof SystemMessage} is
+ * {@code false} for it. (In the Python SDK it subclasses
+ * {@code SystemMessage}.) Match it by its own type, or, to handle every
+ * system message alike, test {@code "system".equals(message.type())} and read
+ * {@code subtype()} and {@code data()}, which hold what a
+ * {@code SystemMessage} would: the subtype and the raw payload.
  *
  * @param subtype   always "task_updated"
  * @param data      raw message data

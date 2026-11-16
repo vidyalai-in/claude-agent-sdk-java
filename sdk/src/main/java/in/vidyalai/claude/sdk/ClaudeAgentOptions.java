@@ -2,7 +2,9 @@ package in.vidyalai.claude.sdk;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -127,7 +129,7 @@ public final class ClaudeAgentOptions {
     // Environment
     private final Map<String, String> env;
     // Pass arbitrary CLI flags
-    private final Map<String, String> extraArgs;
+    private final Map<String, @Nullable String> extraArgs;
 
     // Tool permission callback
     @Nullable
@@ -279,7 +281,11 @@ public final class ClaudeAgentOptions {
         this.addDirs = ((builder.addDirs != null) ? List.copyOf(builder.addDirs) : List.of());
         // Default to empty maps (matching Python SDK)
         this.env = ((builder.env != null) ? Map.copyOf(builder.env) : Map.of());
-        this.extraArgs = ((builder.extraArgs != null) ? Map.copyOf(builder.extraArgs) : Map.of());
+        // Not Map.copyOf: a null value means a bare boolean flag, and the flags
+        // reach the CLI in the order the caller put them in.
+        this.extraArgs = ((builder.extraArgs != null)
+                ? Collections.unmodifiableMap(new LinkedHashMap<>(builder.extraArgs))
+                : Map.of());
         this.canUseTool = builder.canUseTool;
         this.stderrCallback = builder.stderrCallback;
         this.hooks = ((builder.hooks != null) ? Map.copyOf(builder.hooks) : null);
@@ -359,7 +365,7 @@ public final class ClaudeAgentOptions {
         builder.settings = this.settings;
         builder.addDirs = ((!this.addDirs.isEmpty()) ? new ArrayList<>(this.addDirs) : null);
         builder.env = ((!this.env.isEmpty()) ? new HashMap<>(this.env) : null);
-        builder.extraArgs = ((!this.extraArgs.isEmpty()) ? new HashMap<>(this.extraArgs) : null);
+        builder.extraArgs = ((!this.extraArgs.isEmpty()) ? new LinkedHashMap<>(this.extraArgs) : null);
         builder.canUseTool = this.canUseTool;
         builder.stderrCallback = this.stderrCallback;
         builder.hooks = ((this.hooks != null) ? new HashMap<>(this.hooks) : null);
@@ -629,7 +635,16 @@ public final class ClaudeAgentOptions {
         return env;
     }
 
-    public Map<String, String> extraArgs() {
+    /**
+     * Returns the extra CLI flags, in the order they were given.
+     *
+     * <p>
+     * A null or blank value is a bare boolean flag ({@code --flag}).
+     *
+     * @return the extra CLI flags, keyed by flag name without the leading
+     *         {@code --}
+     */
+    public Map<String, @Nullable String> extraArgs() {
         return extraArgs;
     }
 
@@ -658,6 +673,16 @@ public final class ClaudeAgentOptions {
         return hooks;
     }
 
+    /**
+     * Returns the {@code user} option.
+     *
+     * <p>
+     * The Java SDK cannot run the CLI as another user, so
+     * {@link ClaudeSDKClient#connect()} refuses options that set it. See
+     * {@link Builder#user(String)}.
+     *
+     * @return the user, or null if unset
+     */
     @Nullable
     public String user() {
         return user;
@@ -1007,7 +1032,7 @@ public final class ClaudeAgentOptions {
         @Nullable
         private Map<String, String> env;
         @Nullable
-        private Map<String, String> extraArgs;
+        private Map<String, @Nullable String> extraArgs;
         @Nullable
         private CanUseTool canUseTool;
         @Nullable
@@ -1409,12 +1434,25 @@ public final class ClaudeAgentOptions {
         }
 
         /**
-         * Sets the maximum message queue size.
+         * Sets the maximum message queue size: how many messages the SDK
+         * buffers for a consumer that is not keeping up before the reader
+         * stops reading from the CLI (back-pressure; nothing is dropped).
          *
-         * @param maxMsgQSize the max message queue size
+         * <p>This is a soft limit. While a control request the SDK sent (an
+         * {@code interrupt()}, {@code setModel()}, {@code getMcpStatus()},
+         * ...) waits for its response, the reader keeps reading past it, so
+         * the response can arrive even if nobody drains the messages. The
+         * messages stay in order either way. Defaults to 1000.
+         *
+         * @param maxMsgQSize the max message queue size, at least 1
          * @return this builder
+         * @throws IllegalArgumentException if {@code maxMsgQSize} is less than 1
          */
         public Builder maxMsgQSize(int maxMsgQSize) {
+            if (maxMsgQSize < 1) {
+                // Fail here, before connect() starts a CLI process.
+                throw new IllegalArgumentException("maxMsgQSize must be at least 1, got " + maxMsgQSize);
+            }
             this.maxMsgQSize = maxMsgQSize;
             return this;
         }
@@ -1516,11 +1554,21 @@ public final class ClaudeAgentOptions {
         /**
          * Sets extra CLI arguments to pass.
          *
+         * <p>
+         * Keys are flag names without the leading {@code --}. A null or blank
+         * value passes a bare boolean flag ({@code --flag}); {@code ""} is the
+         * usual spelling, since {@code Map.of} cannot hold a null. A value
+         * starting with {@code -} is passed as {@code --flag=value} so it
+         * cannot parse as a separate flag. Flags are passed in the map's
+         * iteration order, so use a {@link LinkedHashMap} when order matters.
+         *
          * @param extraArgs map of argument names to values
          * @return this builder
          */
-        public Builder extraArgs(Map<String, String> extraArgs) {
-            this.extraArgs = extraArgs;
+        public Builder extraArgs(Map<String, ? extends @Nullable String> extraArgs) {
+            // Copied here so the field keeps the caller's iteration order and
+            // admits null values, which Map.copyOf would reject.
+            this.extraArgs = ((extraArgs != null) ? new LinkedHashMap<>(extraArgs) : null);
             return this;
         }
 
@@ -1564,11 +1612,24 @@ public final class ClaudeAgentOptions {
         }
 
         /**
-         * Sets the user identity.
+         * Sets the OS user to run the CLI as.
          *
-         * @param user the user identifier
+         * <p>
+         * The Python SDK runs the CLI subprocess as this user. Java's
+         * {@link ProcessBuilder} has no way to switch users, so the Java SDK
+         * does not support this option: connecting with it set fails with a
+         * {@link in.vidyalai.claude.sdk.exceptions.CLIConnectionException}
+         * rather than silently running the CLI as the JVM's user. To run the
+         * CLI as another user, start it through a wrapper with
+         * {@link #cliPath(Path)} (for example a script that calls
+         * {@code sudo -u user claude "$@"}).
+         *
+         * @param user the user to run the CLI as
          * @return this builder
+         * @deprecated Not supported by the Java SDK; {@code connect()} rejects
+         *             options that set it.
          */
+        @Deprecated
         public Builder user(String user) {
             this.user = user;
             return this;
@@ -1894,6 +1955,14 @@ public final class ClaudeAgentOptions {
          * <p>When set, every transcript line written locally is also passed
          * to {@code sessionStore.append()}, and {@code resume} can
          * materialize from the store when the local file is absent.
+         *
+         * <p>A slow store holds up the message stream: before each
+         * {@code ResultMessage} the reader waits for the pending entries to
+         * be appended (bounded by three times the per-append timeout plus
+         * backoff, 181 s by default), and no message or control response is
+         * read meanwhile, so a control call such as {@code interrupt()} waits
+         * too. {@code close()} likewise waits up to that bound for the final
+         * flush. The Python SDK behaves the same way.
          *
          * @param sessionStore the session store, or {@code null} to disable mirroring
          * @return this builder

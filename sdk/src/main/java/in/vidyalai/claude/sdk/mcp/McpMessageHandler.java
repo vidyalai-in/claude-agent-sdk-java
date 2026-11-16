@@ -57,7 +57,9 @@ public interface McpMessageHandler {
      *
      * <p>
      * Called concurrently: the CLI can have several messages in flight
-     * against one server, each on its own virtual thread.
+     * against one server, each on its own virtual thread. Messages from
+     * different clients arrive on different handlers when
+     * {@link #openSession()} returns one per connection.
      *
      * @param message the JSON-RPC message, as a decoded map
      * @return a future with the response, or with {@code null} when no reply
@@ -84,6 +86,29 @@ public interface McpMessageHandler {
      */
     default void close() {
         // Nothing to release by default.
+    }
+
+    /**
+     * Returns the handler that serves one connection.
+     *
+     * <p>
+     * Each {@code ClaudeSDKClient} (or one-shot {@code query}) calls this once
+     * per configured server when it starts, routes every message for that
+     * server to the handler returned, and calls {@link #close()} on that
+     * handler, not on this one, when it shuts down. A handler with
+     * per-connection state (requests in flight, cancellation) returns a fresh
+     * object here, so that clients sharing one registered handler cannot
+     * collide on JSON-RPC ids, cancel each other's calls, or fail each other's
+     * calls on close. {@link SdkMcpServer} does.
+     *
+     * <p>
+     * The default returns {@code this}: every connection shares the handler,
+     * which is how handlers written before this method existed behave.
+     *
+     * @return the handler for one connection; never null
+     */
+    default McpMessageHandler openSession() {
+        return this;
     }
 
 }

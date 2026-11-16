@@ -3,6 +3,7 @@ package in.vidyalai.claude.sdk.internal;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.StringReader;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.CharsetDecoder;
@@ -21,18 +22,19 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.jspecify.annotations.Nullable;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 
 import in.vidyalai.claude.sdk.types.message.SDKSessionInfo;
 import in.vidyalai.claude.sdk.types.message.SessionMessage;
@@ -55,16 +57,41 @@ public class Sessions {
 
     private static final Pattern SANITIZE_RE = Pattern.compile("[^a-zA-Z0-9]");
 
-    private static final Pattern SKIP_FIRST_PROMPT_PATTERN = Pattern.compile(
-            "^(?:<local-command-stdout>|<local-command-stderr>|<local-command-control>" +
-                    "|<bash-input>|<bash-stdout>|<bash-stderr>)");
-
-    private static final Pattern COMMAND_NAME_RE = Pattern.compile(
-            "<command-name>(.*?)</command-name>");
-
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /**
+     * Parses one JSON value and rejects trailing tokens, so a line holding two
+     * concatenated objects is skipped as Python's {@code json.loads} skips it.
+     */
+    private static final ObjectReader STRICT_READER = MAPPER.readerFor(Object.class)
+            .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
     private Sessions() {
+    }
+
+    // -------------------------------------------------------------------------
+    // UUID validation + strict JSON line parsing
+    // -------------------------------------------------------------------------
+
+    /** Whether {@code value} is a UUID (case-insensitive, like Python's {@code _UUID_RE}). */
+    static boolean isValidUuid(@Nullable String value) {
+        return value != null && UUID_RE.matcher(value).matches();
+    }
+
+    /**
+     * Parses {@code text} as exactly one JSON value.
+     *
+     * @return the JSON object, or {@code null} when the text is not valid JSON,
+     *         has trailing tokens, or is not an object
+     */
+    @SuppressWarnings("unchecked")
+    static @Nullable Map<String, Object> parseJsonObjectLine(String text) {
+        try {
+            Object parsed = STRICT_READER.readValue(text);
+            return (parsed instanceof Map<?, ?> map) ? (Map<String, Object>) map : null;
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -73,10 +100,10 @@ public class Sessions {
 
     static Path getClaudeConfigHomeDir() {
         String envVar = System.getenv("CLAUDE_CONFIG_DIR");
-        if (envVar != null && !envVar.isBlank()) {
-            return Path.of(envVar);
+        if (envVar != null && !envVar.isEmpty()) {
+            return Path.of(nfc(envVar));
         }
-        return Path.of(System.getProperty("user.home"), ".claude");
+        return Path.of(nfc(Path.of(System.getProperty("user.home"), ".claude").toString()));
     }
 
     static Path getProjectsDir() {
@@ -94,8 +121,8 @@ public class Sessions {
     public static Path getProjectsDirForEnv(@Nullable Map<String, String> env) {
         if (env != null) {
             String override = env.get("CLAUDE_CONFIG_DIR");
-            if (override != null && !override.isBlank()) {
-                return Path.of(override).resolve("projects");
+            if (override != null && !override.isEmpty()) {
+                return Path.of(nfc(override)).resolve("projects");
             }
         }
         return getProjectsDir();
@@ -105,26 +132,91 @@ public class Sessions {
         return getProjectsDir().resolve(sanitizePath(path));
     }
 
+    private static String nfc(String s) {
+        return Normalizer.normalize(s, Normalizer.Form.NFC);
+    }
+
+    /**
+     * Resolves a directory path to its canonical form, as Python's
+     * {@code _canonicalize_path} does with {@code os.path.realpath} + NFC.
+     *
+     * <p>Like {@code realpath}, a path that does not exist (in whole or in
+     * part) is not an error: the longest existing prefix has its symlinks
+     * resolved and the remaining components are appended as written, with
+     * {@code .} dropped and {@code ..} taken lexically.
+     */
+    static String canonicalizePath(String dir) {
+        Path abs;
+        try {
+            abs = Path.of(dir).toAbsolutePath();
+        } catch (RuntimeException | java.io.IOError e) {
+            return nfc(dir);
+        }
+        Path resolved = abs.getRoot();
+        if (resolved == null) {
+            return nfc(abs.toString());
+        }
+        boolean missing = false;
+        try {
+            resolved = resolved.toRealPath();
+        } catch (IOException e) {
+            missing = true;
+        }
+        for (Path name : abs) {
+            String component = name.toString();
+            if (component.isEmpty() || component.equals(".")) {
+                continue;
+            }
+            if (component.equals("..")) {
+                Path parent = resolved.getParent();
+                if (parent != null) {
+                    resolved = parent;
+                }
+                continue;
+            }
+            Path next = resolved.resolve(component);
+            if (!missing) {
+                try {
+                    next = next.toRealPath();
+                } catch (IOException e) {
+                    missing = true;
+                }
+            }
+            resolved = next;
+        }
+        return nfc(resolved.toString());
+    }
+
+    /**
+     * Finds the project directory for a given (canonical) path.
+     *
+     * <p>Mirrors Python's {@code _find_project_dir}: the exact sanitized name
+     * when it is a directory. Only for paths whose sanitized form exceeds
+     * {@value #MAX_SANITIZED_LENGTH} chars (where the CLI's hash suffix may
+     * differ from ours) does it fall back to the first directory named
+     * {@code sanitized[:200] + "-"}.
+     */
     static @Nullable Path findProjectDir(String path) {
         Path exact = getProjectDir(path);
-        if (Files.exists(exact)) {
+        if (Files.isDirectory(exact)) {
             return exact;
         }
-        // Fallback prefix-scan for long paths where sanitization may differ
-        Path projectsDir = getProjectsDir();
-        if (!Files.exists(projectsDir)) {
+
+        // Exact match failed: for short paths this means no sessions exist.
+        // For long paths, try prefix matching to handle hash mismatches.
+        String sanitized = sanitizePath(path);
+        if (sanitized.length() <= MAX_SANITIZED_LENGTH) {
             return null;
         }
-        String rawSanitized = SANITIZE_RE.matcher(path).replaceAll("-");
-        int prefixLen = Math.min(50, rawSanitized.length());
-        String prefix = rawSanitized.substring(0, prefixLen);
-        try (Stream<Path> children = Files.list(projectsDir)) {
+
+        String prefix = sanitized.substring(0, MAX_SANITIZED_LENGTH) + "-";
+        try (Stream<Path> children = Files.list(getProjectsDir())) {
             return children
                     .filter(Files::isDirectory)
                     .filter(p -> p.getFileName().toString().startsWith(prefix))
                     .findFirst()
                     .orElse(null);
-        } catch (IOException e) {
+        } catch (IOException | UncheckedIOException e) {
             return null;
         }
     }
@@ -149,15 +241,22 @@ public class Sessions {
     }
 
     /**
-     * Hash function that exactly mirrors the Python/JavaScript SDK implementation.
-     * Uses signed 32-bit integer overflow: {@code h = (h << 5) - h + c}.
+     * 32-bit integer hash to base36, matching the CLI's directory naming:
+     * {@code h = (h << 5) - h + c} with signed 32-bit overflow, then
+     * {@code Math.abs(h).toString(36)}.
+     *
+     * <p>Iterates UTF-16 code units, as the JS implementation does with
+     * {@code charCodeAt}. Python iterates code points, so the two differ only
+     * for paths with characters outside the BMP. The absolute value is taken
+     * in 64 bits so {@code Integer.MIN_VALUE} hashes to {@code "zik0zk"}, as in
+     * JS and Python, not to a negative number.
      */
     static String simpleHash(String s) {
         int h = 0;
-        for (char c : s.toCharArray()) {
-            h = (h << 5) - h + c;
+        for (int i = 0; i < s.length(); i++) {
+            h = (h << 5) - h + s.charAt(i);
         }
-        return Integer.toString(Math.abs(h), 36);
+        return Long.toString(Math.abs((long) h), 36);
     }
 
     // -------------------------------------------------------------------------
@@ -167,49 +266,72 @@ public class Sessions {
     record LiteSessionFile(long mtime, long size, String head, String tail) {
     }
 
+    /**
+     * Opens a session file, stats it, and reads head + tail.
+     *
+     * @return {@code null} on any I/O error or when the file is empty (a
+     *         0-byte stub means "not here, keep searching")
+     */
     static @Nullable LiteSessionFile readSessionLite(Path file) {
-        try {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+            long size = channel.size();
             long mtime = Files.getLastModifiedTime(file).toMillis();
-            long size = Files.size(file);
 
-            CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPLACE)
-                    .onUnmappableCharacter(CodingErrorAction.REPLACE);
+            ByteBuffer headBuf = ByteBuffer.allocate((int) Math.min(Math.max(size, 0), LITE_READ_BUF_SIZE));
+            int headRead = readFully(channel, headBuf, 0);
+            if (headRead <= 0) {
+                return null;
+            }
+            headBuf.flip();
+            String head = newLenientDecoder().decode(headBuf).toString();
 
-            String head;
             String tail;
-
-            try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
-                int headSize = (int) Math.min(size, LITE_READ_BUF_SIZE);
-                ByteBuffer headBuf = ByteBuffer.allocate(headSize);
-                channel.read(headBuf, 0);
-                headBuf.flip();
-                head = decoder.decode(headBuf).toString();
-
-                if (size <= LITE_READ_BUF_SIZE) {
-                    tail = head;
-                } else {
-                    long tailStart = size - LITE_READ_BUF_SIZE;
-                    ByteBuffer tailBuf = ByteBuffer.allocate(LITE_READ_BUF_SIZE);
-                    channel.read(tailBuf, tailStart);
-                    tailBuf.flip();
-                    decoder.reset();
-                    tail = decoder.decode(tailBuf).toString();
-                }
+            long tailOffset = Math.max(0, size - LITE_READ_BUF_SIZE);
+            if (tailOffset == 0) {
+                tail = head;
+            } else {
+                ByteBuffer tailBuf = ByteBuffer.allocate(LITE_READ_BUF_SIZE);
+                readFully(channel, tailBuf, tailOffset);
+                tailBuf.flip();
+                tail = newLenientDecoder().decode(tailBuf).toString();
             }
 
             return new LiteSessionFile(mtime, size, head, tail);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             return null;
         }
     }
 
+    private static int readFully(FileChannel channel, ByteBuffer buf, long position) throws IOException {
+        int total = 0;
+        while (buf.hasRemaining()) {
+            int n = channel.read(buf, position + total);
+            if (n < 0) {
+                break;
+            }
+            total += n;
+        }
+        return total;
+    }
+
+    private static CharsetDecoder newLenientDecoder() {
+        return StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(CodingErrorAction.REPLACE);
+    }
+
     // -------------------------------------------------------------------------
-    // Regex-based JSON field extraction (avoids full parse on hot path)
+    // JSON string field extraction: no full parse, works on truncated lines
     // -------------------------------------------------------------------------
 
     /**
-     * Extracts the first occurrence of a JSON string field from raw text.
+     * Extracts the first occurrence of a JSON string field from raw text,
+     * without a full parse, so it works on lines cut off at a buffer edge.
+     *
+     * <p>Matches {@code "key":"value"} and, more leniently than Python's
+     * {@code _extract_json_string_field} (which accepts only {@code ":"} and
+     * {@code ": "}), any whitespace around the colon. A value with no closing
+     * quote is not a match.
      */
     static @Nullable String extractJsonStringField(String text, String key) {
         return extractJsonStringFieldInternal(text, key, false);
@@ -217,6 +339,10 @@ public class Sessions {
 
     /**
      * Extracts the last occurrence of a JSON string field from raw text.
+     *
+     * <p>An occurrence whose value has no closing quote (a line cut off at the
+     * end of a head/tail buffer) is ignored, so the last complete value wins,
+     * as in Python's {@code _extract_last_json_string_field}.
      */
     static @Nullable String extractLastJsonStringField(String text, String key) {
         return extractJsonStringFieldInternal(text, key, true);
@@ -226,13 +352,14 @@ public class Sessions {
             String text, String key, boolean last) {
         String searchKey = "\"" + key + "\"";
         int searchFrom = 0;
-        int bestValueStart = -1;
+        String found = null;
 
         while (true) {
             int keyIdx = text.indexOf(searchKey, searchFrom);
-            if (keyIdx < 0)
+            if (keyIdx < 0) {
                 break;
-
+            }
+            searchFrom = keyIdx + 1;
             int afterKey = keyIdx + searchKey.length();
 
             // Find colon
@@ -243,11 +370,11 @@ public class Sessions {
                     colon = i;
                     break;
                 }
-                if (!Character.isWhitespace(c))
+                if (!Character.isWhitespace(c)) {
                     break;
+                }
             }
             if (colon < 0) {
-                searchFrom = keyIdx + 1;
                 continue;
             }
 
@@ -259,49 +386,58 @@ public class Sessions {
                     quote = i;
                     break;
                 }
-                if (!Character.isWhitespace(c))
+                if (!Character.isWhitespace(c)) {
                     break;
+                }
             }
             if (quote < 0) {
-                searchFrom = keyIdx + 1;
                 continue;
             }
 
-            bestValueStart = quote + 1;
-            if (!last)
-                break;
-            searchFrom = keyIdx + 1;
-        }
-
-        if (bestValueStart < 0)
-            return null;
-
-        // Read value until unescaped closing quote
-        StringBuilder sb = new StringBuilder();
-        int i = bestValueStart;
-        while (i < text.length()) {
-            char c = text.charAt(i);
-            if (c == '"')
-                break;
-            if (c == '\\' && i + 1 < text.length()) {
-                sb.append(c).append(text.charAt(i + 1));
-                i += 2;
-            } else {
-                sb.append(c);
+            // Read the value up to its unescaped closing quote
+            int valueStart = quote + 1;
+            int closing = -1;
+            int i = valueStart;
+            while (i < text.length()) {
+                char c = text.charAt(i);
+                if (c == '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (c == '"') {
+                    closing = i;
+                    break;
+                }
                 i++;
             }
+            if (closing < 0) {
+                // Truncated value: not a match, and nothing can follow it.
+                break;
+            }
+
+            found = unescapeJsonString(text.substring(valueStart, closing));
+            if (!last) {
+                break;
+            }
+            // Continue after the value, so a key-like string inside it is not matched.
+            searchFrom = closing + 1;
         }
 
-        return unescapeJsonString(sb.toString());
+        return found;
     }
 
+
+    /** Unescapes a JSON string value extracted as raw text; returns it as-is if it is not valid. */
+    @SuppressWarnings("null")
     static String unescapeJsonString(String raw) {
+        if (raw.indexOf('\\') < 0) {
+            return raw;
+        }
         try {
-            return MAPPER.readValue("\"" + raw + "\"", String.class);
-        } catch (Exception e) {
-            return raw.replace("\\n", "\n").replace("\\t", "\t")
-                    .replace("\\\"", "\"").replace("\\\\", "\\")
-                    .replace("\\/", "/");
+            String result = MAPPER.readValue("\"" + raw + "\"", String.class);
+            return result != null ? result : raw;
+        } catch (IOException | RuntimeException e) {
+            return raw;
         }
     }
 
@@ -309,82 +445,14 @@ public class Sessions {
     // First prompt extraction
     // -------------------------------------------------------------------------
 
+    /** See {@link FirstPrompt#extractFromHead(String)}. */
     static String extractFirstPromptFromHead(String head) {
-        String slashCommandFallback = null;
-
-        try (BufferedReader reader = new BufferedReader(new StringReader(head))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty())
-                    continue;
-
-                // Quick pre-checks before JSON parse
-                if (!line.contains("\"user\""))
-                    continue;
-                if (line.contains("tool_use_id") || line.contains("\"tool_result\""))
-                    continue;
-                if (line.contains("\"isMeta\":true") || line.contains("\"isMeta\": true"))
-                    continue;
-                if (line.contains("\"isCompact\":true") || line.contains("\"isCompact\": true"))
-                    continue;
-
-                try {
-                    @SuppressWarnings({ "unchecked", "null" })
-                    Map<String, Object> entry = MAPPER.readValue(line, Map.class);
-                    if (!"user".equals(entry.get("type")))
-                        continue;
-
-                    Object message = entry.get("message");
-                    if (!(message instanceof Map<?, ?> msg))
-                        continue;
-
-                    Object content = msg.get("content");
-                    String text = null;
-
-                    if (content instanceof String s) {
-                        text = s;
-                    } else if (content instanceof List<?> list) {
-                        for (Object block : list) {
-                            if (!(block instanceof Map<?, ?> b))
-                                continue;
-                            if ("text".equals(b.get("type")) && b.get("text") instanceof String s) {
-                                text = s;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (text == null || text.isBlank())
-                        continue;
-                    if (SKIP_FIRST_PROMPT_PATTERN.matcher(text).find())
-                        continue;
-
-                    if (text.startsWith("/")) {
-                        Matcher m = COMMAND_NAME_RE.matcher(text);
-                        String cmdName = m.find() ? m.group(1) : text.split("\\s+")[0];
-                        if (slashCommandFallback == null) {
-                            slashCommandFallback = truncatePrompt(cmdName);
-                        }
-                        continue;
-                    }
-
-                    return truncatePrompt(text);
-                } catch (Exception e) {
-                    // Skip malformed lines
-                }
-            }
-        } catch (IOException e) {
-            // StringReader never throws
-        }
-
-        return slashCommandFallback != null ? slashCommandFallback : "";
+        return FirstPrompt.extractFromHead(head);
     }
 
-    private static String truncatePrompt(String text) {
-        if (text.length() <= MAX_SANITIZED_LENGTH)
-            return text;
-        return text.substring(0, MAX_SANITIZED_LENGTH) + "\u2026";
+    /** {@code s} when it is non-empty, else {@code null}: Python's {@code s or None}. */
+    private static @Nullable String nonEmpty(@Nullable String s) {
+        return (s != null && !s.isEmpty()) ? s : null;
     }
 
     // -------------------------------------------------------------------------
@@ -415,46 +483,45 @@ public class Sessions {
 
         // User-set title (customTitle) wins over AI-generated title (aiTitle).
         // Head fallback covers short sessions where the title entry may not be in tail.
-        String customTitle = extractLastJsonStringField(tail, "customTitle");
+        // Every fallback chain below is Python's `or` chain: an empty string
+        // falls through like a missing value.
+        String customTitle = nonEmpty(extractLastJsonStringField(tail, "customTitle"));
         if (customTitle == null) {
-            customTitle = extractLastJsonStringField(head, "customTitle");
+            customTitle = nonEmpty(extractLastJsonStringField(head, "customTitle"));
         }
         if (customTitle == null) {
-            customTitle = extractLastJsonStringField(tail, "aiTitle");
-            if (customTitle == null) {
-                customTitle = extractLastJsonStringField(head, "aiTitle");
-            }
+            customTitle = nonEmpty(extractLastJsonStringField(tail, "aiTitle"));
+        }
+        if (customTitle == null) {
+            customTitle = nonEmpty(extractLastJsonStringField(head, "aiTitle"));
         }
 
-        String firstPrompt = extractFirstPromptFromHead(head);
-        if (firstPrompt != null && firstPrompt.isEmpty()) {
-            firstPrompt = null;
-        }
+        String firstPrompt = nonEmpty(extractFirstPromptFromHead(head));
 
         // Summary priority: custom title > lastPrompt > summary > first prompt
         String displaySummary = customTitle;
-        if (displaySummary == null || displaySummary.isBlank()) {
-            displaySummary = extractLastJsonStringField(tail, "lastPrompt");
+        if (displaySummary == null) {
+            displaySummary = nonEmpty(extractLastJsonStringField(tail, "lastPrompt"));
         }
-        if (displaySummary == null || displaySummary.isBlank()) {
-            displaySummary = extractLastJsonStringField(tail, "summary");
+        if (displaySummary == null) {
+            displaySummary = nonEmpty(extractLastJsonStringField(tail, "summary"));
         }
-        if (displaySummary == null || displaySummary.isBlank()) {
+        if (displaySummary == null) {
             displaySummary = firstPrompt;
         }
 
         // Skip metadata-only sessions (no title, no summary, no prompt)
-        if (displaySummary == null || displaySummary.isBlank()) {
+        if (displaySummary == null) {
             return null;
         }
 
-        String gitBranch = extractLastJsonStringField(tail, "gitBranch");
+        String gitBranch = nonEmpty(extractLastJsonStringField(tail, "gitBranch"));
         if (gitBranch == null) {
-            gitBranch = extractJsonStringField(head, "gitBranch");
+            gitBranch = nonEmpty(extractJsonStringField(head, "gitBranch"));
         }
-        String cwd = extractJsonStringField(head, "cwd");
+        String cwd = nonEmpty(extractJsonStringField(head, "cwd"));
         if (cwd == null) {
-            cwd = projectPath;
+            cwd = nonEmpty(projectPath);
         }
 
         // Tag extraction scoped to {"type":"tag"} lines to avoid matching
@@ -532,11 +599,10 @@ public class Sessions {
     // -------------------------------------------------------------------------
 
     static List<SDKSessionInfo> readSessionsFromDir(Path projectDir, @Nullable String projectPath) {
-        if (!Files.exists(projectDir)) {
-            return List.of();
-        }
-
         List<SDKSessionInfo> sessions = new ArrayList<>();
+        if (!Files.exists(projectDir)) {
+            return sessions;
+        }
 
         try (Stream<Path> files = Files.list(projectDir)) {
             files.filter(f -> f.getFileName().toString().endsWith(".jsonl"))
@@ -556,7 +622,7 @@ public class Sessions {
                             sessions.add(info);
                         }
                     });
-        } catch (IOException e) {
+        } catch (IOException | UncheckedIOException e) {
             // Return what we have
         }
 
@@ -577,7 +643,7 @@ public class Sessions {
             List<String> paths = Collections.synchronizedList(new ArrayList<>());
 
             Thread reader = Threads.start("Sessions-WorktreeReader-", () -> {
-                try (var scanner = new java.util.Scanner(process.getInputStream())) {
+                try (var scanner = new java.util.Scanner(process.getInputStream(), StandardCharsets.UTF_8)) {
                     while (scanner.hasNextLine()) {
                         String ln = scanner.nextLine();
                         if (ln.startsWith("worktree ")) {
@@ -593,6 +659,10 @@ public class Sessions {
 
             if (!done) {
                 process.destroyForcibly();
+                return List.of();
+            }
+            // Like Python: a failed `git worktree list` (not a repo) means no worktrees.
+            if (process.exitValue() != 0) {
                 return List.of();
             }
 
@@ -680,39 +750,118 @@ public class Sessions {
             int offset,
             boolean includeWorktrees) {
 
+        // Python truthiness: an empty directory means "all projects".
+        if (directory != null && !directory.isEmpty()) {
+            return listSessionsForProject(directory, limit, offset, includeWorktrees);
+        }
+
         List<SDKSessionInfo> allSessions = new ArrayList<>();
-
-        if (directory != null) {
-            Path projectDir = findProjectDir(directory);
-            if (projectDir != null) {
-                allSessions.addAll(readSessionsFromDir(projectDir, directory));
-            }
-
-            if (includeWorktrees) {
-                List<String> worktreePaths = getWorktreePaths(directory);
-                for (String worktreePath : worktreePaths) {
-                    if (!worktreePath.equals(directory)) {
-                        Path worktreeDir = findProjectDir(worktreePath);
-                        if (worktreeDir != null) {
-                            allSessions.addAll(readSessionsFromDir(worktreeDir, worktreePath));
-                        }
-                    }
-                }
-            }
-        } else {
-            Path projectsDir = getProjectsDir();
-            if (Files.exists(projectsDir)) {
-                try (Stream<Path> dirs = Files.list(projectsDir)) {
-                    dirs.filter(Files::isDirectory)
-                            .forEach(dir -> allSessions.addAll(readSessionsFromDir(dir, null)));
-                } catch (IOException e) {
-                    // Return what we have
-                }
+        Path projectsDir = getProjectsDir();
+        if (Files.exists(projectsDir)) {
+            try (Stream<Path> dirs = Files.list(projectsDir)) {
+                dirs.filter(Files::isDirectory)
+                        .forEach(dir -> allSessions.addAll(readSessionsFromDir(dir, null)));
+            } catch (IOException | UncheckedIOException e) {
+                // Return what we have
             }
         }
 
         List<SDKSessionInfo> deduped = deduplicateBySessionId(allSessions);
         return applySortLimitOffset(new ArrayList<>(deduped), limit, offset);
+    }
+
+    /**
+     * Lists sessions for one project directory and, optionally, its git
+     * worktrees. Mirrors Python's {@code _list_sessions_for_project}.
+     *
+     * <p>With at most one worktree (or worktree scanning off, or no git), only
+     * the directory's own project dir is read. Otherwise every project dir
+     * whose name is exactly a worktree's sanitized path is read (prefix
+     * matching only for truncated paths over {@value #MAX_SANITIZED_LENGTH}
+     * chars, which carry a hash suffix), plus the directory's own project dir
+     * so a subdirectory such as {@code /repo/packages/app} is still covered.
+     * Names compare case-insensitively on Windows.
+     */
+    private static List<SDKSessionInfo> listSessionsForProject(
+            String directory, @Nullable Integer limit, int offset, boolean includeWorktrees) {
+        String canonicalDir = canonicalizePath(directory);
+
+        List<String> worktreePaths = includeWorktrees ? getWorktreePaths(canonicalDir) : List.of();
+
+        // No worktrees (or git not available / scanning disabled): just scan
+        // the single project dir.
+        if (worktreePaths.size() <= 1) {
+            Path projectDir = findProjectDir(canonicalDir);
+            if (projectDir == null) {
+                return new ArrayList<>();
+            }
+            return applySortLimitOffset(readSessionsFromDir(projectDir, canonicalDir), limit, offset);
+        }
+
+        // Worktree-aware scanning: find all project dirs matching any worktree.
+        boolean caseInsensitive = isWindows();
+
+        // Sort worktree paths by sanitized prefix length (longest first) so
+        // more specific matches take priority over shorter ones.
+        List<Map.Entry<String, String>> indexed = new ArrayList<>();
+        for (String wt : worktreePaths) {
+            String sanitized = sanitizePath(wt);
+            String prefix = caseInsensitive ? sanitized.toLowerCase(Locale.ROOT) : sanitized;
+            indexed.add(Map.entry(wt, prefix));
+        }
+        indexed.sort(Comparator.comparingInt((Map.Entry<String, String> e) -> e.getValue().length()).reversed());
+
+        List<Path> allDirents;
+        try (Stream<Path> dirs = Files.list(getProjectsDir())) {
+            allDirents = dirs.filter(Files::isDirectory).toList();
+        } catch (IOException | UncheckedIOException e) {
+            // Fall back to the single project dir.
+            Path projectDir = findProjectDir(canonicalDir);
+            if (projectDir == null) {
+                return new ArrayList<>();
+            }
+            return applySortLimitOffset(readSessionsFromDir(projectDir, canonicalDir), limit, offset);
+        }
+
+        List<SDKSessionInfo> allSessions = new ArrayList<>();
+        Set<String> seenDirs = new HashSet<>();
+
+        // Always include the user's actual directory (handles subdirectories
+        // like /repo/packages/my-app that won't match worktree root prefixes).
+        Path canonicalProjectDir = findProjectDir(canonicalDir);
+        if (canonicalProjectDir != null) {
+            String dirBase = canonicalProjectDir.getFileName().toString();
+            seenDirs.add(caseInsensitive ? dirBase.toLowerCase(Locale.ROOT) : dirBase);
+            allSessions.addAll(readSessionsFromDir(canonicalProjectDir, canonicalDir));
+        }
+
+        for (Path entry : allDirents) {
+            String name = entry.getFileName().toString();
+            String dirName = caseInsensitive ? name.toLowerCase(Locale.ROOT) : name;
+            if (seenDirs.contains(dirName)) {
+                continue;
+            }
+            for (Map.Entry<String, String> wt : indexed) {
+                String prefix = wt.getValue();
+                // Only use startsWith for truncated paths (> MAX_SANITIZED_LENGTH)
+                // where a hash suffix follows. For short paths, require an exact
+                // match so /root/project does not match /root/project-foo.
+                boolean isMatch = dirName.equals(prefix)
+                        || (prefix.length() >= MAX_SANITIZED_LENGTH && dirName.startsWith(prefix + "-"));
+                if (isMatch) {
+                    seenDirs.add(dirName);
+                    allSessions.addAll(readSessionsFromDir(entry, wt.getKey()));
+                    break;
+                }
+            }
+        }
+
+        List<SDKSessionInfo> deduped = deduplicateBySessionId(allSessions);
+        return applySortLimitOffset(deduped, limit, offset);
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows");
     }
 
     /**
@@ -739,24 +888,21 @@ public class Sessions {
 
         String filename = sessionId + ".jsonl";
 
-        if (directory != null) {
-            Path projectDir = findProjectDir(directory);
+        if (directory != null && !directory.isEmpty()) {
+            String canonical = canonicalizePath(directory);
+            Path projectDir = findProjectDir(canonical);
             if (projectDir != null) {
+                // A missing or 0-byte file reads as null: keep searching.
                 LiteSessionFile lite = readSessionLite(projectDir.resolve(filename));
                 if (lite != null) {
-                    return parseSessionInfoFromLite(sessionId, lite, directory);
+                    return parseSessionInfoFromLite(sessionId, lite, canonical);
                 }
             }
 
             // Worktree fallback — matches getSessionMessages semantics
-            List<String> worktreePaths;
-            try {
-                worktreePaths = getWorktreePaths(directory);
-            } catch (Exception e) {
-                worktreePaths = List.of();
-            }
+            List<String> worktreePaths = getWorktreePaths(canonical);
             for (String wt : worktreePaths) {
-                if (wt.equals(directory)) {
+                if (wt.equals(canonical)) {
                     continue;
                 }
                 Path wtProjectDir = findProjectDir(wt);
@@ -841,18 +987,15 @@ public class Sessions {
                 line = line.trim();
                 if (line.isEmpty())
                     continue;
-                try {
-                    @SuppressWarnings({ "unchecked", "null" })
-                    Map<String, Object> entry = MAPPER.readValue(line, Map.class);
-                    String type = (String) entry.get("type");
-                    if (type == null || !validTypes.contains(type))
-                        continue;
-                    if (!(entry.get("uuid") instanceof String))
-                        continue;
-                    entries.add(entry);
-                } catch (Exception e) {
-                    // Skip corrupt lines
-                }
+                // Corrupt lines (including two concatenated objects) are skipped
+                Map<String, Object> entry = parseJsonObjectLine(line);
+                if (entry == null)
+                    continue;
+                if (!(entry.get("type") instanceof String type) || !validTypes.contains(type))
+                    continue;
+                if (!(entry.get("uuid") instanceof String))
+                    continue;
+                entries.add(entry);
             }
         } catch (IOException e) {
             // StringReader never throws
@@ -1318,18 +1461,8 @@ public class Sessions {
         } catch (java.nio.file.NoSuchFileException e) {
             return null;
         }
-        try {
-            @SuppressWarnings("null")
-            Object parsed = MAPPER.readValue(text, Object.class);
-            if (parsed instanceof Map<?, ?> map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> typed = (Map<String, Object>) map;
-                return typed;
-            }
-        } catch (com.fasterxml.jackson.core.JacksonException e) {
-            return null;
-        }
-        return null;
+        // Not valid JSON (trailing tokens included) or not an object: no metadata.
+        return parseJsonObjectLine(text);
     }
 
     /**
@@ -1354,45 +1487,49 @@ public class Sessions {
     static @Nullable String readSessionFile(String sessionId, @Nullable String directory) {
         String filename = sessionId + ".jsonl";
 
-        if (directory != null) {
-            Path projectDir = findProjectDir(directory);
+        // A missing, unreadable or empty file (a 0-byte stub) means "not
+        // here": every lookup below keeps searching, as Python's does.
+        if (directory != null && !directory.isEmpty()) {
+            String canonicalDir = canonicalizePath(directory);
+
+            // Try the exact/prefix-matched project directory first
+            Path projectDir = findProjectDir(canonicalDir);
             if (projectDir != null) {
-                Path file = projectDir.resolve(filename);
-                if (Files.exists(file)) {
-                    return readFileContent(file);
+                String content = readFileContent(projectDir.resolve(filename));
+                if (content != null && !content.isEmpty()) {
+                    return content;
                 }
             }
 
-            List<String> worktreePaths = getWorktreePaths(directory);
-            for (String worktreePath : worktreePaths) {
-                if (!worktreePath.equals(directory)) {
-                    Path worktreeDir = findProjectDir(worktreePath);
-                    if (worktreeDir != null) {
-                        Path file = worktreeDir.resolve(filename);
-                        if (Files.exists(file)) {
-                            return readFileContent(file);
-                        }
+            // Try worktree paths: sessions may live under a different worktree root
+            for (String worktreePath : getWorktreePaths(canonicalDir)) {
+                if (worktreePath.equals(canonicalDir)) {
+                    continue; // already tried above
+                }
+                Path worktreeDir = findProjectDir(worktreePath);
+                if (worktreeDir != null) {
+                    String content = readFileContent(worktreeDir.resolve(filename));
+                    if (content != null && !content.isEmpty()) {
+                        return content;
                     }
                 }
             }
-        } else {
-            Path projectsDir = getProjectsDir();
-            if (Files.exists(projectsDir)) {
-                try (Stream<Path> dirs = Files.list(projectsDir)) {
-                    Optional<Path> found = dirs
-                            .filter(Files::isDirectory)
-                            .map(dir -> dir.resolve(filename))
-                            .filter(Files::exists)
-                            .findFirst();
-                    if (found.isPresent()) {
-                        return readFileContent(found.get());
-                    }
-                } catch (IOException e) {
-                    return null;
-                }
-            }
+            return null;
         }
 
+        // No directory provided: search all project directories
+        List<Path> dirents;
+        try (Stream<Path> dirs = Files.list(getProjectsDir())) {
+            dirents = dirs.filter(Files::isDirectory).toList();
+        } catch (IOException | UncheckedIOException e) {
+            return null;
+        }
+        for (Path dir : dirents) {
+            String content = readFileContent(dir.resolve(filename));
+            if (content != null && !content.isEmpty()) {
+                return content;
+            }
+        }
         return null;
     }
 
@@ -1419,16 +1556,17 @@ public class Sessions {
     public static @Nullable Path resolveSessionFilePath(String sessionId, @Nullable String directory) {
         String filename = sessionId + ".jsonl";
 
-        if (directory != null) {
-            Path projectDir = findProjectDir(directory);
+        if (directory != null && !directory.isEmpty()) {
+            String canonicalDir = canonicalizePath(directory);
+            Path projectDir = findProjectDir(canonicalDir);
             Path found = statCandidate(projectDir, filename);
             if (found != null) {
                 return found;
             }
 
-            List<String> worktreePaths = getWorktreePaths(directory);
+            List<String> worktreePaths = getWorktreePaths(canonicalDir);
             for (String worktreePath : worktreePaths) {
-                if (!worktreePath.equals(directory)) {
+                if (!worktreePath.equals(canonicalDir)) {
                     Path worktreeDir = findProjectDir(worktreePath);
                     Path wtFound = statCandidate(worktreeDir, filename);
                     if (wtFound != null) {
@@ -1450,7 +1588,7 @@ public class Sessions {
                     .filter(java.util.Objects::nonNull)
                     .findFirst()
                     .orElse(null);
-        } catch (IOException e) {
+        } catch (IOException | UncheckedIOException e) {
             return null;
         }
     }

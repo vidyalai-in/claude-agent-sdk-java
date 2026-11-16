@@ -207,11 +207,16 @@ public final class SessionStoreConformance {
                 for (SessionStoreListEntry le : store.listSessions("proj")) {
                     lsByMtime.put(le.sessionId(), le.mtime());
                 }
+                // A summarized session must also be listed (Python raises
+                // KeyError here), or the listing's freshness check drops it.
                 Long mt = lsByMtime.get("summ-sess");
-                if (mt != null) {
-                    assertTrue("contract 14: summary mtime >= listSessions mtime",
-                            summ.mtime() >= mt);
+                if (mt == null) {
+                    throw new AssertionError("Conformance failure — contract 14: listSessions "
+                            + "does not report summ-sess, which listSessionSummaries does"
+                            + "\n  listed: " + lsByMtime.keySet());
                 }
+                assertTrue("contract 14: summary mtime >= listSessions mtime",
+                        summ.mtime() >= mt);
             }
 
             assertTrue("contract 14: summary data is a Map", summ.data() instanceof Map);
@@ -399,11 +404,13 @@ public final class SessionStoreConformance {
         }
     }
 
+    /**
+     * A non-null collection of {@code expected} elements. {@code null} fails
+     * even for {@code expected == 0}: the listing methods return an empty list
+     * for "nothing there", as the Python suite's {@code == []} requires.
+     */
     private static void assertSize(String what, Collection<?> actual, int expected) {
         if (actual == null) {
-            if (expected == 0) {
-                return; // null treated as empty
-            }
             throw new AssertionError("Conformance failure — " + what
                     + "\n  expected size " + expected + " but was null");
         }

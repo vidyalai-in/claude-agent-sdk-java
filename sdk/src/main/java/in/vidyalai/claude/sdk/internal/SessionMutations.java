@@ -3,16 +3,26 @@ package in.vidyalai.claude.sdk.internal;
 import java.io.BufferedReader;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.io.StringReader;
+import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.text.Normalizer;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -241,7 +251,8 @@ public class SessionMutations {
         if (!isValidUuid(sessionId)) {
             throw new IllegalArgumentException("Invalid session_id: " + sessionId);
         }
-        if (upToMessageId != null && !isValidUuid(upToMessageId)) {
+        // Python truthiness: an empty upToMessageId means "no cutoff".
+        if (upToMessageId != null && !upToMessageId.isEmpty() && !isValidUuid(upToMessageId)) {
             throw new IllegalArgumentException("Invalid up_to_message_id: " + upToMessageId);
         }
 
@@ -269,15 +280,32 @@ public class SessionMutations {
                 transcript, contentReplacements, sessionId, upToMessageId, title,
                 () -> deriveTitleFromBytes(contentBytes));
 
-        // Write new session file
+        // Write new session file: create-exclusive, owner read/write only
+        // (Python: O_CREAT | O_EXCL with mode 0o600) where POSIX permissions
+        // are supported.
         Path forkPath = projectDir.resolve(result.forkedSessionId + ".jsonl");
         String forkContent = String.join("\n", result.lines) + "\n";
-        Files.writeString(forkPath, forkContent,
-                StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE_NEW,
-                StandardOpenOption.WRITE);
+        writeNewPrivateFile(forkPath, forkContent.getBytes(StandardCharsets.UTF_8));
 
         return new ForkSessionResult(result.forkedSessionId);
+    }
+
+    /**
+     * Creates {@code path} (failing if it exists) and writes {@code data}. On
+     * file systems with POSIX permissions the file is created with mode 0600.
+     */
+    static void writeNewPrivateFile(Path path, byte[] data) throws IOException {
+        Set<OpenOption> options = Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        FileAttribute<?>[] attrs = path.getFileSystem().supportedFileAttributeViews().contains("posix")
+                ? new FileAttribute<?>[] { PosixFilePermissions.asFileAttribute(
+                        EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)) }
+                : new FileAttribute<?>[0];
+        try (SeekableByteChannel channel = Files.newByteChannel(path, options, attrs)) {
+            ByteBuffer buf = ByteBuffer.wrap(data);
+            while (buf.hasRemaining()) {
+                channel.write(buf);
+            }
+        }
     }
 
     /**
@@ -322,7 +350,7 @@ public class SessionMutations {
                     "Session " + sessionId + " has no messages to fork");
         }
 
-        if (upToMessageId != null) {
+        if (upToMessageId != null && !upToMessageId.isEmpty()) {
             int cutoff = -1;
             for (int i = 0; i < transcript.size(); i++) {
                 if (upToMessageId.equals(transcript.get(i).get("uuid"))) {
@@ -449,21 +477,19 @@ public class SessionMutations {
         String tail = new String(contentBytes, tailStart,
                 bufLen - tailStart, StandardCharsets.UTF_8);
 
-        String base = Sessions.extractLastJsonStringField(tail, "customTitle");
+        // Python's `or` chain: an empty value falls through to the next source.
+        String base = nonEmpty(Sessions.extractLastJsonStringField(tail, "customTitle"));
         if (base == null) {
-            base = Sessions.extractLastJsonStringField(head, "customTitle");
+            base = nonEmpty(Sessions.extractLastJsonStringField(head, "customTitle"));
         }
         if (base == null) {
-            base = Sessions.extractLastJsonStringField(tail, "aiTitle");
+            base = nonEmpty(Sessions.extractLastJsonStringField(tail, "aiTitle"));
         }
         if (base == null) {
-            base = Sessions.extractLastJsonStringField(head, "aiTitle");
+            base = nonEmpty(Sessions.extractLastJsonStringField(head, "aiTitle"));
         }
         if (base == null) {
-            base = Sessions.extractFirstPromptFromHead(head);
-        }
-        if (base == null || base.isEmpty()) {
-            return null;
+            base = nonEmpty(Sessions.extractFirstPromptFromHead(head));
         }
         return base;
     }
@@ -495,7 +521,6 @@ public class SessionMutations {
     /**
      * Parses JSONL content into transcript entries + content-replacement records.
      */
-    @SuppressWarnings({ "unchecked", "null" })
     private static ForkTranscriptResult parseForkTranscript(String content, String sessionId) {
         List<Map<String, Object>> transcript = new ArrayList<>();
         List<Object> contentReplacements = new ArrayList<>();
@@ -507,19 +532,19 @@ public class SessionMutations {
                 if (line.isEmpty()) {
                     continue;
                 }
-                try {
-                    Map<String, Object> entry = MAPPER.readValue(line, Map.class);
-                    String entryType = (String) entry.get("type");
-                    if (TRANSCRIPT_TYPES.contains(entryType)
-                            && entry.get("uuid") instanceof String) {
-                        transcript.add(entry);
-                    } else if ("content-replacement".equals(entryType)
-                            && sessionId.equals(entry.get("sessionId"))
-                            && entry.get("replacements") instanceof List<?> replacements) {
-                        contentReplacements.addAll(replacements);
-                    }
-                } catch (Exception e) {
-                    // Skip corrupt lines
+                // Corrupt lines (including two concatenated objects) are skipped
+                Map<String, Object> entry = Sessions.parseJsonObjectLine(line);
+                if (entry == null) {
+                    continue;
+                }
+                Object entryType = entry.get("type");
+                if (entryType instanceof String type && TRANSCRIPT_TYPES.contains(type)
+                        && entry.get("uuid") instanceof String) {
+                    transcript.add(entry);
+                } else if ("content-replacement".equals(entryType)
+                        && sessionId.equals(entry.get("sessionId"))
+                        && entry.get("replacements") instanceof List<?> replacements) {
+                    contentReplacements.addAll(replacements);
                 }
             }
         } catch (IOException e) {
@@ -549,9 +574,9 @@ public class SessionMutations {
             @Nullable String directory) {
         String fileName = sessionId + ".jsonl";
 
-        if (directory != null) {
-            Sessions.sanitizePath(directory);
-            Path projectDir = Sessions.findProjectDir(directory);
+        if (directory != null && !directory.isEmpty()) {
+            String canonical = Sessions.canonicalizePath(directory);
+            Path projectDir = Sessions.findProjectDir(canonical);
             if (projectDir != null) {
                 Path[] result = tryDir(projectDir, fileName);
                 if (result != null) {
@@ -560,22 +585,17 @@ public class SessionMutations {
             }
 
             // Worktree fallback
-            try {
-                List<String> worktreePaths = Sessions.getWorktreePaths(directory);
-                for (String wt : worktreePaths) {
-                    if (wt.equals(directory)) {
-                        continue;
-                    }
-                    Path wtProjectDir = Sessions.findProjectDir(wt);
-                    if (wtProjectDir != null) {
-                        Path[] result = tryDir(wtProjectDir, fileName);
-                        if (result != null) {
-                            return result;
-                        }
+            for (String wt : Sessions.getWorktreePaths(canonical)) {
+                if (wt.equals(canonical)) {
+                    continue;
+                }
+                Path wtProjectDir = Sessions.findProjectDir(wt);
+                if (wtProjectDir != null) {
+                    Path[] result = tryDir(wtProjectDir, fileName);
+                    if (result != null) {
+                        return result;
                     }
                 }
-            } catch (Exception e) {
-                // Worktree detection failure is non-fatal
             }
 
             return null;
@@ -594,7 +614,7 @@ public class SessionMutations {
                     return result;
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | UncheckedIOException e) {
             return null;
         }
         return null;
@@ -615,33 +635,56 @@ public class SessionMutations {
         return null;
     }
 
+    /**
+     * Appends {@code data} to an existing session file.
+     *
+     * <p>Mirrors Python's {@code _append_to_session}: tries each candidate
+     * path directly (no existence check), including the worktree fallback when
+     * a directory is given. Only "not found" (missing file or 0-byte stub)
+     * moves on to the next candidate; any other I/O error propagates.
+     */
     private static void appendToSession(String sessionId, String data, @Nullable String directory)
             throws IOException {
         String fileName = sessionId + ".jsonl";
 
-        if (directory != null) {
-            Sessions.sanitizePath(directory);
-            // Use the path directly (not sanitized as a project dir)
-            Path projectDir = Sessions.findProjectDir(directory);
+        if (directory != null && !directory.isEmpty()) {
+            String canonical = Sessions.canonicalizePath(directory);
+
+            // Try the exact/prefix-matched project directory first.
+            Path projectDir = Sessions.findProjectDir(canonical);
             if (projectDir != null && tryAppend(projectDir.resolve(fileName), data)) {
                 return;
             }
+
+            // Worktree fallback — matches listSessions/getSessionMessages.
+            // Sessions may live under a different worktree root.
+            for (String wt : Sessions.getWorktreePaths(canonical)) {
+                if (wt.equals(canonical)) {
+                    continue; // already tried above
+                }
+                Path wtProjectDir = Sessions.findProjectDir(wt);
+                if (wtProjectDir != null && tryAppend(wtProjectDir.resolve(fileName), data)) {
+                    return;
+                }
+            }
+
             throw new FileNotFoundException(
                     "Session " + sessionId + " not found in project directory for " + directory);
         }
 
-        // No directory — search all project directories
-        Path projectsDir = Sessions.getProjectsDir();
-        if (!Files.exists(projectsDir)) {
-            throw new FileNotFoundException("Session " + sessionId + " not found (no projects directory)");
+        // No directory — search all project directories by trying each directly.
+        List<Path> dirList;
+        try (Stream<Path> dirs = Files.list(Sessions.getProjectsDir())) {
+            dirList = dirs.filter(Files::isDirectory).toList();
+        } catch (IOException | UncheckedIOException e) {
+            FileNotFoundException notFound = new FileNotFoundException(
+                    "Session " + sessionId + " not found (no projects directory)");
+            notFound.initCause(e);
+            throw notFound;
         }
-
-        try (Stream<Path> dirs = Files.list(projectsDir)) {
-            List<Path> dirList = dirs.filter(Files::isDirectory).toList();
-            for (Path dir : dirList) {
-                if (tryAppend(dir.resolve(fileName), data)) {
-                    return;
-                }
+        for (Path dir : dirList) {
+            if (tryAppend(dir.resolve(fileName), data)) {
+                return;
             }
         }
 
@@ -649,28 +692,49 @@ public class SessionMutations {
     }
 
     /**
-     * Try appending to a path. Opens with append mode (no creation), so fails if
-     * file doesn't exist. Returns {@code true} on success, {@code false} if the
-     * file doesn't exist or is empty (0-byte stub).
+     * Try appending to a path.
+     *
+     * <p>Opens with {@code WRITE + APPEND} and without {@code CREATE}, so the
+     * open itself fails for a missing file: no separate existence check, and
+     * the file is never created. {@code APPEND} is the kernel's append mode
+     * ({@code O_APPEND} on POSIX, {@code FILE_APPEND_DATA} on Windows), so
+     * every write lands at the current end of file even while a live CLI is
+     * appending to the same transcript.
+     *
+     * @return {@code true} on a successful write; {@code false} if the file
+     *         does not exist or is a 0-byte stub (a "session not here, keep
+     *         searching" signal the readers honor too)
+     * @throws IOException for any other failure (permission denied, disk
+     *                     full, I/O error), so real write failures surface
      */
-    static boolean tryAppend(Path path, String data) {
-        if (!Files.exists(path)) {
-            return false;
-        }
+    static boolean tryAppend(Path path, String data) throws IOException {
+        FileChannel channel;
         try {
-            long size = Files.size(path);
-            if (size == 0) {
-                return false; // 0-byte stub, keep searching
+            channel = FileChannel.open(path, StandardOpenOption.WRITE, StandardOpenOption.APPEND);
+        } catch (NoSuchFileException e) {
+            return false;
+        } catch (FileSystemException e) {
+            // ENOTDIR: a path component is a regular file, so no session here.
+            if ("Not a directory".equals(e.getReason())) {
+                return false;
             }
-            // Use RandomAccessFile for append
-            try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "rw")) {
-                raf.seek(raf.length());
-                raf.write(data.getBytes(StandardCharsets.UTF_8));
+            throw e;
+        }
+        try (channel) {
+            if (channel.size() == 0) {
+                return false;
+            }
+            ByteBuffer buf = ByteBuffer.wrap(data.getBytes(StandardCharsets.UTF_8));
+            while (buf.hasRemaining()) {
+                channel.write(buf);
             }
             return true;
-        } catch (IOException e) {
-            return false;
         }
+    }
+
+    /** {@code s} when it is non-empty, else {@code null}: Python's {@code s or None}. */
+    private static @Nullable String nonEmpty(@Nullable String s) {
+        return (s != null && !s.isEmpty()) ? s : null;
     }
 
     // -------------------------------------------------------------------------
@@ -719,9 +783,9 @@ public class SessionMutations {
         return current;
     }
 
+    /** Case-insensitive, like Python's {@code _UUID_RE}. */
     private static boolean isValidUuid(String value) {
-        return value != null && value.matches(
-                "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+        return Sessions.isValidUuid(value);
     }
 
 }

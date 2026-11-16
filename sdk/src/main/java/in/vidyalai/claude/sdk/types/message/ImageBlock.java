@@ -24,7 +24,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * fit within {@code ClaudeAgentOptions.maxBufferSize}.
  *
  * @param source the raw source map, e.g. {@code {type: "base64", media_type: "image/jpeg",
- *               data: "..."}}
+ *               data: "..."}}; null when the block has no {@code source} or it is not a
+ *               JSON object
  */
 public record ImageBlock(
         @JsonProperty("source") Map<String, Object> source) implements ContentBlock {

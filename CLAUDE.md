@@ -226,6 +226,8 @@ sdk/src/main/java/in/vidyalai/claude/sdk/
 │   ├── SdkMcpServer.java           # In-process MCP server
 │   ├── SdkMcpTool.java             # Tool definition
 │   ├── Tool.java                   # @Tool annotation
+│   ├── ToolParam.java              # @ToolParam: parameter description/name/required
+│   ├── ToolSchemas.java            # Schema + argument binding for @Tool parameter types
 │   ├── ToolAnnotations.java        # Semantic hints + title
 │   ├── ToolCallContext.java        # Per-call cancellation signal
 │   └── ToolResult.java             # Tool result wrapper
@@ -371,6 +373,7 @@ internal/
 ├── SessionStores.java              # *_from_store and *_via_store APIs
 ├── Sessions.java                   # Local-disk session listing/reading
 ├── SessionMutations.java           # Local-disk session mutations + buildForkLines (shared)
+├── FirstPrompt.java                # First-prompt rules shared by disk reads and the store fold
 └── ...
 ```
 

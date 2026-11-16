@@ -31,6 +31,46 @@ import in.vidyalai.claude.sdk.types.session.SessionStoreEntry;
 
 class SessionResumeTest {
 
+    private SessionResume.AuthEnvironment previousAuthEnvironment;
+
+    /**
+     * Tests that resume without CLAUDE_CONFIG_DIR would otherwise read the
+     * real macOS Keychain on a logged-in Mac; stub the lookup out, as the
+     * Python suite's isolated_home fixture does. SessionResumeKeychainTest
+     * covers the fallback itself.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void stubKeychain() {
+        SessionResume.AuthEnvironment system = SessionResume.SYSTEM_AUTH_ENVIRONMENT;
+        previousAuthEnvironment = SessionResume.setAuthEnvironment(new SessionResume.AuthEnvironment() {
+            @Override
+            public @org.jspecify.annotations.Nullable String getenv(String name) {
+                return system.getenv(name);
+            }
+
+            @Override
+            public Path homeDir() {
+                return system.homeDir();
+            }
+
+            @Override
+            public boolean isMacOs() {
+                return false;
+            }
+
+            @Override
+            public SessionResume.@org.jspecify.annotations.Nullable CommandResult run(
+                    List<String> command, long timeoutMs) {
+                return null;
+            }
+        });
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void restoreKeychain() {
+        SessionResume.setAuthEnvironment(previousAuthEnvironment);
+    }
+
     private static SessionStoreEntry userEntry(String uuid, String text, String ts) {
         Map<String, Object> message = Map.of(
                 "content", List.of(Map.of("type", "text", "text", text)));

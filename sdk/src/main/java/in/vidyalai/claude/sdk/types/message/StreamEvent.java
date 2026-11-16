@@ -21,7 +21,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *
  * @param uuid            unique identifier for the event
  * @param sessionId       the session identifier
- * @param event           the raw Anthropic API stream event data
+ * @param event           the raw Anthropic API stream event data; null only
+ *                        when the CLI sent {@code event} as an explicit null
+ *                        or a non-object
  * @param parentToolUseId  if within a tool use context, the tool use ID
  * @param userMessageUuid  {@code uuid} of the user message this turn is
  *                         answering — see {@link ResultMessage#userMessageUuid()}.
@@ -63,7 +65,7 @@ public record StreamEvent(
      */
     @Nullable
     public String eventType() {
-        return ((event.get("type") instanceof String s) ? s : null);
+        return ((event != null) && (event.get("type") instanceof String s) ? s : null);
     }
 
 }

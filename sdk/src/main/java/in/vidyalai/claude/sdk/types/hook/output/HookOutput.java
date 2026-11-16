@@ -1,7 +1,9 @@
 package in.vidyalai.claude.sdk.types.hook.output;
 
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 
 import org.jspecify.annotations.Nullable;
 
@@ -92,6 +94,12 @@ public final class HookOutput {
     @Nullable
     private final Integer asyncTimeout;
 
+    /**
+     * Top-level keys this type does not model, sent as given (a Python hook
+     * returns a plain dict and can add any key).
+     */
+    private final Map<String, Object> extraFields;
+
     private HookOutput(Builder builder) {
         this.shouldContinue = builder.shouldContinue;
         this.suppressOutput = builder.suppressOutput;
@@ -102,6 +110,7 @@ public final class HookOutput {
         this.hookSpecificOutput = builder.hookSpecificOutput;
         this.async = builder.async;
         this.asyncTimeout = builder.asyncTimeout;
+        this.extraFields = Collections.unmodifiableMap(new LinkedHashMap<>(builder.extraFields));
     }
 
     /**
@@ -135,10 +144,15 @@ public final class HookOutput {
     /**
      * Converts this output to a Map for JSON serialization.
      *
+     * <p>
+     * {@link #extraFields()} are included as given, explicit nulls too; a
+     * typed field that is set takes precedence over an extra field with the
+     * same key.
+     *
      * @return a map representation of this hook output
      */
     public Map<String, Object> toMap() {
-        Map<String, Object> result = new HashMap<>();
+        Map<String, Object> result = new LinkedHashMap<>(extraFields);
 
         if (async != null && async) {
             result.put(KEY_ASYNC, true);
@@ -266,6 +280,17 @@ public final class HookOutput {
     }
 
     /**
+     * Returns the top-level keys this type does not model, added with
+     * {@link Builder#extraField(String, Object)}.
+     *
+     * @return an unmodifiable map, empty when none were added; values may be
+     *         null
+     */
+    public Map<String, Object> extraFields() {
+        return extraFields;
+    }
+
+    /**
      * Builder for HookOutput.
      */
     public static final class Builder {
@@ -288,6 +313,7 @@ public final class HookOutput {
         private Boolean async;
         @Nullable
         private Integer asyncTimeout;
+        private final Map<String, Object> extraFields = new LinkedHashMap<>();
 
         private Builder() {
         }
@@ -388,6 +414,35 @@ public final class HookOutput {
          */
         public Builder asyncTimeout(Integer asyncTimeout) {
             this.asyncTimeout = asyncTimeout;
+            return this;
+        }
+
+        /**
+         * Adds a top-level key this type does not model, such as a field
+         * newer than this SDK, sent to the CLI as given ({@code null} is sent
+         * as JSON {@code null}). A typed field that is also set wins over an
+         * extra field with the same key.
+         *
+         * @param key   the JSON key
+         * @param value the value; any Jackson-serializable value, or null
+         * @return this builder
+         */
+        public Builder extraField(String key, @Nullable Object value) {
+            this.extraFields.put(Objects.requireNonNull(key, "key"), value);
+            return this;
+        }
+
+        /**
+         * Adds every entry of {@code fields} as with
+         * {@link #extraField(String, Object)}.
+         *
+         * @param fields the keys and values to add
+         * @return this builder
+         */
+        public Builder extraFields(Map<String, ?> fields) {
+            for (Map.Entry<String, ?> entry : fields.entrySet()) {
+                extraField(entry.getKey(), entry.getValue());
+            }
             return this;
         }
 

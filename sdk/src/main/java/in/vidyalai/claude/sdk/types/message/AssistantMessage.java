@@ -16,10 +16,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * {@link in.vidyalai.claude.sdk.types} package documentation for details.
  *
  * @param content         list of content blocks in the response
- * @param model           the model that generated this response
+ * @param model           the model that generated this response; null only
+ *                        when the CLI sent an explicit {@code null}
  * @param parentToolUseId if this message is within a tool use context, the tool
  *                        use ID
- * @param error           error information if the response contains an error
+ * @param error           error information if the response contains an error.
+ *                        A value this SDK does not recognize, or one that is
+ *                        not a string, reads as
+ *                        {@link AssistantMessageError#UNKNOWN}; the value as
+ *                        sent stays on {@code errorRaw}
  * @param usage           per-turn token usage breakdown (input_tokens,
  *                        output_tokens, cache tokens, etc.) or null if absent
  * @param messageId       unique message ID from the API (e.g.
@@ -37,10 +42,16 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *                         {@code userMessageUuid}, except on older CLIs. A
  *                         message taken in later may be listed only on the
  *                         result — see {@link ResultMessage#userMessageUuids()}.
+ * @param errorRaw         the top-level {@code error} value exactly as the CLI
+ *                         sent it, or null when absent. Normally a
+ *                         {@code String} such as {@code "rate_limit"}; read it
+ *                         when {@code error} is
+ *                         {@link AssistantMessageError#UNKNOWN} to see the
+ *                         wire value this SDK version does not model.
  */
 public record AssistantMessage(
         @JsonProperty("content") List<ContentBlock> content,
-        @JsonProperty("model") String model,
+        @JsonProperty("model") @Nullable String model,
         @JsonProperty("parent_tool_use_id") @Nullable String parentToolUseId,
         @JsonProperty("error") @Nullable AssistantMessageError error,
         @JsonProperty("usage") @Nullable Map<String, Object> usage,
@@ -49,12 +60,13 @@ public record AssistantMessage(
         @JsonProperty("session_id") @Nullable String sessionId,
         @JsonProperty("uuid") @Nullable String uuid,
         @JsonProperty("user_message_uuid") @Nullable String userMessageUuid,
-        @JsonProperty("user_message_uuids") @Nullable List<String> userMessageUuids) implements Message {
+        @JsonProperty("user_message_uuids") @Nullable List<String> userMessageUuids,
+        @JsonProperty("error_raw") @Nullable Object errorRaw) implements Message {
 
     /**
      * Backwards-compatible constructor without new fields.
      */
-    public AssistantMessage(List<ContentBlock> content, String model,
+    public AssistantMessage(List<ContentBlock> content, @Nullable String model,
             @Nullable String parentToolUseId, @Nullable AssistantMessageError error) {
         this(content, model, parentToolUseId, error, null, null, null, null, null, null, null);
     }
@@ -62,17 +74,30 @@ public record AssistantMessage(
     /**
      * Backwards-compatible constructor with usage but without new fields.
      */
-    public AssistantMessage(List<ContentBlock> content, String model,
+    public AssistantMessage(List<ContentBlock> content, @Nullable String model,
             @Nullable String parentToolUseId, @Nullable AssistantMessageError error,
             @Nullable Map<String, Object> usage) {
         this(content, model, parentToolUseId, error, usage, null, null, null, null, null, null);
     }
 
     /**
+     * Backwards-compatible constructor without {@code errorRaw}, which is set
+     * to the wire value of {@code error} ({@link AssistantMessageError#getValue()}).
+     */
+    public AssistantMessage(List<ContentBlock> content, @Nullable String model,
+            @Nullable String parentToolUseId, @Nullable AssistantMessageError error,
+            @Nullable Map<String, Object> usage, @Nullable String messageId,
+            @Nullable String stopReason, @Nullable String sessionId, @Nullable String uuid,
+            @Nullable String userMessageUuid, @Nullable List<String> userMessageUuids) {
+        this(content, model, parentToolUseId, error, usage, messageId, stopReason, sessionId, uuid,
+                userMessageUuid, userMessageUuids, (error != null) ? error.getValue() : null);
+    }
+
+    /**
      * Backwards-compatible constructor without {@code userMessageUuid} and
      * {@code userMessageUuids}.
      */
-    public AssistantMessage(List<ContentBlock> content, String model,
+    public AssistantMessage(List<ContentBlock> content, @Nullable String model,
             @Nullable String parentToolUseId, @Nullable AssistantMessageError error,
             @Nullable Map<String, Object> usage, @Nullable String messageId,
             @Nullable String stopReason, @Nullable String sessionId, @Nullable String uuid) {

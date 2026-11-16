@@ -1,5 +1,7 @@
 package in.vidyalai.claude.sdk.types.hook.input;
 
+import java.util.Map;
+
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.annotation.JsonSubTypes;
@@ -48,6 +50,15 @@ public sealed interface HookInput permits
         NotificationHookInput,
         SubagentStartHookInput,
         PermissionRequestHookInput {
+
+    /**
+     * The Jackson injectable-value id under which the SDK supplies the CLI's
+     * original input map when it deserializes a hook input, to fill
+     * {@link #raw()}. Only needed to reproduce that with your own
+     * {@code ObjectMapper}: {@code mapper.reader(new InjectableValues.Std()
+     * .addValue(RAW_INJECTABLE_ID, map)).forType(HookInput.class)}.
+     */
+    String RAW_INJECTABLE_ID = "in.vidyalai.claude.sdk.hookInputRaw";
 
     /**
      * The hook event name.
@@ -103,5 +114,18 @@ public sealed interface HookInput permits
      */
     @Nullable
     HookEffort effort();
+
+    /**
+     * The hook input exactly as the CLI sent it, every key included, also the
+     * ones this type does not model (the Python SDK hands hooks the raw dict).
+     * Use it to read fields newer than this SDK.
+     *
+     * <p>
+     * Unmodifiable. Empty for an input built with a constructor rather than
+     * received from the CLI.
+     *
+     * @return the CLI's original input map, never null
+     */
+    Map<String, Object> raw();
 
 }

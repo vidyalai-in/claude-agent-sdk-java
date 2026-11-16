@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -205,12 +206,40 @@ class SdkMcpControlProtocolTest {
     }
 
     @Test
-    void aMissingMessageFailsOnlyThatMcpCall() throws Exception {
+    void aMissingMessageIsAControlError() throws Exception {
+        // Python raises for this, so the CLI gets a control-level error
+        // response, not a JSON-RPC error dressed up as success.
         RecordingTransport transport = start(Map.of("calc", serverWith()));
 
         transport.feed(mcpControlRequest("req_1", "calc", null));
 
-        assertThat(errorOf(mcpResponseFor(transport, "req_1"))).containsEntry("code", -32600);
+        assertControlError(transport.awaitResponse("req_1"));
+    }
+
+    @Test
+    void anEmptyMessageIsAControlError() throws Exception {
+        RecordingTransport transport = start(Map.of("calc", serverWith()));
+
+        transport.feed(mcpControlRequest("req_1", "calc", Map.of()));
+
+        assertControlError(transport.awaitResponse("req_1"));
+    }
+
+    @Test
+    void aMissingServerNameIsAControlError() throws Exception {
+        RecordingTransport transport = start(Map.of("calc", serverWith()));
+
+        transport.feed(mcpControlRequest("req_1", null, jsonRpc(1, "tools/list", null)));
+        transport.feed(mcpControlRequest("req_2", "", jsonRpc(2, "tools/list", null)));
+
+        assertControlError(transport.awaitResponse("req_1"));
+        assertControlError(transport.awaitResponse("req_2"));
+    }
+
+    private static void assertControlError(Map<String, Object> response) {
+        assertThat(response)
+                .containsEntry("subtype", "error")
+                .containsEntry("error", "Missing server_name or message for MCP request");
     }
 
     @Test
@@ -296,6 +325,142 @@ class SdkMcpControlProtocolTest {
         assertThat(elapsedMs).isLessThan(4000);
 
         release.countDown();
+    }
+
+    // --- one server shared by two clients ---------------------------------
+
+    /**
+     * A tool whose calls stay open until the test finishes them, recorded by
+     * the {@code who} argument so each client's call can be told apart.
+     */
+    static final class HeldCalls {
+
+        final Map<String, CompletableFuture<ToolResult>> results = new ConcurrentHashMap<>();
+        final Map<String, ToolCallContext> contexts = new ConcurrentHashMap<>();
+        final CountDownLatch bothStarted = new CountDownLatch(2);
+
+        SdkMcpServer server() {
+            SdkMcpTool<Map<String, Object>> held = SdkMcpTool.create(
+                    "held", "Answers when the test says so", Map.of("who", String.class),
+                    (args, ctx) -> {
+                        String who = String.valueOf(args.get("who"));
+                        CompletableFuture<ToolResult> result = new CompletableFuture<>();
+                        results.put(who, result);
+                        contexts.put(who, ctx);
+                        bothStarted.countDown();
+                        return result;
+                    });
+            return SdkMcpServer.create("shared", "1.0.0", List.of(held));
+        }
+
+        ToolCallContext context(String who) {
+            return requireNonNull(contexts.get(who));
+        }
+
+        void finish(String who) {
+            requireNonNull(results.get(who)).complete(ToolResult.text("done for " + who));
+        }
+    }
+
+    private static Map<String, Object> callHeld(Object id, String who) {
+        return jsonRpc(id, "tools/call", Map.of("name", "held", "arguments", Map.of("who", who)));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String textOf(Map<String, Object> mcpResponse) {
+        assertThat(mcpResponse).as("expected a result, got: %s", mcpResponse).containsKey("result");
+        Map<String, Object> result = (Map<String, Object>) mcpResponse.get("result");
+        List<Map<String, Object>> content = (List<Map<String, Object>>) result.get("content");
+        return String.valueOf(content.get(0).get("text"));
+    }
+
+    @Test
+    void twoClientsMayUseTheSameRequestIdAtOnce() throws Exception {
+        HeldCalls calls = new HeldCalls();
+        SdkMcpServer shared = calls.server();
+        RecordingTransport a = start(Map.of("srv", shared));
+        RecordingTransport b = start(Map.of("srv", shared));
+
+        // Every CLI numbers its JSON-RPC requests from the start, so two
+        // clients reuse ids all the time. One server-wide table used to refuse
+        // the second with "Request id 7 is already in flight".
+        a.feed(mcpControlRequest("req_a", "srv", callHeld(7, "A")));
+        b.feed(mcpControlRequest("req_b", "srv", callHeld(7, "B")));
+        assertThat(calls.bothStarted.await(EXPECT_MS, TimeUnit.MILLISECONDS)).isTrue();
+
+        calls.finish("B");
+        calls.finish("A");
+
+        assertThat(textOf(mcpResponseFor(a, "req_a"))).isEqualTo("done for A");
+        assertThat(textOf(mcpResponseFor(b, "req_b"))).isEqualTo("done for B");
+    }
+
+    @Test
+    void oneClientsCancellationLeavesTheOthersCallAlone() throws Exception {
+        HeldCalls calls = new HeldCalls();
+        SdkMcpServer shared = calls.server();
+        RecordingTransport a = start(Map.of("srv", shared));
+        RecordingTransport b = start(Map.of("srv", shared));
+
+        a.feed(mcpControlRequest("req_a", "srv", callHeld(7, "A")));
+        b.feed(mcpControlRequest("req_b", "srv", callHeld(7, "B")));
+        assertThat(calls.bothStarted.await(EXPECT_MS, TimeUnit.MILLISECONDS)).isTrue();
+
+        a.feed(mcpControlRequest("req_cancel", "srv",
+                jsonRpc(null, "notifications/cancelled", Map.of("requestId", 7))));
+
+        assertThat(errorOf(mcpResponseFor(a, "req_a"))).containsEntry("code", -32800);
+        assertThat(calls.context("A").isCancelled()).isTrue();
+        // B's request 7 is a different request, and it is still running.
+        assertThat(calls.context("B").isCancelled()).isFalse();
+        assertThat(b.responseFor("req_b")).isNull();
+
+        calls.finish("B");
+        assertThat(textOf(mcpResponseFor(b, "req_b"))).isEqualTo("done for B");
+    }
+
+    @Test
+    void oneClientClosingLeavesTheOthersCallAlone() throws Exception {
+        HeldCalls calls = new HeldCalls();
+        SdkMcpServer shared = calls.server();
+        RecordingTransport a = start(Map.of("srv", shared));
+        QueryHandler clientA = lastHandler();
+        RecordingTransport b = start(Map.of("srv", shared));
+
+        a.feed(mcpControlRequest("req_a", "srv", callHeld(1, "A")));
+        b.feed(mcpControlRequest("req_b", "srv", callHeld(2, "B")));
+        assertThat(calls.bothStarted.await(EXPECT_MS, TimeUnit.MILLISECONDS)).isTrue();
+
+        clientA.close();
+
+        assertThat(calls.context("A").isCancelled()).isTrue();
+        assertThat(calls.context("B").isCancelled()).isFalse();
+
+        calls.finish("B");
+        assertThat(textOf(mcpResponseFor(b, "req_b"))).isEqualTo("done for B");
+    }
+
+    @Test
+    void aHandlerWithoutSessionsIsStillSharedAsBefore() throws Exception {
+        // The SPI's default openSession() returns the handler itself, so a
+        // hand-written handler sees every client's messages, as it always did.
+        List<Object> seen = new ArrayList<>();
+        McpMessageHandler plain = message -> {
+            synchronized (seen) {
+                seen.add(message.get("id"));
+            }
+            return CompletableFuture.completedFuture(
+                    Map.of("jsonrpc", "2.0", "id", message.get("id"), "result", Map.of()));
+        };
+        RecordingTransport a = start(Map.of("srv", plain));
+        RecordingTransport b = start(Map.of("srv", plain));
+
+        a.feed(mcpControlRequest("req_a", "srv", jsonRpc(1, "ping", null)));
+        b.feed(mcpControlRequest("req_b", "srv", jsonRpc(2, "ping", null)));
+
+        assertThat(mcpResponseFor(a, "req_a")).containsEntry("id", 1);
+        assertThat(mcpResponseFor(b, "req_b")).containsEntry("id", 2);
+        assertThat(seen).containsExactlyInAnyOrder(1, 2);
     }
 
     // --- transport --------------------------------------------------------

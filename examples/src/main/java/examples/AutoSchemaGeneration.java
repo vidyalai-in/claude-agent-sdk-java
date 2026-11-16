@@ -3,11 +3,19 @@ package examples;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.ClaudeSDK;
+import in.vidyalai.claude.sdk.mcp.SdkMcpServer;
 import in.vidyalai.claude.sdk.mcp.Tool;
+import in.vidyalai.claude.sdk.mcp.ToolParam;
 import in.vidyalai.claude.sdk.mcp.ToolResult;
 import in.vidyalai.claude.sdk.types.mcp.McpSdkServerConfig;
 import in.vidyalai.claude.sdk.types.message.AssistantMessage;
@@ -22,13 +30,22 @@ import in.vidyalai.claude.sdk.types.message.Message;
  * automatically generates MCP-compliant JSON Schema from method parameters:
  *
  * <ul>
- * <li>String → "string"</li>
+ * <li>String, char → "string"</li>
  * <li>Integer types (int, long, etc.) → "integer"</li>
  * <li>Floating point types (double, float, etc.) → "number"</li>
  * <li>Boolean → "boolean"</li>
- * <li>Map → "object"</li>
- * <li>List, arrays → "array"</li>
+ * <li>An enum → "string" limited to its constants</li>
+ * <li>{@code List<T>}, {@code Set<T>}, arrays → "array" of T</li>
+ * <li>{@code Map<String, V>} → "object" of V; a record → a nested object</li>
+ * <li>{@code Optional<T>} → T, and not required</li>
  * </ul>
+ *
+ * <p>
+ * {@link ToolParam @ToolParam} adds a description the model reads, and can
+ * rename an argument or make it optional.
+ *
+ * <p>
+ * Run with {@code -Dexec.args="typed"} for the typed-parameter demo alone.
  *
  * <p>
  * <b>Important:</b> For parameter name reflection to work, you must compile
@@ -39,6 +56,11 @@ public class AutoSchemaGeneration {
 
     public static void main(String[] args) {
         System.out.println("=== Automatic Schema Generation Demo ===\n");
+
+        if ((args.length > 0) && "typed".equals(args[0])) {
+            typedParametersExample();
+            return;
+        }
 
         // Example 1: Map parameter (standard pattern)
         System.out.println("1. Standard Map<String, Object> parameter:");
@@ -51,6 +73,10 @@ public class AutoSchemaGeneration {
         // Example 3: Explicit schema (takes precedence)
         System.out.println("\n3. Multiple params tool:");
         manyArgsToolExample();
+
+        // Example 4: List, enum and Optional parameters with descriptions
+        System.out.println("\n4. Typed parameters (List, enum, Optional) with @ToolParam:");
+        typedParametersExample();
 
         System.out.println("\n=== Schema Generation Complete ===");
     }
@@ -127,6 +153,90 @@ public class AutoSchemaGeneration {
             return CompletableFuture.completedFuture(result);
         }
 
+    }
+
+    /** Paint colors: published as a string limited to these names. */
+    public enum Color {
+        WHITE, CREAM, SAGE, NAVY
+    }
+
+    /**
+     * Tools whose parameters are typed, so the schema says exactly what the
+     * model must send, and the method receives real Java values.
+     */
+    public static class PaintTools {
+
+        /**
+         * Generated schema:
+         *
+         * <pre>
+         * {
+         *   "type": "object",
+         *   "properties": {
+         *     "walls": {"type": "array", "items": {"type": "string"},
+         *               "description": "Names of the walls to paint"},
+         *     "color": {"type": "string", "enum": ["WHITE", "CREAM", "SAGE", "NAVY"],
+         *               "description": "Paint color"},
+         *     "coats": {"type": "integer", "description": "Coats of paint (default 2)"}
+         *   },
+         *   "required": ["walls", "color"]
+         * }
+         * </pre>
+         */
+        @Tool(name = "paint_walls", description = "Order paint for some walls of a room")
+        public ToolResult paintWalls(
+                @ToolParam(description = "Names of the walls to paint") List<String> walls,
+                @ToolParam(description = "Paint color") Color color,
+                @ToolParam(description = "Coats of paint (default 2)") Optional<Integer> coats) {
+            int n = coats.orElse(2);
+            String received = "walls=" + walls + " (" + walls.getClass().getSimpleName() + "), color="
+                    + color + " (" + color.getDeclaringClass().getSimpleName() + "), coats=" + n;
+            System.out.println("  [tool] paint_walls received " + received);
+            return ToolResult.text("Ordered " + (walls.size() * n) + " litres of " + color
+                    + " for " + String.join(", ", walls) + ".");
+        }
+
+    }
+
+    /**
+     * Demonstrates List, enum and Optional parameters described with
+     * {@code @ToolParam}: prints the generated schema, then lets Claude call
+     * the tool.
+     */
+    static void typedParametersExample() {
+        SdkMcpServer server = SdkMcpServer.fromAnnotatedMethods("paint", new PaintTools());
+        printToolSchemas(server);
+
+        ClaudeAgentOptions options = ClaudeAgentOptions.builder()
+                .mcpServers(Map.of("paint", server.toConfig()))
+                .allowedTools(List.of("mcp__paint__paint_walls"))
+                .maxTurns(3)
+                .build();
+
+        try (var client = ClaudeSDK.createClient(options)) {
+            client.connect();
+            client.sendMessage("Paint the north and east walls in navy, with three coats.");
+
+            for (Message msg : client.receiveResponse()) {
+                if (msg instanceof AssistantMessage assistant) {
+                    System.out.println("Claude: " + assistant.getTextContent());
+                }
+            }
+        }
+    }
+
+    /** Prints the tools a server publishes, schemas included. */
+    @SuppressWarnings("unchecked")
+    static void printToolSchemas(SdkMcpServer server) {
+        try {
+            Map<String, Object> response = Objects.requireNonNull(server.handleMessage(Map.of(
+                    "jsonrpc", "2.0", "id", 1, "method", "tools/list")).get(5, TimeUnit.SECONDS));
+            Map<String, Object> result = (Map<String, Object>) response.get("result");
+            ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
+            System.out.println("Published tools:\n" + mapper.writeValueAsString(result.get("tools")));
+        } catch (Exception e) {
+            System.out.println("Could not list tools: " + e);
+        }
     }
 
     /**

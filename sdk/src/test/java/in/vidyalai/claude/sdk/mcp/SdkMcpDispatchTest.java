@@ -165,6 +165,7 @@ class SdkMcpDispatchTest {
 
     @Test
     void initializeEchoesAVersionTheServerSpeaks() throws Exception {
+        assertThat(protocolVersionFor("2025-11-25")).isEqualTo("2025-11-25");
         assertThat(protocolVersionFor("2025-06-18")).isEqualTo("2025-06-18");
         assertThat(protocolVersionFor("2024-11-05")).isEqualTo("2024-11-05");
     }
@@ -175,18 +176,18 @@ class SdkMcpDispatchTest {
         // batch is a top-level array — which the control request carrying
         // these messages types as a map and cannot represent. Claiming it
         // would be a promise the client acts on and we cannot keep.
-        assertThat(protocolVersionFor("2025-03-26")).isEqualTo("2025-06-18");
+        assertThat(protocolVersionFor("2025-03-26")).isEqualTo("2025-11-25");
     }
 
     @Test
     void initializeFallsBackToTheLatestSupportedVersion() throws Exception {
-        assertThat(protocolVersionFor("1999-01-01")).isEqualTo("2025-06-18");
+        assertThat(protocolVersionFor("1999-01-01")).isEqualTo("2025-11-25");
     }
 
     @Test
     void initializeWithoutAVersionStillHandshakes() throws Exception {
         // List.of(...).contains(null) throws, so this path needs its own guard.
-        assertThat(protocolVersionFor(null)).isEqualTo("2025-06-18");
+        assertThat(protocolVersionFor(null)).isEqualTo("2025-11-25");
 
         Map<String, Object> response = send(serverWith(), request(1, "initialize", null));
         assertThat(resultOf(response)).containsKeys("protocolVersion", "capabilities", "serverInfo");

@@ -16,10 +16,15 @@ import in.vidyalai.claude.sdk.types.session.SessionKey;
  * a single attempt timed out), so the external store may be missing it. A
  * timed-out {@code append} may still land.
  *
- * <p>Modeled as a top-level record in the {@link Message} sealed hierarchy
- * (Java doesn't allow records to extend records). The {@code subtype} is
- * always {@code "mirror_error"}; the {@code data} field carries the raw
- * payload for {@link SystemMessage} compatibility.
+ * <p><b>Not a {@link SystemMessage} instance.</b> {@link #type()} returns
+ * {@code "system"}, but Java records cannot extend one another, so this is a
+ * sibling record in the sealed {@link Message} hierarchy:
+ * {@code instanceof SystemMessage} is {@code false} for it. (In the Python SDK
+ * it subclasses {@code SystemMessage}.) Match it by its own type, or, to
+ * handle every system message alike, test {@code "system".equals(message.type())}
+ * and read {@code subtype()} (always {@code "mirror_error"}) and
+ * {@code data()} (the raw payload), which hold what a {@code SystemMessage}
+ * would.
  *
  * @param subtype always {@code "mirror_error"}
  * @param data    the raw data dictionary

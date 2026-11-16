@@ -24,6 +24,15 @@ package in.vidyalai.claude.sdk.types.message;
  * </ul>
  *
  * <p>
+ * The task, mirror-error and hook-event messages are {@code system} messages
+ * on the wire ({@link #type()} returns {@code "system"}), but each is its own
+ * record, not a {@link SystemMessage}: {@code instanceof SystemMessage} does
+ * not match them, unlike the Python SDK, where they subclass
+ * {@code SystemMessage}. A {@link SystemMessage} is what the parser produces
+ * for every other system subtype. All of them carry {@code subtype()} and the
+ * raw {@code data()}.
+ *
+ * <p>
  * Use pattern matching to handle different message types:
  *
  * <p><b>On Java 21+</b> an exhaustive switch needs no {@code default} - this

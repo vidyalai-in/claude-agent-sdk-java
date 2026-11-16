@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -34,8 +35,14 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *                       false)
  * @param effort         effort level for the agent ("low", "medium", "high",
  *                       "xhigh", "max") or null. "xhigh" is an Opus 4.7-specific
- *                       level that falls back to "high" on other models.
+ *                       level that falls back to "high" on other models. Null
+ *                       when the effort is numeric; see {@code numericEffort}.
  * @param permissionMode permission mode for the agent (null means inherit)
+ * @param numericEffort  effort as a number rather than a level name, sent as
+ *                       a JSON number under the same {@code "effort"} key (the
+ *                       Python SDK's {@code effort: EffortLevel | int}). At
+ *                       most one of {@code effort} and {@code numericEffort}
+ *                       may be set; {@link #withEffort(int)} sets this one.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record AgentDefinition(
@@ -50,14 +57,46 @@ public record AgentDefinition(
         @JsonProperty("initialPrompt") @Nullable String initialPrompt,
         @JsonProperty("maxTurns") @Nullable Integer maxTurns,
         @JsonProperty("background") @Nullable Boolean background,
-        @JsonProperty("effort") @Nullable String effort,
-        @JsonProperty("permissionMode") @Nullable String permissionMode) {
+        @JsonIgnore @Nullable String effort,
+        @JsonProperty("permissionMode") @Nullable String permissionMode,
+        @JsonIgnore @Nullable Integer numericEffort) {
+
+    /**
+     * Validates that the effort is given at most one way.
+     *
+     * @throws IllegalArgumentException if both {@code effort} and
+     *                                  {@code numericEffort} are set
+     */
+    public AgentDefinition {
+        if ((effort != null) && (numericEffort != null)) {
+            throw new IllegalArgumentException(
+                    "AgentDefinition takes effort as a level name or as a number, not both: effort="
+                            + effort + ", numericEffort=" + numericEffort);
+        }
+    }
+
+    /**
+     * Creates an agent definition with a level-name (or no) effort.
+     *
+     * <p>
+     * The constructor from before {@code numericEffort} was added; it leaves
+     * {@code numericEffort} null.
+     */
+    public AgentDefinition(String description, String prompt,
+            @Nullable List<String> tools, @Nullable List<String> disallowedTools,
+            @Nullable String model, @Nullable List<String> skills, @Nullable MemoryScope memory,
+            @Nullable List<Object> mcpServers, @Nullable String initialPrompt,
+            @Nullable Integer maxTurns, @Nullable Boolean background, @Nullable String effort,
+            @Nullable String permissionMode) {
+        this(description, prompt, tools, disallowedTools, model, skills, memory, mcpServers,
+                initialPrompt, maxTurns, background, effort, permissionMode, null);
+    }
 
     /**
      * Creates an agent definition with just description and prompt.
      */
     public AgentDefinition(String description, String prompt) {
-        this(description, prompt, null, null, null, null, null, null, null, null, null, null, null);
+        this(description, prompt, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -66,7 +105,53 @@ public record AgentDefinition(
      */
     public AgentDefinition(String description, String prompt,
             @Nullable List<String> tools, @Nullable String model) {
-        this(description, prompt, tools, null, model, null, null, null, null, null, null, null, null);
+        this(description, prompt, tools, null, model, null, null, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * Returns a copy whose effort is the given level name ({@code "low"},
+     * {@code "medium"}, {@code "high"}, {@code "xhigh"}, {@code "max"}), or no
+     * effort for null. Clears any numeric effort.
+     *
+     * @param effort the effort level name, or null
+     * @return a copy of this definition with the effort replaced
+     */
+    public AgentDefinition withEffort(@Nullable String effort) {
+        return new AgentDefinition(description, prompt, tools, disallowedTools, model, skills, memory,
+                mcpServers, initialPrompt, maxTurns, background, effort, permissionMode, null);
+    }
+
+    /**
+     * Returns a copy whose effort is the given level.
+     *
+     * @param effort the effort level
+     * @return a copy of this definition with the effort replaced
+     */
+    public AgentDefinition withEffort(EffortLevel effort) {
+        return withEffort(effort.getValue());
+    }
+
+    /**
+     * Returns a copy whose effort is a number, sent to the CLI as a JSON
+     * number (e.g. {@code "effort": 32000}). Clears any level-name effort, so
+     * {@link #effort()} returns null on the copy.
+     *
+     * @param effort the numeric effort
+     * @return a copy of this definition with the effort replaced
+     */
+    public AgentDefinition withEffort(int effort) {
+        return new AgentDefinition(description, prompt, tools, disallowedTools, model, skills, memory,
+                mcpServers, initialPrompt, maxTurns, background, null, permissionMode, effort);
+    }
+
+    /**
+     * The {@code "effort"} value on the wire: the level name, the number, or
+     * absent when neither is set.
+     */
+    @JsonProperty("effort")
+    @Nullable
+    Object effortForJson() {
+        return (numericEffort != null) ? numericEffort : effort;
     }
 
 }

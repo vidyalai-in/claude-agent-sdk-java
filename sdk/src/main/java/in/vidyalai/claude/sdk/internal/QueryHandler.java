@@ -1,11 +1,13 @@
 package in.vidyalai.claude.sdk.internal;
 
+import java.io.IOException;
 import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -23,14 +25,17 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiFunction;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.jspecify.annotations.Nullable;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.InjectableValues;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
@@ -208,16 +213,21 @@ import in.vidyalai.claude.sdk.types.permission.ToolPermissionContext;
  * When {@link #close()} is called:
  * <ol>
  * <li>Sets the closed flag to prevent new operations</li>
+ * <li>Waits for the final transcript-mirror flush (bounded by the batcher)</li>
  * <li>Completes all pending control request futures exceptionally</li>
+ * <li>Cancels the CLI's control requests still being answered (their
+ * callbacks' futures are cancelled and their threads interrupted, except the
+ * thread calling {@code close()} from inside a callback; nothing is
+ * answered), as the Python SDK cancels its child tasks</li>
  * <li>Closes the transport to unblock the reader thread</li>
- * <li>Initiates graceful shutdown of both executors via {@code shutdown()}</li>
+ * <li>Shuts down both executors via {@code shutdown()}</li>
  * <li>Waits up to 10 seconds for reader executor to terminate</li>
  * <li>Forces reader shutdown via {@code shutdownNow()} if timeout occurs, waits
  * 2s more</li>
  * <li>Logs warning if reader threads don't terminate after forced shutdown</li>
- * <li>Waits up to 5 seconds for control executor to terminate</li>
- * <li>Forces control executor shutdown via {@code shutdownNow()} if timeout
- * occurs, waits 2s more</li>
+ * <li>Waits up to 5 seconds for the (already interrupted) control handlers to
+ * finish, all but the one calling {@code close()}, then 2s more after a
+ * {@code shutdownNow()} (skipped when {@code close()} runs on a handler)</li>
  * <li>Logs warning if control threads don't terminate after forced
  * shutdown</li>
  * <li>Clears all callback maps and queues to enable garbage collection</li>
@@ -238,7 +248,18 @@ public class QueryHandler implements AutoCloseable {
     private static final Logger logger = Logger.getLogger(QueryHandler.class.getName());
     private static final SecureRandom random = new SecureRandom();
     private static final int DEFAULT_MSG_Q_SIZE = 1000;
+    /**
+     * Deadline for an OUTBOUND control request (SDK to CLI), as in the Python
+     * SDK. Inbound requests (canUseTool, hooks, SDK MCP) have no SDK-side
+     * deadline: they wait for the callback, a control_cancel_request, or
+     * close().
+     */
     private static final int RESULT_WAIT_SECS = 60;
+    /**
+     * How often a blocked reader or consumer wakes to notice close(). Not a
+     * deadline: neither gives up, it only re-checks the closed flag.
+     */
+    private static final long QUEUE_WAKE_MS = 100;
     private static final int READER_THREAD_JOIN_TIMEOUT_SECS = 10;
 
     /**
@@ -281,11 +302,11 @@ public class QueryHandler implements AutoCloseable {
         // Configure ObjectMapper for control protocol types
         // Ignore unknown properties for forward compatibility
         MAPPER.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        // Don't include null values in serialization
-        MAPPER.configOverride(Map.class)
-                .setInclude(JsonInclude.Value.construct(
-                        JsonInclude.Include.NON_NULL,
-                        JsonInclude.Include.NON_NULL));
+        // No global null-stripping for Map: maps on the control channel carry
+        // user data (updatedInput, hook output, MCP results, streamed user
+        // messages) that must reach the CLI as written, explicit nulls
+        // included, as Python's json.dumps sends them. SDK-built maps omit
+        // their unset keys themselves.
     }
 
     private final Transport transport;
@@ -296,6 +317,14 @@ public class QueryHandler implements AutoCloseable {
     private final Map<HookEvent, List<HookMatcher>> hooks;
     @Nullable
     private final Map<String, McpMessageHandler> sdkMcpServers;
+    /**
+     * This connection's session of each SDK MCP server, by the name the CLI
+     * addresses it with: what {@code mcp_message} is routed to, and what
+     * {@link #close()} closes. One server shared by several clients thus
+     * keeps their request ids, cancellations and shutdowns apart.
+     */
+    @Nullable
+    private final Map<String, McpMessageHandler> sdkMcpSessions;
     @Nullable
     private final Map<String, AgentDefinition> agents;
     @Nullable
@@ -342,8 +371,16 @@ public class QueryHandler implements AutoCloseable {
     private final AtomicInteger nextCallbackId = new AtomicInteger(0);
     private final AtomicInteger requestCounter = new AtomicInteger(0);
 
-    // Message stream
-    private final BlockingQueue<Map<String, Object>> messageQueue;
+    // Message stream. The queue itself is unbounded: maxMsgQSize is a soft
+    // limit the reader enforces in enqueueBlocking, so that it can run past
+    // it while an outbound control request waits for its response (see
+    // enqueueBlocking). One FIFO either way, so message order never changes.
+    private final BlockingQueue<Map<String, Object>> messageQueue = new LinkedBlockingQueue<>();
+    private final int maxMsgQSize;
+    // Wakes a reader waiting for room: signalled when a consumer takes a
+    // message, when an outbound control request is registered and on close().
+    private final ReentrantLock queueLock = new ReentrantLock();
+    private final Condition queueRoom = queueLock.newCondition();
     private final AtomicBoolean initialized = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean readerStarted = new AtomicBoolean(false);
@@ -359,6 +396,13 @@ public class QueryHandler implements AutoCloseable {
     // control_cancel_request can stop the one it names. Each handler removes
     // its own entry when it finishes, which makes a late cancel a no-op.
     private final Map<String, InflightControlRequest> inflightControlRequests = new ConcurrentHashMap<>();
+    // Every control request handler still running, request_id or not, so
+    // close() can wait for each one except the handler it is called from.
+    private final Set<InflightControlRequest> runningControlRequests = ConcurrentHashMap.newKeySet();
+    // The control request the current thread is answering, while it answers
+    // it: close() called from inside a callback must not interrupt (or wait
+    // for) the very thread that is closing.
+    private final ThreadLocal<@Nullable InflightControlRequest> servingRequest = new ThreadLocal<>();
 
     // Run-end state. The reader thread, the stdin writer (streamInput), the
     // ceiling sleeper and close() all touch it, so every field below is
@@ -396,6 +440,14 @@ public class QueryHandler implements AutoCloseable {
     // non-empty must not close stdin. Only touched from the reader thread, but
     // kept concurrent because close() may inspect it from another thread.
     private final Set<String> inflightTasks = ConcurrentHashMap.newKeySet();
+
+    // The message stream's terminal state, kept outside the queue so that a
+    // full queue can delay the end of the stream, or the error it ended with,
+    // but never hide it. The reader writes streamError (if any) and then
+    // streamEnded, after its last enqueue.
+    private volatile boolean streamEnded = false;
+    @Nullable
+    private volatile Map<String, Object> streamError = null;
 
     // SessionStore mirroring (set via setTranscriptMirrorBatcher)
     @Nullable
@@ -541,6 +593,7 @@ public class QueryHandler implements AutoCloseable {
         this.canUseTool = canUseTool;
         this.hooks = hooks;
         this.sdkMcpServers = sdkMcpServers;
+        this.sdkMcpSessions = openSdkMcpSessions(sdkMcpServers);
         this.agents = agents;
         this.excludeDynamicSections = excludeDynamicSections;
         this.skills = skills;
@@ -549,7 +602,11 @@ public class QueryHandler implements AutoCloseable {
         this.verbatimPrompts = verbatimPrompts;
         this.runEndCeilingMs = runEndCeilingMs;
         this.initializeTimeout = initializeTimeout;
-        this.messageQueue = new LinkedBlockingQueue<>((maxMsgQSize != null) ? maxMsgQSize : DEFAULT_MSG_Q_SIZE);
+        int queueSize = ((maxMsgQSize != null) ? maxMsgQSize : DEFAULT_MSG_Q_SIZE);
+        if (queueSize <= 0) {
+            throw new IllegalArgumentException("maxMsgQSize must be at least 1, got " + queueSize);
+        }
+        this.maxMsgQSize = queueSize;
 
         // Create separate executors for reader and control tasks.
         // Threads gives virtual threads on Java 21+ and named daemon platform
@@ -771,8 +828,9 @@ public class QueryHandler implements AutoCloseable {
      * <p>Called from the batcher's {@code onError} once a batch has been
      * dropped (after its retries, or after a single timed-out attempt), so this
      * is the consumer's only signal.
-     * Non-blocking — if the message buffer is full the error is logged and
-     * dropped rather than back-pressuring the read loop.
+     * Non-blocking, and never dropped: the queue's limit is a soft one that
+     * only the reader enforces, so the report is queued even when the reader
+     * is waiting for room.
      */
     public void reportMirrorError(in.vidyalai.claude.sdk.types.session.@Nullable SessionKey key, String error) {
         Map<String, Object> msg = new HashMap<>();
@@ -924,11 +982,17 @@ public class QueryHandler implements AutoCloseable {
         // ResultException. Mirrors the TypeScript and Python SDKs'
         // lastErrorResultText / _last_error_result.
         AtomicReference<Map<String, Object>> lastErrorResult = new AtomicReference<>();
+        // The in-band error frame the stream ends with, if the read failed.
+        // Queued in the finally below, after the final mirror flush, so a
+        // mirror_error that flush reports reaches the consumer ahead of it.
+        Map<String, Object> terminalError = null;
         try {
             Iterator<Map<String, Object>> messages = transport.readMessages();
             while (messages.hasNext() && (!closed.get())) {
                 Map<String, Object> message = messages.next();
-                String msgType = (String) message.get("type");
+                // Never a cast: a frame with a non-string type must not kill
+                // the reader (it reaches the parser, which skips it).
+                String msgType = ((message.get("type") instanceof String type) ? type : null);
 
                 // Route control messages
                 if ("control_response".equals(msgType)) {
@@ -958,16 +1022,25 @@ public class QueryHandler implements AutoCloseable {
                         Object entriesObj = message.get("entries");
                         if (filePath instanceof String fp && entriesObj instanceof List<?> entriesList) {
                             List<in.vidyalai.claude.sdk.types.session.SessionStoreEntry> entries = new ArrayList<>();
+                            int skipped = 0;
                             for (Object item : entriesList) {
                                 if (item instanceof Map<?, ?> m) {
                                     @SuppressWarnings("unchecked")
                                     Map<String, Object> em = (Map<String, Object>) m;
-                                    try {
-                                        entries.add(in.vidyalai.claude.sdk.types.session.SessionStoreEntry.of(em));
-                                    } catch (RuntimeException re) {
-                                        logger.fine("Skipping malformed transcript_mirror entry: " + re.getMessage());
-                                    }
+                                    entries.add(in.vidyalai.claude.sdk.types.session.SessionStoreEntry.of(em));
+                                } else {
+                                    // Python hands any entry to the store; a
+                                    // SessionStoreEntry wraps a JSON object, so a
+                                    // non-object entry cannot reach the adapter.
+                                    // The CLI writes objects, so this is a
+                                    // protocol surprise worth seeing, not noise.
+                                    skipped++;
                                 }
+                            }
+                            if (skipped > 0) {
+                                logger.warning("Skipping " + skipped + " transcript_mirror entr"
+                                        + ((skipped == 1) ? "y" : "ies") + " for " + fp
+                                        + " that are not JSON objects; a SessionStore only stores objects");
                             }
                             if (!entries.isEmpty()) {
                                 batcher.enqueue(fp, entries);
@@ -1007,12 +1080,7 @@ public class QueryHandler implements AutoCloseable {
                     // SessionStore being up to date for this turn.
                     TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
                     if (batcher != null) {
-                        try {
-                            batcher.flush().get(5, TimeUnit.SECONDS);
-                        } catch (Exception flushEx) {
-                            logger.fine("Mirror flush before result completed exceptionally: "
-                                    + flushEx.getMessage());
-                        }
+                        awaitMirror(batcher.flush(), "Mirror flush before result");
                     }
                     synchronized (runLock) {
                         resultReceived = true;
@@ -1061,10 +1129,11 @@ public class QueryHandler implements AutoCloseable {
                     }
                 }
 
-                // Regular SDK messages go to the stream
-                // Use offer with timeout to prevent deadlock if queue is full
-                if (!messageQueue.offer(message, 5, TimeUnit.SECONDS)) {
-                    logger.warning("Message queue full, dropping message: " + message);
+                // Regular SDK messages go to the stream. A full queue holds the
+                // reader back until the consumer catches up (back-pressure, as
+                // the Python SDK's awaited send), and never drops a message.
+                if (!enqueueBlocking(message)) {
+                    break; // closed while waiting for room
                 }
             }
         } catch (InterruptedException e) {
@@ -1116,36 +1185,37 @@ public class QueryHandler implements AutoCloseable {
                 // as-is (ResultException / ProcessException with its exit code,
                 // CLIJSONDecodeException, ...) instead of flattening it to a
                 // bare ClaudeSDKException(String).
-                try {
-                    Map<String, Object> errMessage = new HashMap<>();
-                    errMessage.put("type", "error");
-                    errMessage.put("error", errorText);
-                    errMessage.put("exception", pendingError);
-                    messageQueue.offer(errMessage, 1, TimeUnit.SECONDS);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                }
+                // The error is also recorded as the stream's terminal state
+                // (streamError, published by streamEnded in the finally
+                // below), so it can be delayed but never lost.
+                Map<String, Object> errMessage = new HashMap<>();
+                errMessage.put("type", "error");
+                errMessage.put("error", errorText);
+                errMessage.put("exception", pendingError);
+                terminalError = errMessage;
             }
         } finally {
             // Final flush before end-of-stream so an early stdout EOF or
-            // transport error doesn't drop entries batched this turn.
+            // transport error doesn't drop entries batched this turn. It runs
+            // before the terminal error is queued, as before the end marker,
+            // so a mirror_error it reports is not stranded behind either.
             TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
             if (batcher != null) {
-                try {
-                    batcher.flush().get(5, TimeUnit.SECONDS);
-                } catch (Exception flushEx) {
-                    logger.fine("Mirror flush at end-of-stream completed exceptionally: "
-                            + flushEx.getMessage());
-                }
+                awaitMirror(batcher.flush(), "Mirror flush at end-of-stream");
             }
-            // Signal end of stream
-            try {
-                Map<String, Object> endMessage = new HashMap<>();
-                endMessage.put("type", "end");
-                messageQueue.offer(endMessage, 1, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            if (terminalError != null) {
+                streamError = terminalError;
+                messageQueue.offer(terminalError);
             }
+            // Signal end of stream. The flag is the guarantee: it is set after
+            // the reader's last enqueue, so a consumer that finds it set and
+            // the queue empty has seen everything. The in-band marker only
+            // wakes a waiting consumer at once (the queue's limit is soft, so
+            // it is never refused).
+            streamEnded = true;
+            Map<String, Object> endMessage = new HashMap<>();
+            endMessage.put("type", "end");
+            messageQueue.offer(endMessage);
             // Unblock the stdin-closing waiter so it doesn't stall on early
             // exit.
             synchronized (runLock) {
@@ -1155,28 +1225,106 @@ public class QueryHandler implements AutoCloseable {
         }
     }
 
-    @SuppressWarnings("null")
+    /**
+     * Puts a message on the consumer queue, waiting for room as long as it
+     * takes: once {@code maxMsgQSize} messages are waiting, the reader stops
+     * reading from the CLI until the consumer catches up (back-pressure, as
+     * the Python SDK's awaited send; nothing is dropped).
+     *
+     * <p>
+     * The limit is soft. While an outbound control request is waiting for its
+     * response, the reader keeps reading past it: the response travels on the
+     * same stdout as the messages, so blocking here would leave a control call
+     * made by a thread that is not draining the messages ({@code interrupt()},
+     * {@code setModel()}, ...) to time out. The queue is one FIFO either way,
+     * so message order is unchanged. A wait is woken when a consumer takes a
+     * message, when a control request is sent and on close(); the
+     * {@link #QUEUE_WAKE_MS} timeout is only a backstop.
+     *
+     * @return false if the handler closed before there was room
+     */
+    private boolean enqueueBlocking(Map<String, Object> message) throws InterruptedException {
+        queueLock.lockInterruptibly();
+        try {
+            while ((messageQueue.size() >= maxMsgQSize)
+                    && pendingControlResponses.isEmpty()
+                    && !closed.get()) {
+                queueRoom.await(QUEUE_WAKE_MS, TimeUnit.MILLISECONDS);
+            }
+        } finally {
+            queueLock.unlock();
+        }
+        if (closed.get()) {
+            return false;
+        }
+        messageQueue.add(message);
+        return true;
+    }
+
+    /** Wakes a reader waiting in {@link #enqueueBlocking} to re-check. */
+    private void signalQueueRoom() {
+        queueLock.lock();
+        try {
+            queueRoom.signalAll();
+        } finally {
+            queueLock.unlock();
+        }
+    }
+
+    /**
+     * Waits for a transcript-mirror flush or close, with no outer cap, as the
+     * Python SDK does.
+     *
+     * <p>
+     * The batcher bounds the wait itself: each append is limited by its
+     * {@code sendTimeoutMs} (60s by default), is attempted a fixed
+     * {@link TranscriptMirrorBatcher#MIRROR_APPEND_MAX_ATTEMPTS} times with a
+     * fixed backoff, and is not retried at all after a timeout, so the future
+     * always completes. A shorter cap here would only let the consumer see a
+     * result before the turn it ends is in the store. Never throws.
+     */
+    private static void awaitMirror(CompletableFuture<Void> mirror, String what) {
+        try {
+            mirror.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.fine(what + " interrupted");
+        } catch (ExecutionException | RuntimeException e) {
+            logger.fine(what + " completed exceptionally: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Settles the outbound request a {@code control_response} answers.
+     *
+     * <p>
+     * As lenient as the Python SDK, so a malformed frame can never kill the
+     * reader: a frame without a known {@code request_id} is ignored, any
+     * {@code subtype} other than {@code "error"} counts as success, and a
+     * success body that is not an object reads as an empty one.
+     */
     private void handleControlResponse(Map<String, Object> message) {
-        SDKControlResponse controlResponse = MAPPER.convertValue(message, SDKControlResponse.class);
-        ControlResponseData response = controlResponse.response();
-        if (response == null) {
+        if (!(message.get("response") instanceof Map<?, ?> response)
+                || !(response.get("request_id") instanceof String requestId)) {
             return;
         }
-
-        String requestId = response.requestId();
         CompletableFuture<ControlResponse> future = pendingControlResponses.remove(requestId);
         if (future == null) {
             return;
         }
 
-        // instanceof chain rather than a pattern switch: the SDK targets Java 17.
-        if (response instanceof ControlResponse success) {
-            future.complete(success);
-        } else if (response instanceof ControlErrorResponse err) {
-            future.completeExceptionally(new ClaudeSDKException(err.error()));
-        } else {
+        if ("error".equals(response.get("subtype"))) {
+            Object error = response.get("error");
             future.completeExceptionally(new ClaudeSDKException(
-                    "Unhandled control response type: " + response.getClass().getName()));
+                    (error != null) ? String.valueOf(error) : "Unknown error"));
+        } else {
+            Map<String, Object> body = new LinkedHashMap<>();
+            if (response.get("response") instanceof Map<?, ?> data) {
+                for (Map.Entry<?, ?> entry : data.entrySet()) {
+                    body.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+            future.complete(new ControlResponse(requestId, body));
         }
     }
 
@@ -1193,14 +1341,22 @@ public class QueryHandler implements AutoCloseable {
             // removed: the handler cannot finish ahead of the registration.
             inflightControlRequests.put(trackedId, inflight);
         }
+        runningControlRequests.add(inflight);
         try {
             inflight.task(controlExecutor.submit(() -> {
+                if (!inflight.begin()) {
+                    return; // close() gave up on it before it started
+                }
+                servingRequest.set(inflight);
                 try {
                     handleControlRequest(message, inflight);
                 } finally {
+                    servingRequest.remove();
                     if (trackedId != null) {
                         inflightControlRequests.remove(trackedId, inflight);
                     }
+                    runningControlRequests.remove(inflight);
+                    inflight.finish();
                 }
             }));
         } catch (RejectedExecutionException e) {
@@ -1208,6 +1364,8 @@ public class QueryHandler implements AutoCloseable {
             if (trackedId != null) {
                 inflightControlRequests.remove(trackedId, inflight);
             }
+            runningControlRequests.remove(inflight);
+            inflight.finish();
             throw e;
         }
     }
@@ -1227,14 +1385,46 @@ public class QueryHandler implements AutoCloseable {
         private static final int ANSWERING = 1;
         private static final int CANCELLED = 2;
 
+        // Whether the handler ran, independent of how the request ended:
+        // close() waits for a handler that began, and skips one that never
+        // will. Settled by compare-and-set, so the two cannot both happen.
+        private static final int NOT_STARTED = 0;
+        private static final int RUNNING = 1;
+        private static final int SKIPPED = 2;
+
         private final AtomicInteger state = new AtomicInteger(OPEN);
+        private final AtomicInteger phase = new AtomicInteger(NOT_STARTED);
+        private final CompletableFuture<Void> finished = new CompletableFuture<>();
         private volatile @Nullable Future<?> task;
         private volatile @Nullable CompletableFuture<?> awaiting;
+        // Written before the cancelling compare-and-set, so task() sees it.
+        private volatile boolean interruptOnCancel = true;
+
+        /** Called by the handler as it starts; false if close() skipped it. */
+        boolean begin() {
+            return phase.compareAndSet(NOT_STARTED, RUNNING);
+        }
+
+        /** Called by the handler as it ends. */
+        void finish() {
+            finished.complete(null);
+        }
+
+        /**
+         * Completes once the handler has ended, or at once for a handler that
+         * has not started (it then never will).
+         */
+        CompletableFuture<Void> whenFinished() {
+            if (phase.compareAndSet(NOT_STARTED, SKIPPED)) {
+                finished.complete(null);
+            }
+            return finished;
+        }
 
         void task(Future<?> submitted) {
             task = submitted;
             if (isCancelled()) {
-                submitted.cancel(true);
+                submitted.cancel(interruptOnCancel);
             }
         }
 
@@ -1253,6 +1443,21 @@ public class QueryHandler implements AutoCloseable {
          * handler has begun answering.
          */
         void cancel() {
+            cancel(true);
+        }
+
+        /**
+         * As {@link #cancel()}, but with {@code interruptHandler} false the
+         * handler thread is left alone: the request is still marked cancelled,
+         * so no response is written, and its callback's future is still
+         * cancelled. That is how {@link QueryHandler#close()} cancels the
+         * request whose own callback called it.
+         */
+        void cancel(boolean interruptHandler) {
+            if (state.get() != OPEN) {
+                return;
+            }
+            interruptOnCancel = interruptHandler;
             if (!state.compareAndSet(OPEN, CANCELLED)) {
                 return;
             }
@@ -1262,21 +1467,16 @@ public class QueryHandler implements AutoCloseable {
             }
             Future<?> running = task;
             if (running != null) {
-                running.cancel(true);
+                running.cancel(interruptHandler);
             }
         }
 
         /**
-         * Waits for a user callback's result. Throws
+         * Waits, with no deadline, for a user callback's result. Throws
          * {@link java.util.concurrent.CancellationException} or
-         * {@link InterruptedException} once the request is cancelled.
+         * {@link InterruptedException} once the request is cancelled, by the
+         * CLI or by {@link QueryHandler#close()}.
          */
-        <T> T await(CompletableFuture<T> callback, long timeout, TimeUnit unit)
-                throws InterruptedException, ExecutionException, TimeoutException {
-            return track(callback).get(timeout, unit);
-        }
-
-        /** {@link #await(CompletableFuture, long, TimeUnit)} with no deadline. */
         <T> T await(CompletableFuture<T> callback) throws InterruptedException, ExecutionException {
             return track(callback).get();
         }
@@ -1294,12 +1494,11 @@ public class QueryHandler implements AutoCloseable {
     /**
      * Handles incoming control requests from CLI using strongly-typed classes.
      */
-    @SuppressWarnings("null")
     private void handleControlRequest(Map<String, Object> message, InflightControlRequest inflight) {
         String requestId = null;
         try {
             // Deserialize to typed SDKControlRequest
-            SDKControlRequest controlRequest = MAPPER.convertValue(message, SDKControlRequest.class);
+            SDKControlRequest controlRequest = readControlRequest(message);
 
             requestId = controlRequest.requestId();
             SDKControlRequestData requestData = controlRequest.request();
@@ -1333,8 +1532,19 @@ public class QueryHandler implements AutoCloseable {
                         permissionReq.displayName(),
                         permissionReq.description());
 
+                // No SDK-side deadline, as in the Python SDK: a human approving
+                // a tool can take as long as it takes. The wait ends when the
+                // callback completes, the CLI cancels the request
+                // (control_cancel_request) or the handler closes.
                 CompletableFuture<PermissionResult> resultFuture = canUseTool.apply(toolName, input, context);
-                PermissionResult result = inflight.await(resultFuture, RESULT_WAIT_SECS, TimeUnit.SECONDS);
+                if (resultFuture == null) {
+                    throw new ClaudeSDKException("canUseTool callback returned a null future");
+                }
+                PermissionResult result = inflight.await(resultFuture);
+                if (result == null) {
+                    throw new ClaudeSDKException(
+                            "canUseTool callback completed with null; return PermissionResultAllow or PermissionResultDeny");
+                }
 
                 // Serialize permission result to response format
                 if (result instanceof PermissionResultAllow allow) {
@@ -1365,7 +1575,9 @@ public class QueryHandler implements AutoCloseable {
                 if (outputFuture == null) {
                     throw new ClaudeSDKException("Hook callback " + callbackId + " returned a null future");
                 }
-                HookOutput output = inflight.await(outputFuture, RESULT_WAIT_SECS, TimeUnit.SECONDS);
+                // No SDK-side deadline either: the CLI enforces the matcher's
+                // timeout itself and follows it with control_cancel_request.
+                HookOutput output = inflight.await(outputFuture);
                 if (output == null) {
                     throw new ClaudeSDKException("Hook callback " + callbackId
                             + " completed with null; return an empty HookOutput for no decision");
@@ -1442,32 +1654,86 @@ public class QueryHandler implements AutoCloseable {
     }
 
     /**
-     * Routes one JSON-RPC message to the named SDK MCP server.
+     * Opens this connection's session of every SDK MCP server.
      *
      * <p>
-     * Always returns a payload for the enclosing control response. A message
-     * that cannot be delivered at all — unknown server, a handler that threw —
-     * is answered with a JSON-RPC error <i>inside</i> {@code mcp_response}, so
-     * only that one MCP call fails instead of the whole control request. That
-     * is what the Python SDK does, and it keeps the control channel healthy
-     * through a broken server.
+     * A handler whose {@code openSession()} fails or returns null is used
+     * directly, as it would have been before sessions existed.
+     */
+    @Nullable
+    private static Map<String, McpMessageHandler> openSdkMcpSessions(
+            @Nullable Map<String, McpMessageHandler> servers) {
+        if (servers == null) {
+            return null;
+        }
+        Map<String, McpMessageHandler> sessions = new HashMap<>();
+        for (Map.Entry<String, McpMessageHandler> entry : servers.entrySet()) {
+            McpMessageHandler server = entry.getValue();
+            McpMessageHandler session = null;
+            try {
+                session = server.openSession();
+            } catch (RuntimeException e) {
+                logger.log(Level.WARNING, "SDK MCP server '" + entry.getKey()
+                        + "' could not open a session; sharing the handler instead", e);
+            }
+            sessions.put(entry.getKey(), (session != null) ? session : server);
+        }
+        return sessions;
+    }
+
+    /**
+     * Reads a CLI control request into its typed form.
+     *
+     * <p>
+     * A hook callback's {@code input} map is supplied to the {@link HookInput}
+     * record as well, so {@link HookInput#raw()} carries every key the CLI
+     * sent, including the ones the record does not model.
+     */
+    static SDKControlRequest readControlRequest(Map<String, Object> message) {
+        InjectableValues.Std injectables = new InjectableValues.Std();
+        if ((message.get("request") instanceof Map<?, ?> request)
+                && (request.get("input") instanceof Map<?, ?> input)) {
+            injectables.addValue(HookInput.RAW_INJECTABLE_ID, input);
+        }
+        JsonNode tree = MAPPER.valueToTree(message);
+        try {
+            return MAPPER.readerFor(SDKControlRequest.class).with(injectables).readValue(tree);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Malformed control request: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Routes one JSON-RPC message to this connection's session of the named
+     * SDK MCP server.
+     *
+     * <p>
+     * A control request with no {@code server_name} or no {@code message}
+     * (an empty one included) is malformed, and fails as a control error, as
+     * in the Python SDK. Otherwise this always returns a payload for the
+     * enclosing control response. A message that cannot be delivered at all —
+     * unknown server, a handler that threw — is answered with a JSON-RPC error
+     * <i>inside</i> {@code mcp_response}, so only that one MCP call fails
+     * instead of the whole control request. That is what the Python SDK does,
+     * and it keeps the control channel healthy through a broken server.
      *
      * @param serverName the SDK MCP server the CLI addressed
      * @param message    the JSON-RPC message to deliver
      * @param inflight   the control request carrying it; cancelling that
      *                   cancels the handler's future
      * @return the payload for the {@code mcp_response} field
+     * @throws ClaudeSDKException if the server name or the message is missing
      */
     private Map<String, Object> handleSdkMcpRequest(
             @Nullable String serverName, @Nullable Map<String, Object> message,
             InflightControlRequest inflight) {
 
-        Object id = ((message != null) ? message.get("id") : null);
-        if ((serverName == null) || (message == null)) {
-            return jsonRpcError(id, -32600, "Missing server_name or message for MCP request");
+        if ((serverName == null) || serverName.isEmpty() || (message == null) || message.isEmpty()) {
+            throw new ClaudeSDKException("Missing server_name or message for MCP request");
         }
+        Object id = message.get("id");
 
-        Map<String, McpMessageHandler> servers = sdkMcpServers;
+        Map<String, McpMessageHandler> servers = sdkMcpSessions;
         McpMessageHandler server = ((servers != null) ? servers.get(serverName) : null);
         if (server == null) {
             return jsonRpcError(id, -32601, "Server '" + serverName + "' not found");
@@ -1512,7 +1778,12 @@ public class QueryHandler implements AutoCloseable {
         return response;
     }
 
-    /** Mirrors {@code SdkMcpServer.describeFailure}: never null, never empty. */
+    /**
+     * Exception text for an error response: the message, or the class name
+     * when there is none; never null, never empty. Same rule as the MCP
+     * package's {@code ToolSchemas.describeFailure}, which is package-private
+     * there.
+     */
     private static String describeThrowable(Throwable cause) {
         String message = cause.getMessage();
         return (((message != null) && !message.isBlank()) ? message : cause.getClass().getSimpleName());
@@ -1557,6 +1828,9 @@ public class QueryHandler implements AutoCloseable {
         // Create future for response
         CompletableFuture<ControlResponse> future = new CompletableFuture<>();
         pendingControlResponses.put(requestId, future);
+        // A reader holding back for room must read on now, or this response
+        // would wait behind messages nobody is draining.
+        signalQueueRoom();
 
         // Build and send typed request
         SDKControlRequest controlRequest = new SDKControlRequest(requestId, requestData);
@@ -2019,6 +2293,13 @@ public class QueryHandler implements AutoCloseable {
      * }
      * }</pre>
      *
+     * <p>
+     * If the consuming thread is interrupted while {@code hasNext()} waits,
+     * the interrupt flag is restored and {@code hasNext()} throws a
+     * {@link ClaudeSDKException} ("Interrupted while waiting for the next
+     * message") whose cause is the {@link InterruptedException}, rather than
+     * reporting a normal end of stream.
+     *
      * @return an iterator over messages received from the CLI
      */
     public Iterator<Message> receiveMessages() {
@@ -2045,12 +2326,25 @@ public class QueryHandler implements AutoCloseable {
      * <p>
      * This method:
      * <ul>
-     * <li>Interrupts and waits for the reader thread to terminate</li>
-     * <li>Interrupts and waits for all control request handler threads</li>
+     * <li>Waits for the final transcript-mirror flush (bounded by the batcher)</li>
      * <li>Completes all pending control request futures exceptionally</li>
+     * <li>Cancels the control request handlers and waits for them to end</li>
+     * <li>Closes the underlying transport (stdin EOF, then a bounded wait for
+     * the CLI to exit) and waits for the reader thread to terminate</li>
      * <li>Clears all callback maps</li>
-     * <li>Closes the underlying transport</li>
      * </ul>
+     *
+     * <p>
+     * It may be called from inside a callback (a {@code canUseTool}, a hook or
+     * an SDK MCP tool), for example through {@code ClaudeSDKClient.disconnect()}.
+     * The request that callback serves is cancelled, so it is never answered,
+     * but its thread, the one closing, is neither interrupted nor waited for.
+     *
+     * <p>
+     * It is safe to call with the interrupt flag set, or to interrupt while it
+     * runs: the flag is cleared for the duration, so every step still runs to
+     * its bound (the CLI still gets stdin EOF and its grace period, the reader
+     * is still joined), and it is set again on return.
      *
      * <p>
      * This method is idempotent and can be safely called multiple times.
@@ -2063,125 +2357,193 @@ public class QueryHandler implements AutoCloseable {
             return; // Already closed
         }
 
+        // An interrupted caller (e.g. ClaudeSDK.query() after its consumer was
+        // interrupted) must still close gracefully: every wait below would
+        // otherwise fail at once, leaving the CLI without stdin EOF and the
+        // reader unjoined. The flag is restored on the way out.
+        AtomicBoolean interrupted = new AtomicBoolean(Thread.interrupted());
+        try {
+            closeGracefully(interrupted);
+        } catch (RuntimeException e) {
+            logger.log(Level.WARNING, "Error during close", e);
+        } finally {
+            if (Thread.interrupted()) {
+                interrupted.set(true);
+            }
+            if (interrupted.get()) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private void closeGracefully(AtomicBoolean interrupted) {
         logger.fine("Closing QueryHandler");
 
-        try {
-            // 0. Final-flush mirror entries before tearing down so .return()/break
-            // don't drop the current turn when the process exits immediately.
-            TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
-            if (batcher != null) {
+        // The control request whose callback is closing us, if any.
+        InflightControlRequest self = servingRequest.get();
+
+        // 0. Final-flush mirror entries before tearing down so .return()/break
+        // don't drop the current turn when the process exits immediately.
+        TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
+        if (batcher != null) {
+            awaitThroughInterrupts(batcher.close(), Long.MAX_VALUE, interrupted);
+        }
+
+        // 1. Complete all pending futures exceptionally
+        ClaudeSDKException closedException = new ClaudeSDKException("QueryHandler is closed");
+        for (CompletableFuture<ControlResponse> future : pendingControlResponses.values()) {
+            future.completeExceptionally(closedException);
+        }
+        pendingControlResponses.clear();
+
+        // 1a. Cancel the CLI's requests still being answered, as the Python
+        //     SDK cancels its child tasks. Inbound callbacks have no
+        //     deadline (a canUseTool may be waiting on a human), so close()
+        //     ends them instead of waiting for them: the callback's future
+        //     is cancelled and its handler thread interrupted, and nothing
+        //     is answered (the CLI is going away). Every running handler is
+        //     reached, request_id or not. The one calling close() is
+        //     cancelled without the interrupt: interrupting it would
+        //     interrupt this close().
+        for (InflightControlRequest inflight : runningControlRequests) {
+            inflight.cancel(inflight != self);
+        }
+        inflightControlRequests.clear();
+
+        // 1b. Tell the SDK MCP servers the connection is going away. A
+        //     tool still running holds a control thread on a wait with no
+        //     deadline, and only its server can end it -- nothing here can
+        //     interrupt a handler. Without this, the wait below would sit
+        //     out its full timeout on any run with a tool in flight. Only
+        //     this connection's sessions: another client sharing a server
+        //     keeps its calls.
+        Map<String, McpMessageHandler> servers = sdkMcpSessions;
+        if (servers != null) {
+            for (Map.Entry<String, McpMessageHandler> entry : servers.entrySet()) {
                 try {
-                    batcher.close().get(5, TimeUnit.SECONDS);
-                } catch (Exception flushEx) {
-                    logger.fine("Mirror close flush completed exceptionally: " + flushEx.getMessage());
+                    entry.getValue().close();
+                } catch (RuntimeException e) {
+                    logger.log(Level.WARNING,
+                            "SDK MCP server '" + entry.getKey() + "' failed to close", e);
                 }
             }
+        }
 
-            // 1. Complete all pending futures exceptionally
-            ClaudeSDKException closedException = new ClaudeSDKException("QueryHandler is closed");
-            for (CompletableFuture<ControlResponse> future : pendingControlResponses.values()) {
-                future.completeExceptionally(closedException);
+        // Release the stdin-closing waiter and stop any ceiling sleeper
+        synchronized (runLock) {
+            runFinal = true;
+            endRun();
+        }
+        // A reader waiting for room in the queue notices close() at once.
+        signalQueueRoom();
+
+        // 2. Close the transport to unblock the reader thread. It closes
+        //    stdin and gives the CLI its bounded grace period to exit.
+        try {
+            transport.close();
+        } catch (RuntimeException e) {
+            logger.log(Level.WARNING, "Error closing transport", e);
+        }
+        // A transport restores an interrupt that arrived while it closed.
+        if (Thread.interrupted()) {
+            interrupted.set(true);
+        }
+
+        // 3. Shut down both executors. shutdown(), not shutdownNow(): the
+        //    handlers were cancelled (and, all but our own, interrupted) in
+        //    1a, and shutdownNow() would interrupt this very thread when
+        //    close() runs inside a callback.
+        readerExecutor.shutdown();
+        controlExecutor.shutdown();
+        logger.fine("Initiated executors shutdown, waiting for tasks to complete");
+
+        // 4. Wait for the reader to terminate (should be quick since the
+        //    transport is closed).
+        if (Uninterruptibly.awaitTermination(readerExecutor, READER_THREAD_JOIN_TIMEOUT_SECS, TimeUnit.SECONDS, interrupted)) {
+            logger.fine("Reader executor terminated gracefully");
+        } else {
+            logger.warning("Reader executor did not terminate gracefully, forcing shutdown");
+            readerExecutor.shutdownNow();
+            if (!Uninterruptibly.awaitTermination(readerExecutor, 2, TimeUnit.SECONDS, interrupted)) {
+                logger.warning(
+                        "Reader executor did not terminate even after shutdownNow() - threads may still be running");
             }
-            pendingControlResponses.clear();
+        }
 
-            // 1b. Tell the SDK MCP servers the connection is going away. A
-            //     tool still running holds a control thread on a wait with no
-            //     deadline, and only its server can end it -- nothing here can
-            //     interrupt a handler. Without this, awaitTermination below
-            //     would sit out its full timeout on any run with a tool in
-            //     flight.
-            Map<String, McpMessageHandler> servers = sdkMcpServers;
-            if (servers != null) {
-                for (Map.Entry<String, McpMessageHandler> entry : servers.entrySet()) {
-                    try {
-                        entry.getValue().close();
-                    } catch (RuntimeException e) {
-                        logger.log(Level.WARNING,
-                                "SDK MCP server '" + entry.getKey() + "' failed to close", e);
-                    }
-                }
-            }
-
-            // Release the stdin-closing waiter and stop any ceiling sleeper
-            synchronized (runLock) {
-                runFinal = true;
-                endRun();
-            }
-
-            // 2. Close transport FIRST to unblock any waiting hasNext() calls
-            // This ensures the reader thread can exit its message loop quickly
-            try {
-                transport.close();
-            } catch (Exception e) {
-                logger.log(Level.WARNING, "Error closing transport", e);
-            }
-
-            // 3. Graceful shutdown of both executors
-            readerExecutor.shutdown();
-            controlExecutor.shutdown();
-            logger.fine("Initiated executors shutdown, waiting for tasks to complete");
-
-            // 4. Wait for reader executor to terminate (should be quick since transport is
-            // closed)
-            boolean readerTerminated = readerExecutor.awaitTermination(
-                    READER_THREAD_JOIN_TIMEOUT_SECS,
-                    TimeUnit.SECONDS);
-
-            if (!readerTerminated) {
-                logger.warning("Reader executor did not terminate gracefully, forcing shutdown");
-                readerExecutor.shutdownNow();
-                boolean forcedTermination = readerExecutor.awaitTermination(2, TimeUnit.SECONDS);
-                if (!forcedTermination) {
-                    logger.warning(
-                            "Reader executor did not terminate even after shutdownNow() - threads may still be running");
-                }
-            } else {
-                logger.fine("Reader executor terminated gracefully");
-            }
-
-            // 5. Wait for control executor to terminate
-            boolean controlTerminated = controlExecutor.awaitTermination(
-                    CONTROL_THREAD_JOIN_TIMEOUT_SECS,
-                    TimeUnit.SECONDS);
-
-            if (!controlTerminated) {
-                // Force shutdown if graceful shutdown timed out
-                logger.warning("Control executor did not terminate gracefully within " +
-                        CONTROL_THREAD_JOIN_TIMEOUT_SECS + " seconds, forcing shutdown");
+        // 5. Wait for the control handlers to end, all but the one calling
+        //    close(), which cannot end before close() returns.
+        if (awaitControlHandlers(self, TimeUnit.SECONDS.toMillis(CONTROL_THREAD_JOIN_TIMEOUT_SECS), interrupted)) {
+            logger.fine("Control handlers terminated gracefully");
+        } else {
+            logger.warning("Control handlers did not terminate gracefully within "
+                    + CONTROL_THREAD_JOIN_TIMEOUT_SECS + " seconds, forcing shutdown");
+            if (self == null) {
+                // Interrupts them again; never from a handler, whose own
+                // thread it would interrupt too.
                 List<Runnable> pendingTasks = controlExecutor.shutdownNow();
                 logger.fine("Cancelled " + pendingTasks.size() + " pending control tasks");
-
-                // Wait a bit more for forced shutdown
-                controlTerminated = controlExecutor.awaitTermination(2, TimeUnit.SECONDS);
-
-                if (!controlTerminated) {
-                    logger.warning("Control executor did not terminate after shutdownNow() - " +
-                            "control request handler threads may still be running");
-                }
-            } else {
-                logger.fine("Control executor terminated gracefully");
             }
+            if (!awaitControlHandlers(self, TimeUnit.SECONDS.toMillis(2), interrupted)) {
+                logger.warning("Control executor did not terminate after shutdownNow() - "
+                        + "control request handler threads may still be running");
+            }
+        }
 
-            // 6. Clear all callback maps to prevent memory leaks
-            hookCallbacks.clear();
+        // 6. Clear all callback maps to prevent memory leaks
+        hookCallbacks.clear();
 
-            // 7. Clear message queue
-            messageQueue.clear();
+        // 7. Clear message queue
+        messageQueue.clear();
 
-            logger.fine("QueryHandler closed successfully");
+        logger.fine("QueryHandler closed successfully");
+    }
 
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.log(Level.WARNING, "Interrupted during close, forcing executors shutdown", e);
-            readerExecutor.shutdownNow();
-            controlExecutor.shutdownNow();
+    /**
+     * Waits for every running control handler except {@code self}, for at
+     * most {@code timeoutMs}.
+     *
+     * @return whether they all ended in time
+     */
+    private boolean awaitControlHandlers(@Nullable InflightControlRequest self, long timeoutMs,
+            AtomicBoolean interrupted) {
+        List<CompletableFuture<Void>> others = new ArrayList<>();
+        for (InflightControlRequest inflight : runningControlRequests) {
+            if (inflight != self) {
+                others.add(inflight.whenFinished());
+            }
+        }
+        return awaitThroughInterrupts(CompletableFuture.allOf(others.toArray(new CompletableFuture<?>[0])),
+                timeoutMs, interrupted);
+    }
+
+    /**
+     * Waits for {@code future} for at most {@code timeoutMs}
+     * ({@link Long#MAX_VALUE}: no limit, for a future that bounds itself),
+     * recording rather than obeying interrupts. Never throws.
+     *
+     * @return whether the future completed in time
+     */
+    private static boolean awaitThroughInterrupts(CompletableFuture<?> future, long timeoutMs,
+            AtomicBoolean interrupted) {
+        long deadline = (timeoutMs == Long.MAX_VALUE)
+                ? Long.MAX_VALUE
+                : System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        while (true) {
             try {
-                transport.close();
-            } catch (Exception te) {
-                logger.log(Level.WARNING, "Failed to close transport after interruption", te);
+                if (deadline == Long.MAX_VALUE) {
+                    future.get();
+                } else {
+                    future.get(Math.max(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+                }
+                return true;
+            } catch (InterruptedException e) {
+                interrupted.set(true);
+            } catch (TimeoutException e) {
+                return false;
+            } catch (ExecutionException | RuntimeException e) {
+                logger.fine("Wait during close completed exceptionally: " + e.getMessage());
+                return true;
             }
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Error during close", e);
         }
     }
 
@@ -2232,12 +2594,8 @@ public class QueryHandler implements AutoCloseable {
             }
 
             try {
-                // Use poll with timeout instead of blocking take() to ensure graceful
-                // termination.
-                // Blocking take() would risk deadlock if the reader thread crashes or is
-                // interrupted
-                // before sending the "end" message. Polling allows us to periodically check the
-                // closed flag and terminate within 400ms even if the queue is empty.
+                // Poll with a timeout rather than take(), so the loop wakes to
+                // notice close() and the stream's terminal state.
                 while (!done) {
                     // Check closed flag to avoid blocking forever
                     if (closed.get()) {
@@ -2245,12 +2603,40 @@ public class QueryHandler implements AutoCloseable {
                         return false;
                     }
 
-                    // Poll with timeout to periodically wake up and check closed flag
-                    Map<String, Object> message = messageQueue.poll(400, TimeUnit.MILLISECONDS);
+                    // Read the terminal flag BEFORE polling. The reader sets it
+                    // after its last enqueue, so once it is seen, a poll that
+                    // finds the queue empty means the stream is fully drained:
+                    // end it, with the reader's error if it failed. This is
+                    // what guarantees the end and the error even when the
+                    // in-band markers could not be queued (queue full), and
+                    // for an iterator created after another consumed them.
+                    boolean ended = streamEnded;
+                    Map<String, Object> message = (ended
+                            ? messageQueue.poll()
+                            : messageQueue.poll(QUEUE_WAKE_MS, TimeUnit.MILLISECONDS));
+                    if ((message != null) && !ended) {
+                        // There is room again for a reader holding back.
+                        signalQueueRoom();
+                    }
+                    if ((message == null) && ended) {
+                        done = true;
+                        Map<String, Object> error = streamError;
+                        if (error != null) {
+                            throw toThrowable(error);
+                        }
+                        return false;
+                    }
                     if (message != null) {
                         // Check for end marker
                         if ("end".equals(message.get("type"))) {
                             done = true;
+                            // A stream that ended in an error ends in it for
+                            // every iterator, also one that finds only the
+                            // end marker because another took the error.
+                            Map<String, Object> error = streamError;
+                            if (error != null) {
+                                throw toThrowable(error);
+                            }
                             return false;
                         }
                         if ("error".equals(message.get("type"))) {
@@ -2267,8 +2653,12 @@ public class QueryHandler implements AutoCloseable {
                     }
                 }
             } catch (InterruptedException e) {
+                // Not the end of the stream: ending quietly here made an
+                // interrupted ClaudeSDK.query() return a truncated list.
+                // The iterator stays usable: once the flag is cleared, a
+                // later hasNext() waits again.
                 Thread.currentThread().interrupt();
-                done = true;
+                throw new ClaudeSDKException("Interrupted while waiting for the next message", e);
             }
             return false;
         }

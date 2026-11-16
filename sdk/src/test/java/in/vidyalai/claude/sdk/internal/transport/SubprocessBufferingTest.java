@@ -3,23 +3,28 @@ package in.vidyalai.claude.sdk.internal.transport;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.Reader;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.exceptions.CLIJSONDecodeException;
 
 /**
- * Tests for subprocess transport buffering edge cases.
+ * Tests for subprocess transport buffering edge cases, driving the
+ * transport's own stdout framing ({@link SubprocessCLITransport.LineFramer}
+ * and {@link SubprocessCLITransport#stdoutMessage}).
  * Equivalent to Python's test_subprocess_buffering.py
  */
+@SuppressWarnings("null")
 class SubprocessBufferingTest {
 
     private static final String DEFAULT_CLI_PATH = "/usr/bin/claude";
@@ -160,7 +165,6 @@ class SubprocessBufferingTest {
         assertThat(contentList.get(0).get("tool_use_id")).isEqualTo("toolu_016fed1NhiaMLqnEvrj5NUaj");
     }
 
-    @SuppressWarnings("null")
     @Test
     void testBufferSizeExceeded() {
         // Test that exceeding buffer size raises an appropriate error
@@ -172,7 +176,6 @@ class SubprocessBufferingTest {
                 .hasMessageContaining("exceeded maximum buffer size");
     }
 
-    @SuppressWarnings("null")
     @Test
     void testBufferSizeOption() {
         // Test that the configurable buffer size option is respected
@@ -280,54 +283,185 @@ class SubprocessBufferingTest {
         assertThat(messages.get(0).get("emoji")).isEqualTo("👨‍👩‍👧‍👦");
     }
 
+    // ==================== Python parity: per-line framing ====================
+
+    @Test
+    void testNonJsonDebugLinesSkipped() throws Exception {
+        String debug = "[SandboxDebug] Seccomp filtering not available";
+        String msg1 = objectMapper.writeValueAsString(Map.of("type", "system", "subtype", "init"));
+        String msg2 = objectMapper.writeValueAsString(Map.of("type", "result", "subtype", "success"));
+
+        List<Map<String, Object>> messages = parseJsonParts(
+                List.of(debug + "\n" + msg1 + "\n" + debug + "\n" + msg2 + "\n"), makeOptions());
+
+        assertThat(messages).extracting(m -> m.get("type")).containsExactly("system", "result");
+    }
+
+    @Test
+    void testInterleavedNonJsonLinesSkipped() throws Exception {
+        List<Map<String, Object>> messages = parseJsonParts(List.of(
+                "[SandboxDebug] line 1\n",
+                "[SandboxDebug] line 2\n",
+                "{\"type\":\"system\",\"subtype\":\"init\"}\n",
+                "WARNING: something\n",
+                "{\"type\":\"result\",\"subtype\":\"success\"}\n"), makeOptions());
+
+        assertThat(messages).extracting(m -> m.get("type")).containsExactly("system", "result");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { " ", "  ", "\u00a0", "\u2009", "\u3000" })
+    void testWhitespaceAtChunkBoundaryPreserved(String ws) throws Exception {
+        // Whitespace inside a JSON string that lands on a read boundary must
+        // survive: only a complete line is ever stripped.
+        String content = "A".repeat(1000) + ws + "B".repeat(1000);
+        String line = "{\"type\":\"assistant\",\"data\":\"" + content + "\"}";
+        int wsAt = line.indexOf(ws);
+        List<String> chunks = List.of(line.substring(0, wsAt + ws.length()), line.substring(wsAt + ws.length()) + "\n");
+
+        List<Map<String, Object>> messages = parseJsonParts(chunks, makeOptions());
+
+        assertThat(messages).hasSize(1);
+        assertThat(messages.get(0).get("data")).isEqualTo(content);
+    }
+
+    @Test
+    void testWhitespacePreservedAcrossRealistic64KibChunking() throws Exception {
+        String content = "S" + " ".repeat(400_000) + "E";
+        String line = "{\"type\":\"assistant\",\"data\":\"" + content + "\"}\n";
+        List<String> chunks = new ArrayList<>();
+        for (int i = 0; i < line.length(); i += 65536) {
+            chunks.add(line.substring(i, Math.min(i + 65536, line.length())));
+        }
+        assertThat(chunks.size()).isGreaterThan(6);
+
+        List<Map<String, Object>> messages = parseJsonParts(chunks, makeOptions());
+
+        assertThat(messages).hasSize(1);
+        assertThat(messages.get(0).get("data")).isEqualTo(content);
+    }
+
+    @Test
+    void testCompleteOversizedLineStillRaises() {
+        int limit = 512;
+        String line = "{\"type\":\"x\",\"data\":\"" + "y".repeat(limit + 100) + "\"}\n";
+
+        assertThatThrownBy(() -> parseJsonParts(List.of(line), makeOptions(limit)))
+                .isInstanceOf(CLIJSONDecodeException.class)
+                .hasMessageContaining("maximum buffer size of " + limit + " bytes");
+    }
+
+    @Test
+    void testMalformedCompleteLineRaises() {
+        // A complete line that looks like JSON but does not parse is corrupt.
+        // It used to be held in the buffer, swallowing the next message.
+        assertThatThrownBy(() -> parseJsonParts(
+                List.of("{\"type\":\"assistant\",\"broken\n{\"type\":\"result\"}\n"), makeOptions()))
+                .isInstanceOf(CLIJSONDecodeException.class)
+                .hasMessageContaining("Failed to decode JSON: {\"type\":\"assistant\",\"broken");
+    }
+
+    @Test
+    void testTrailingContentAfterObjectRaises() {
+        // json.loads rejects "Extra data"; so does the Java parser now.
+        assertThatThrownBy(() -> parseJsonParts(List.of("{\"a\":1} junk\n"), makeOptions()))
+                .isInstanceOf(CLIJSONDecodeException.class);
+        assertThatThrownBy(() -> SubprocessCLITransport.parseStdoutLine("{\"a\":1}{\"b\":2}"))
+                .isInstanceOf(CLIJSONDecodeException.class);
+    }
+
+    @Test
+    void testNonJsonLineStillSkipped() throws Exception {
+        List<Map<String, Object>> messages = parseJsonParts(List.of(
+                "[SandboxDebug] starting up\n{\"type\":\"result\"}\nplain text trailer\n"), makeOptions());
+
+        assertThat(messages).containsExactly(Map.of("type", "result"));
+    }
+
+    @Test
+    void testFinalMessageWithoutTrailingNewlineIsYielded() throws Exception {
+        List<Map<String, Object>> messages = parseJsonParts(
+                List.of("{\"type\":\"result\",\"subtype\":\"success\"}"), makeOptions());
+
+        assertThat(messages).containsExactly(Map.of("type", "result", "subtype", "success"));
+    }
+
+    @Test
+    void testTruncatedFinalLineIsDroppedNotRaised() throws Exception {
+        List<Map<String, Object>> messages = parseJsonParts(
+                List.of("{\"type\":\"result\"}\n{\"type\":\"assist"), makeOptions());
+
+        assertThat(messages).containsExactly(Map.of("type", "result"));
+    }
+
+    @Test
+    void testCrlfLineEndingsAreStripped() throws Exception {
+        List<Map<String, Object>> messages = parseJsonParts(
+                List.of("{\"type\":\"a\"}\r\n{\"type\":\"b\"}\r\n"), makeOptions());
+
+        assertThat(messages).extracting(m -> m.get("type")).containsExactly("a", "b");
+    }
+
     // ==================== Helper Methods ====================
 
     /**
-     * Simulates JSON line parsing similar to SubprocessCLITransport's readLoop.
+     * Feeds the input to the transport's own stdout framing, as one read.
      */
     private List<Map<String, Object>> parseJsonLines(String input, ClaudeAgentOptions options) throws Exception {
         return parseJsonParts(List.of(input), options);
     }
 
     /**
-     * Simulates JSON parsing with multiple input parts (like streaming reads).
+     * Feeds each part to the transport's own stdout framing as one read of
+     * the pipe, the way the CLI's output arrives in chunks.
      */
-    @SuppressWarnings({ "unchecked", "null" })
     private List<Map<String, Object>> parseJsonParts(List<String> parts, ClaudeAgentOptions options) throws Exception {
         List<Map<String, Object>> messages = new ArrayList<>();
-        StringBuilder jsonBuffer = new StringBuilder();
         int maxBufferSize = options.maxBufferSize() != null ? options.maxBufferSize() : 1024 * 1024;
-
-        for (String part : parts) {
-            // Split by newlines and process
-            String[] lines = part.split("\n", -1);
-            for (String line : lines) {
-                line = line.trim();
-                if (line.isEmpty()) {
-                    continue;
-                }
-
-                jsonBuffer.append(line);
-
-                if (jsonBuffer.length() > maxBufferSize) {
-                    int bufferLength = jsonBuffer.length();
-                    throw new CLIJSONDecodeException(
-                            "JSON message exceeded maximum buffer size of " + maxBufferSize + " bytes",
-                            new IllegalStateException(
-                                    "Buffer size " + bufferLength + " exceeds limit " + maxBufferSize));
-                }
-
-                try {
-                    Map<String, Object> data = objectMapper.readValue(jsonBuffer.toString(), Map.class);
-                    jsonBuffer.setLength(0);
-                    messages.add(data);
-                } catch (JsonProcessingException e) {
-                    // Incomplete JSON, continue accumulating
-                }
+        SubprocessCLITransport.LineFramer framer = new SubprocessCLITransport.LineFramer(
+                new ChunkedReader(parts), maxBufferSize);
+        String line;
+        while ((line = framer.readLine()) != null) {
+            Map<String, Object> data = SubprocessCLITransport.stdoutMessage(
+                    line, framer.lastLineTerminated(), maxBufferSize);
+            if (data != null) {
+                messages.add(data);
             }
         }
-
         return messages;
+    }
+
+    /** A Reader that returns each chunk from a separate read() call. */
+    static final class ChunkedReader extends Reader {
+
+        private final List<String> chunks;
+        private int index;
+        private int offset;
+
+        ChunkedReader(List<String> chunks) {
+            this.chunks = chunks;
+        }
+
+        @Override
+        public int read(char[] cbuf, int off, int len) {
+            while ((index < chunks.size()) && (offset >= chunks.get(index).length())) {
+                index++;
+                offset = 0;
+            }
+            if (index >= chunks.size()) {
+                return -1;
+            }
+            String chunk = chunks.get(index);
+            int n = Math.min(len, chunk.length() - offset);
+            chunk.getChars(offset, offset + n, cbuf, off);
+            offset += n;
+            return n;
+        }
+
+        @Override
+        public void close() {
+        }
+
     }
 
 }

@@ -25,20 +25,49 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *                        use ID
  * @param toolUseResult   metadata about tool execution results, including file
  *                        edit details like oldString, newString, and
- *                        structuredPatch
+ *                        structuredPatch. This is the map itself when the CLI
+ *                        sent a JSON object. Any other value (a string, a
+ *                        list, a number) is wrapped as
+ *                        {@code {"unknown": value}}. <b>That wrapping is
+ *                        deprecated</b>: read {@link #toolUseResultRaw()},
+ *                        which holds the value as sent.
  * @param origin          provenance of this message — see
  *                        {@link MessageOrigin}. Null when the CLI did not
  *                        attribute it. Populated on injected turns (task
  *                        notifications, channel/peer messages, ...) and on
  *                        user messages the CLI replays; tool-result messages
  *                        never carry it.
+ * @param toolUseResultRaw the {@code tool_use_result} value exactly as the CLI
+ *                        sent it, or null when absent: a {@code Map} for a
+ *                        JSON object (the same map as {@code toolUseResult}),
+ *                        otherwise a {@code String}, {@code List},
+ *                        {@code Number} or {@code Boolean}. This is what the
+ *                        Python SDK's {@code tool_use_result} holds.
  */
 public record UserMessage(
         @JsonProperty("content") Object content,
         @JsonProperty("uuid") @Nullable String uuid,
         @JsonProperty("parent_tool_use_id") @Nullable String parentToolUseId,
         @JsonProperty("tool_use_result") @Nullable Map<String, Object> toolUseResult,
-        @JsonProperty("origin") @Nullable MessageOrigin origin) implements Message {
+        @JsonProperty("origin") @Nullable MessageOrigin origin,
+        @JsonProperty("tool_use_result_raw") @Nullable Object toolUseResultRaw) implements Message {
+
+    /**
+     * Backwards-compatible constructor without {@code toolUseResultRaw}, which
+     * is set to {@code toolUseResult}.
+     *
+     * @param content         the message content (String or List of ContentBlock)
+     * @param uuid            unique identifier for the message
+     * @param parentToolUseId the tool use ID this message responds to, if any
+     * @param toolUseResult   metadata about tool execution results
+     * @param origin          provenance of this message, if attributed
+     */
+    public UserMessage(Object content, @Nullable String uuid,
+            @Nullable String parentToolUseId,
+            @Nullable Map<String, Object> toolUseResult,
+            @Nullable MessageOrigin origin) {
+        this(content, uuid, parentToolUseId, toolUseResult, origin, toolUseResult);
+    }
 
     /**
      * Backwards-compatible constructor without {@code origin}.
@@ -51,7 +80,7 @@ public record UserMessage(
     public UserMessage(Object content, @Nullable String uuid,
             @Nullable String parentToolUseId,
             @Nullable Map<String, Object> toolUseResult) {
-        this(content, uuid, parentToolUseId, toolUseResult, null);
+        this(content, uuid, parentToolUseId, toolUseResult, null, toolUseResult);
     }
 
     @Override

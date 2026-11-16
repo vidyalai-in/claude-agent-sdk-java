@@ -14,7 +14,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *
  * @param toolUseId the ID of the tool use this result corresponds to
  * @param content   the result content (can be string or structured data)
- * @param isError   whether the tool execution resulted in an error
+ * @param isError   whether the tool execution resulted in an error; null when
+ *                  absent or not a JSON boolean
  */
 public record ToolResultBlock(
         @JsonProperty("tool_use_id") String toolUseId,

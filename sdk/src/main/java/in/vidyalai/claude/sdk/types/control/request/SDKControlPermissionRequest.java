@@ -8,6 +8,7 @@ import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonTypeName;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
 /**
  * Request for tool permission callback.
@@ -16,12 +17,20 @@ import com.fasterxml.jackson.annotation.JsonTypeName;
  * Part of the SDK Control Protocol for bidirectional communication
  * between the SDK and CLI. This request is sent when the CLI needs to
  * check if a tool can be used.
+ *
+ * <p>
+ * {@code permissionSuggestions} is read leniently: a suggestion this SDK
+ * cannot represent (an unknown {@code type}, {@code destination},
+ * {@code behavior} or {@code mode}) is left out, and the others are kept, so
+ * one unfamiliar suggestion never fails the request or keeps the
+ * {@code canUseTool} callback from running.
  */
 @JsonTypeName("can_use_tool")
 public record SDKControlPermissionRequest(
         @JsonProperty("tool_name") String toolName,
         Map<String, Object> input,
-        @JsonProperty("permission_suggestions") @Nullable List<PermissionUpdate> permissionSuggestions,
+        @JsonProperty("permission_suggestions") @JsonDeserialize(using = LenientPermissionUpdateListDeserializer.class)
+        @Nullable List<PermissionUpdate> permissionSuggestions,
         @JsonProperty("blocked_path") @Nullable String blockedPath,
         @JsonProperty("tool_use_id") @Nullable String toolUseId,
         @JsonProperty("agent_id") @Nullable String agentId,

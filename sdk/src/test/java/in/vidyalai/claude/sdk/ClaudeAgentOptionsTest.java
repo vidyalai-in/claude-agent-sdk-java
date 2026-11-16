@@ -423,4 +423,13 @@ class ClaudeAgentOptionsTest {
         assertThat(options.effort()).isNull();
     }
 
+
+    @org.junit.jupiter.api.Test
+    void maxMsgQSizeBelowOneIsRejectedByTheBuilder() {
+        IllegalArgumentException thrown = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> ClaudeAgentOptions.builder().maxMsgQSize(0));
+        org.assertj.core.api.Assertions.assertThat(thrown.getMessage()).contains("at least 1");
+        org.assertj.core.api.Assertions.assertThat(ClaudeAgentOptions.builder().maxMsgQSize(1).build().maxMsgQSize())
+                .isEqualTo(1);
+    }
 }

@@ -101,7 +101,7 @@ class SessionMutationsTest {
     }
 
     @Test
-    void testTryAppend_missingFileReturnsFalse(@TempDir Path tempDir) {
+    void testTryAppend_missingFileReturnsFalse(@TempDir Path tempDir) throws IOException {
         Path f = tempDir.resolve("nonexistent.jsonl");
         boolean result = SessionMutations.tryAppend(f, "data\n");
         assertThat(result).isFalse();
@@ -109,7 +109,7 @@ class SessionMutationsTest {
     }
 
     @Test
-    void testTryAppend_missingParentDirReturnsFalse(@TempDir Path tempDir) {
+    void testTryAppend_missingParentDirReturnsFalse(@TempDir Path tempDir) throws IOException {
         Path f = tempDir.resolve("nonexistent").resolve("file.jsonl");
         boolean result = SessionMutations.tryAppend(f, "data\n");
         assertThat(result).isFalse();

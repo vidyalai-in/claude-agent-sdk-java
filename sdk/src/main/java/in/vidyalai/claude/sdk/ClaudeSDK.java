@@ -128,11 +128,20 @@ public final class ClaudeSDK {
      * List<Message> messages = ClaudeSDK.query("What is 2+2?", options);
      * }</pre>
      *
+     * <p>
+     * If the calling thread is interrupted while it waits for messages, the
+     * query stops and throws a {@link QueryFailedException} carrying the
+     * messages received so far (its cause is a {@code ClaudeSDKException}
+     * caused by the {@link InterruptedException}), with the interrupt flag
+     * restored. The CLI is still shut down gracefully first.
+     *
      * @param prompt  the prompt to send
      * @param options the agent options
      * @return list of all messages received
      * @throws IllegalArgumentException if both canUseTool and
      *                                  permissionPromptToolName are set
+     * @throws QueryFailedException     if the run ends in an error, or the
+     *                                  calling thread is interrupted
      */
     public static List<Message> query(String prompt, ClaudeAgentOptions options) {
         return query(prompt, options, null);
@@ -160,11 +169,23 @@ public final class ClaudeSDK {
      *                                  permissionPromptToolName are set
      */
     public static List<Message> query(String prompt, ClaudeAgentOptions options, Transport transport) {
-        var messages = List.of(
-                Map.of("type", "user", "session_id", "",
-                        "message", Map.of("role", "user", "content", (prompt == null) ? "" : prompt)));
+        return queryInternal(stringPromptMessages(prompt).iterator(), options, transport, SubprocessCLITransport::new);
+    }
 
-        return queryInternal(messages.iterator(), options, transport);
+    /**
+     * The one user message a string prompt is sent as, with an explicit
+     * {@code parent_tool_use_id: null} as the Python SDK sends it.
+     */
+    static List<Map<String, Object>> stringPromptMessages(@Nullable String prompt) {
+        Map<String, Object> content = new java.util.LinkedHashMap<>();
+        content.put("role", "user");
+        content.put("content", (prompt == null) ? "" : prompt);
+        Map<String, Object> message = new java.util.LinkedHashMap<>();
+        message.put("type", "user");
+        message.put("session_id", "");
+        message.put("message", content);
+        message.put("parent_tool_use_id", null);
+        return List.of(message);
     }
 
     /**
@@ -223,11 +244,21 @@ public final class ClaudeSDK {
      */
     public static List<Message> query(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options,
             Transport transport) {
-        return queryInternal(messageStream, options, transport);
+        return queryInternal(messageStream, options, transport, SubprocessCLITransport::new);
+    }
+
+    /**
+     * A streaming query whose default transport is built by
+     * {@code transportFactory}. Package-private: a test seam, so a scripted
+     * transport can stand in while store-backed resume still runs.
+     */
+    static List<Message> queryWithTransportFactory(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options,
+            java.util.function.Function<ClaudeAgentOptions, Transport> transportFactory) {
+        return queryInternal(messageStream, options, null, transportFactory);
     }
 
     private static List<Message> queryInternal(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options,
-            Transport transport) {
+            @Nullable Transport customTransport, java.util.function.Function<ClaudeAgentOptions, Transport> transportFactory) {
         // Validate and configure options
         ClaudeAgentOptions effectiveOptions = CanUseToolConfig.configureCanUseTool(options);
 
@@ -238,7 +269,7 @@ public final class ClaudeSDK {
         // from the temp CLAUDE_CONFIG_DIR. Skipped when a custom transport was
         // supplied (the materialized options would never reach the transport).
         in.vidyalai.claude.sdk.internal.SessionResume.MaterializedResume materialized = null;
-        if (transport == null) {
+        if (customTransport == null) {
             try {
                 materialized = in.vidyalai.claude.sdk.internal.SessionResume.materializeResumeSession(effectiveOptions);
             } catch (java.io.IOException e) {
@@ -249,14 +280,19 @@ public final class ClaudeSDK {
                 effectiveOptions = in.vidyalai.claude.sdk.internal.SessionResume.applyMaterializedOptions(
                         effectiveOptions, materialized);
             }
-            // Create transport in streaming mode
-            transport = new SubprocessCLITransport(effectiveOptions);
         }
 
         List<Message> messages = new ArrayList<>();
+        Transport transport = customTransport;
         QueryHandler queryHandler = null;
         ExecutorService streamingExecutor = null;
         try {
+            // Built inside the try, so a failure to build it (a missing CLI
+            // throws CLINotFoundException here) still removes the temp
+            // CLAUDE_CONFIG_DIR below.
+            if (transport == null) {
+                transport = transportFactory.apply(effectiveOptions);
+            }
             transport.connect();
 
             // Calculate initialize timeout
@@ -346,9 +382,16 @@ public final class ClaudeSDK {
                 }
             }
 
-            // Close QueryHandler
+            // Close QueryHandler (which closes the transport); a transport
+            // that failed before the handler took it over is closed here.
             if (queryHandler != null) {
                 queryHandler.close();
+            } else if (transport != null) {
+                try {
+                    transport.close();
+                } catch (RuntimeException e) {
+                    // Already failing; the original error is the one to report.
+                }
             }
 
             // Clean up materialized resume temp dir AFTER the subprocess and
@@ -565,13 +608,21 @@ public final class ClaudeSDK {
     }
 
     /**
-     * Lists sessions for a specific project directory.
+     * Lists sessions for a specific project directory and its git worktrees.
+     *
+     * <p>
+     * The directory is canonicalized (symlinks resolved, NFC-normalized)
+     * before it is matched against the project directories. When it is inside
+     * a git repository with more than one worktree, sessions from every
+     * worktree are included, as with
+     * {@code listSessions(directory, null, true)}. Pass {@code false} for
+     * {@code includeWorktrees} to read only this directory's sessions.
      *
      * @param directory the project working directory to filter by
      * @return session list sorted by last-modified descending
      */
     public static List<SDKSessionInfo> listSessions(Path directory) {
-        return Sessions.listSessions(directory.toString(), null, false);
+        return Sessions.listSessions(directory.toString(), null, true);
     }
 
     /**
@@ -800,7 +851,7 @@ public final class ClaudeSDK {
      * @throws java.io.IOException           if the write fails.
      */
     public static void renameSession(String sessionId, String title, Path directory) throws java.io.IOException {
-        SessionMutations.renameSession(sessionId, title, directory.toString());
+        SessionMutations.renameSession(sessionId, title, directory != null ? directory.toString() : null);
     }
 
     /**
@@ -837,7 +888,7 @@ public final class ClaudeSDK {
      * @throws java.io.IOException           if the write fails.
      */
     public static void tagSession(String sessionId, @Nullable String tag, Path directory) throws java.io.IOException {
-        SessionMutations.tagSession(sessionId, tag, directory.toString());
+        SessionMutations.tagSession(sessionId, tag, directory != null ? directory.toString() : null);
     }
 
     /**
@@ -869,7 +920,7 @@ public final class ClaudeSDK {
      * @throws java.io.IOException           if the delete fails.
      */
     public static void deleteSession(String sessionId, Path directory) throws java.io.IOException {
-        SessionMutations.deleteSession(sessionId, directory.toString());
+        SessionMutations.deleteSession(sessionId, directory != null ? directory.toString() : null);
     }
 
     /**
@@ -905,7 +956,7 @@ public final class ClaudeSDK {
      * @throws java.io.IOException           if the read or write fails.
      */
     public static ForkSessionResult forkSession(String sessionId, Path directory) throws java.io.IOException {
-        return SessionMutations.forkSession(sessionId, directory.toString(), null, null);
+        return SessionMutations.forkSession(sessionId, directory != null ? directory.toString() : null, null, null);
     }
 
     /**

@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
@@ -25,6 +26,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param httpProxyPort           HTTP proxy port if bringing your own proxy
  * @param socksProxyPort          SOCKS5 proxy port if bringing your own proxy
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record SandboxNetworkConfig(
                 @JsonProperty("allowedDomains") @Nullable List<String> allowedDomains,
                 @JsonProperty("deniedDomains") @Nullable List<String> deniedDomains,

@@ -13,7 +13,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * For {@code subtype == "init"}, {@code data} is the session metadata frame
  * described by {@link SystemInitData}; read it with {@link #initData()}.
  *
- * @param subtype the subtype of the system message
+ * <p>
+ * The subtypes the SDK models ({@code task_started}, {@code task_progress},
+ * {@code task_notification}, {@code task_updated}, {@code hook_started},
+ * {@code hook_response}, {@code mirror_error}) parse to their own records,
+ * which are not {@code SystemMessage} instances. See {@link Message}.
+ *
+ * @param subtype the subtype of the system message. Null only when the CLI
+ *                sent {@code subtype} as an explicit null or a non-string (the
+ *                raw value stays in {@code data})
  * @param data    the raw data dictionary containing all message fields
  */
 public record SystemMessage(

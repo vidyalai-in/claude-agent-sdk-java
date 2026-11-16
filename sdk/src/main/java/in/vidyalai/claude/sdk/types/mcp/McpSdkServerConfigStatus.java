@@ -1,6 +1,8 @@
 package in.vidyalai.claude.sdk.types.mcp;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 
 /**
  * SDK MCP server configuration as returned in status responses.
@@ -13,10 +15,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *
  * @param name the server name
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonPropertyOrder({ "type" })
 public record McpSdkServerConfigStatus(
         @JsonProperty("name") String name) implements McpServerStatusConfig {
 
     @Override
+    @JsonProperty("type")
     public String type() {
         return "sdk";
     }

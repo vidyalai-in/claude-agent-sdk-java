@@ -78,12 +78,17 @@ class HookAndInitTypesTest {
         Set<String> optional = new HashSet<>();
         for (RecordComponent c : type.getRecordComponents()) {
             // @JsonProperty propagates to the field, not the component
-            String key;
+            java.lang.reflect.Field field;
             try {
-                key = type.getDeclaredField(c.getName()).getAnnotation(JsonProperty.class).value();
+                field = type.getDeclaredField(c.getName());
             } catch (NoSuchFieldException e) {
                 throw new AssertionError(e);
             }
+            if (!field.isAnnotationPresent(JsonProperty.class)) {
+                // Not a JSON key: HookInput.raw(), the CLI's whole map
+                continue;
+            }
+            String key = field.getAnnotation(JsonProperty.class).value();
             boolean nullable = c.getAnnotatedType().isAnnotationPresent(Nullable.class);
             (nullable ? optional : required).add(key);
         }

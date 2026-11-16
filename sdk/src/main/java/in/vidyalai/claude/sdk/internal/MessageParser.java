@@ -80,9 +80,15 @@ public final class MessageParser {
             throw new MessageParseException("Invalid message data type (expected dict, got null)", null);
         }
 
-        String messageType = (String) data.get("type");
-        if (messageType == null) {
+        Object rawType = data.get("type");
+        if (rawType == null) {
             throw new MessageParseException("Message missing 'type' field", data);
+        }
+        if (!(rawType instanceof String messageType)) {
+            // A non-string type can name no message this SDK models; the Python
+            // SDK falls through to its unknown-type branch and skips it too.
+            logger.fine("Skipping message with non-string type: " + rawType);
+            return null;
         }
 
         try {
@@ -159,20 +165,11 @@ public final class MessageParser {
     @SuppressWarnings("unchecked")
     private static UserMessage parseUserMessage(Map<String, Object> data) throws MessageParseException {
         try {
-            String parentToolUseId = (String) data.get("parent_tool_use_id");
-            String uuid = (String) data.get("uuid");
+            String parentToolUseId = optString(data, "parent_tool_use_id");
+            String uuid = optString(data, "uuid");
             MessageOrigin origin = parseOrigin(data);
-            Object tuResult = data.get("tool_use_result");
-            Map<String, Object> toolUseResult;
-            if (tuResult == null) {
-                toolUseResult = null;
-            } else if (tuResult instanceof Map<?, ?> m) {
-                toolUseResult = (Map<String, Object>) m;
-            } else if (tuResult instanceof String s) {
-                toolUseResult = Map.of("unknown", s);
-            } else {
-                toolUseResult = Map.of("unknown", tuResult.toString());
-            }
+            Object toolUseResultRaw = data.get("tool_use_result");
+            Map<String, Object> toolUseResult = toolUseResultAsMap(toolUseResultRaw);
 
             Map<String, Object> message = (Map<String, Object>) data.get("message");
             if (message == null) {
@@ -190,12 +187,15 @@ public final class MessageParser {
                                 data);
                     }
                     Map<String, Object> block = (Map<String, Object>) item;
-                    blocks.add(parseContentBlock(block));
+                    ContentBlock parsed = parseContentBlock(block);
+                    if (parsed != null) {
+                        blocks.add(parsed);
+                    }
                 }
-                return new UserMessage(blocks, uuid, parentToolUseId, toolUseResult, origin);
+                return new UserMessage(blocks, uuid, parentToolUseId, toolUseResult, origin, toolUseResultRaw);
             }
 
-            return new UserMessage(content, uuid, parentToolUseId, toolUseResult, origin);
+            return new UserMessage(content, uuid, parentToolUseId, toolUseResult, origin, toolUseResultRaw);
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in user message: " + e.getMessage(), data, e);
         }
@@ -204,7 +204,7 @@ public final class MessageParser {
     @SuppressWarnings("unchecked")
     private static AssistantMessage parseAssistantMessage(Map<String, Object> data) throws MessageParseException {
         try {
-            String parentToolUseId = (String) data.get("parent_tool_use_id");
+            String parentToolUseId = optString(data, "parent_tool_use_id");
 
             Map<String, Object> message = (Map<String, Object>) data.get("message");
             if (message == null) {
@@ -231,42 +231,67 @@ public final class MessageParser {
                             data);
                 }
                 Map<String, Object> block = (Map<String, Object>) item;
-                blocks.add(parseContentBlock(block));
+                ContentBlock parsed = parseContentBlock(block);
+                if (parsed != null) {
+                    blocks.add(parsed);
+                }
             }
 
-            String model = (String) message.get("model");
-            if (model == null) {
-                throw new MessageParseException("Missing 'model' field in assistant message", data);
-            }
+            // Required, as in the Python SDK: an absent key fails the frame, an
+            // explicit null is read as null.
+            String model = getPresent(message, "model", String.class);
 
-            // Error field is at top level of response, not inside message
-            String errorStr = (String) data.get("error");
-            AssistantMessageError error = ((errorStr != null)
-                    ? AssistantMessageError.fromValue(errorStr)
-                    : null);
+            // Error field is at top level of response, not inside message. An
+            // unrecognized string, or a value that is not a string at all, reads
+            // as UNKNOWN; the value as sent is kept on errorRaw.
+            Object errorRaw = data.get("error");
+            AssistantMessageError error = null;
+            if (errorRaw instanceof String errorStr) {
+                error = AssistantMessageError.fromValue(errorStr);
+            } else if (errorRaw != null) {
+                error = AssistantMessageError.UNKNOWN;
+            }
 
             // Per-turn usage from the API (input_tokens, output_tokens, cache tokens, etc.)
-            Map<String, Object> usage = (Map<String, Object>) message.get("usage");
+            Map<String, Object> usage = optMap(message, "usage");
 
             // Additional metadata fields
-            String messageId = (String) message.get("id");
-            String stopReason = (String) message.get("stop_reason");
-            String sessionId = (String) data.get("session_id");
-            String uuid = (String) data.get("uuid");
+            String messageId = optString(message, "id");
+            String stopReason = optString(message, "stop_reason");
+            String sessionId = optString(data, "session_id");
+            String uuid = optString(data, "uuid");
 
             return new AssistantMessage(blocks, model, parentToolUseId, error, usage,
                     messageId, stopReason, sessionId, uuid,
-                    parseUserMessageUuid(data), parseUserMessageUuids(data));
+                    parseUserMessageUuid(data), parseUserMessageUuids(data), errorRaw);
         } catch (ClassCastException e) {
             throw new MessageParseException("Invalid field type in assistant message: " + e.getMessage(), data, e);
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static ContentBlock parseContentBlock(Map<String, Object> block) throws MessageParseException {
-        String type = (String) block.get("type");
-        if (type == null) {
+    /**
+     * Parses one content block.
+     *
+     * <p>
+     * Deliberately more lenient than the Python SDK in one direction: a missing
+     * field of a modelled block reads as null rather than failing the frame.
+     * Where Python passes a value through untyped (a non-object {@code input},
+     * {@code content} or {@code source}, a non-boolean {@code is_error}) the
+     * typed record cannot hold it, so it reads as null too, instead of raising
+     * a {@link ClassCastException}.
+     *
+     * @return the block, or null for a block whose {@code type} is an explicit
+     *         null or not a string: Python matches it against no known name and
+     *         drops it, and so does this parser
+     */
+    private static @Nullable ContentBlock parseContentBlock(Map<String, Object> block)
+            throws MessageParseException {
+        if (!block.containsKey("type")) {
             throw new MessageParseException("Missing 'type' field in content block", block);
+        }
+        if (!(block.get("type") instanceof String type)) {
+            logger.fine("Skipping content block with a null or non-string type: " + block.get("type"));
+            return null;
         }
 
         return switch (type) {
@@ -277,22 +302,22 @@ public final class MessageParser {
             case "tool_use" -> new ToolUseBlock(
                     (String) block.get("id"),
                     (String) block.get("name"),
-                    (Map<String, Object>) block.get("input"));
+                    optMap(block, "input"));
             case "tool_result" -> new ToolResultBlock(
                     (String) block.get("tool_use_id"),
                     block.get("content"),
-                    (Boolean) block.get("is_error"));
+                    (block.get("is_error") instanceof Boolean b) ? b : null);
             case "server_tool_use" -> new ServerToolUseBlock(
                     (String) block.get("id"),
                     (String) block.get("name"),
-                    (Map<String, Object>) block.get("input"));
+                    optMap(block, "input"));
             case "advisor_tool_result" -> new ServerToolResultBlock(
                     (String) block.get("tool_use_id"),
-                    (Map<String, Object>) block.get("content"));
+                    optMap(block, "content"));
             // Reading a PDF produces these on the user side without the caller asking for
             // anything image- or document-shaped, so they are not an exotic case.
-            case "image" -> new ImageBlock((Map<String, Object>) block.get("source"));
-            case "document" -> new DocumentBlock((Map<String, Object>) block.get("source"));
+            case "image" -> new ImageBlock(optMap(block, "source"));
+            case "document" -> new DocumentBlock(optMap(block, "source"));
             default -> unknownBlock(type, block);
         };
     }
@@ -317,41 +342,54 @@ public final class MessageParser {
     @SuppressWarnings("unchecked")
     private static Message parseSystemMessage(Map<String, Object> data) throws MessageParseException {
         try {
-            String subtype = (String) data.get("subtype");
-            if (subtype == null) {
+            if (!data.containsKey("subtype")) {
                 throw new MessageParseException("Missing required field: 'subtype' in system message", data);
+            }
+            if (!(data.get("subtype") instanceof String subtype)) {
+                // Python accepts any present subtype and yields a generic
+                // SystemMessage; the raw value stays in data.
+                return new SystemMessage(null, data);
             }
             return switch (subtype) {
                 case "task_started" -> new TaskStartedMessage(
                         subtype,
                         data,
-                        getRequired(data, "task_id", String.class),
-                        getRequired(data, "description", String.class),
-                        getRequired(data, "uuid", String.class),
-                        getRequired(data, "session_id", String.class),
-                        (String) data.get("tool_use_id"),
-                        (String) data.get("task_type"));
-                case "task_progress" -> new TaskProgressMessage(
-                        subtype,
-                        data,
-                        getRequired(data, "task_id", String.class),
-                        getRequired(data, "description", String.class),
-                        parseTaskUsage(getRequired(data, "usage", Map.class)),
-                        getRequired(data, "uuid", String.class),
-                        getRequired(data, "session_id", String.class),
-                        (String) data.get("tool_use_id"),
-                        (String) data.get("last_tool_name"));
-                case "task_notification" -> new TaskNotificationMessage(
-                        subtype,
-                        data,
-                        getRequired(data, "task_id", String.class),
-                        TaskNotificationStatus.fromValue(getRequired(data, "status", String.class)),
-                        getRequired(data, "output_file", String.class),
-                        getRequired(data, "summary", String.class),
-                        getRequired(data, "uuid", String.class),
-                        getRequired(data, "session_id", String.class),
-                        (String) data.get("tool_use_id"),
-                        parseTaskUsageOptional((Map<String, Object>) data.get("usage")));
+                        getPresent(data, "task_id", String.class),
+                        getPresent(data, "description", String.class),
+                        getPresent(data, "uuid", String.class),
+                        getPresent(data, "session_id", String.class),
+                        optString(data, "tool_use_id"),
+                        optString(data, "task_type"));
+                case "task_progress" -> {
+                    requireKey(data, "usage");
+                    yield new TaskProgressMessage(
+                            subtype,
+                            data,
+                            getPresent(data, "task_id", String.class),
+                            getPresent(data, "description", String.class),
+                            parseTaskUsageOptional(optMap(data, "usage")),
+                            getPresent(data, "uuid", String.class),
+                            getPresent(data, "session_id", String.class),
+                            optString(data, "tool_use_id"),
+                            optString(data, "last_tool_name"));
+                }
+                case "task_notification" -> {
+                    // A status this SDK does not model (or a non-string one) reads
+                    // as null rather than ending the stream; the wire value stays
+                    // on statusValue() and in data. Python passes it through.
+                    requireKey(data, "status");
+                    yield new TaskNotificationMessage(
+                            subtype,
+                            data,
+                            getPresent(data, "task_id", String.class),
+                            parseTaskNotificationStatus(data.get("status")),
+                            getPresent(data, "output_file", String.class),
+                            getPresent(data, "summary", String.class),
+                            getPresent(data, "uuid", String.class),
+                            getPresent(data, "session_id", String.class),
+                            optString(data, "tool_use_id"),
+                            parseTaskUsageOptional(optMap(data, "usage")));
+                }
                 case "task_updated" -> {
                     // Terminal task completion sometimes arrives only as a
                     // task_updated patch (no separate task_notification), so
@@ -417,27 +455,33 @@ public final class MessageParser {
     @SuppressWarnings("unchecked")
     private static ResultMessage parseResultMessage(Map<String, Object> data) throws MessageParseException {
         try {
-            String subtype = getRequired(data, "subtype", String.class);
-            int durationMs = getRequired(data, "duration_ms", Number.class).intValue();
-            int durationApiMs = getRequired(data, "duration_api_ms", Number.class).intValue();
-            boolean isError = getRequired(data, "is_error", Boolean.class);
-            int numTurns = getRequired(data, "num_turns", Number.class).intValue();
-            String sessionId = getRequired(data, "session_id", String.class);
+            // Required, as in the Python SDK: an absent key fails the frame. An
+            // explicit null is accepted there; here it reads as null, or as
+            // 0/false for the primitive components.
+            String subtype = getPresent(data, "subtype", String.class);
+            int durationMs = intOrZero(getPresent(data, "duration_ms", Number.class));
+            int durationApiMs = intOrZero(getPresent(data, "duration_api_ms", Number.class));
+            Boolean isErrorValue = getPresent(data, "is_error", Boolean.class);
+            boolean isError = (isErrorValue != null) && isErrorValue;
+            int numTurns = intOrZero(getPresent(data, "num_turns", Number.class));
+            String sessionId = getPresent(data, "session_id", String.class);
 
             // Optional fields
-            String stopReason = (String) data.get("stop_reason");
+            String stopReason = optString(data, "stop_reason");
             Double totalCostUsd = null;
             if (data.get("total_cost_usd") instanceof Number n) {
                 totalCostUsd = n.doubleValue();
             }
 
-            Map<String, Object> usage = (Map<String, Object>) data.get("usage");
-            String result = (String) data.get("result");
+            Map<String, Object> usage = optMap(data, "usage");
+            String result = optString(data, "result");
             Object structuredOutput = data.get("structured_output");
 
             // Additional metadata fields
             Map<String, ModelUsage> modelUsage = parseModelUsage(data.get("modelUsage"));
-            List<Object> permissionDenials = (List<Object>) data.get("permission_denials");
+            List<Object> permissionDenials = (data.get("permission_denials") instanceof List<?> denials)
+                    ? (List<Object>) denials
+                    : null;
             // The CLI emits a list of strings here. Tolerate a bare string
             // (older or buggy emitters) and ignore any other shape rather than
             // rejecting the whole result frame — the Python SDK does no type
@@ -446,8 +490,8 @@ public final class MessageParser {
             List<String> errors = (rawErrors instanceof List<?> errorList)
                     ? (List<String>) errorList
                     : ((rawErrors instanceof String errorText) ? List.of(errorText) : null);
-            String uuid = (String) data.get("uuid");
-            String terminalReason = (String) data.get("terminal_reason");
+            String uuid = optString(data, "uuid");
+            String terminalReason = optString(data, "terminal_reason");
 
             DeferredToolUse deferredToolUse = null;
             Object deferredRaw = data.get("deferred_tool_use");
@@ -554,10 +598,15 @@ public final class MessageParser {
     @SuppressWarnings("unchecked")
     private static RateLimitEvent parseRateLimitEvent(Map<String, Object> data) throws MessageParseException {
         try {
-            String uuid = getRequired(data, "uuid", String.class);
-            String sessionId = getRequired(data, "session_id", String.class);
+            String uuid = getPresent(data, "uuid", String.class);
+            String sessionId = getPresent(data, "session_id", String.class);
+            // A null rate_limit_info is rejected, as in Python (where indexing
+            // None raises). A present status of any value parses; one this SDK
+            // does not model reads as null, with the wire value still on raw().
             Map<String, Object> info = getRequired(data, "rate_limit_info", Map.class);
-            RateLimitStatus status = parseRateLimitStatus(getRequired(info, "status", String.class));
+            requireKey(info, "status");
+            RateLimitStatus status = (info.get("status") instanceof String s)
+                    ? parseRateLimitStatus(s) : null;
             Long resetsAt = (info.get("resetsAt") instanceof Number n) ? n.longValue() : null;
             RateLimitType rateLimitType = info.get("rateLimitType") instanceof String s
                     ? parseRateLimitType(s) : null;
@@ -565,7 +614,7 @@ public final class MessageParser {
             RateLimitStatus overageStatus = info.get("overageStatus") instanceof String s
                     ? parseRateLimitStatus(s) : null;
             Long overageResetsAt = (info.get("overageResetsAt") instanceof Number n) ? n.longValue() : null;
-            String overageDisabledReason = (String) info.get("overageDisabledReason");
+            String overageDisabledReason = optString(info, "overageDisabledReason");
             RateLimitInfo rateLimitInfo = new RateLimitInfo(
                     status, resetsAt, rateLimitType, utilization,
                     overageStatus, overageResetsAt, overageDisabledReason, info);
@@ -580,9 +629,9 @@ public final class MessageParser {
     private static ConversationResetMessage parseConversationResetMessage(Map<String, Object> data)
             throws MessageParseException {
         try {
-            String newConversationId = getRequired(data, "new_conversation_id", String.class);
-            String uuid = getRequired(data, "uuid", String.class);
-            String sessionId = getRequired(data, "session_id", String.class);
+            String newConversationId = getPresent(data, "new_conversation_id", String.class);
+            String uuid = getPresent(data, "uuid", String.class);
+            String sessionId = getPresent(data, "session_id", String.class);
             return new ConversationResetMessage(newConversationId, uuid, sessionId);
         } catch (MessageParseException e) {
             throw new MessageParseException(
@@ -590,16 +639,15 @@ public final class MessageParser {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static StreamEvent parseStreamEvent(Map<String, Object> data) throws MessageParseException {
         try {
-            String uuid = getRequired(data, "uuid", String.class);
-            String sessionId = getRequired(data, "session_id", String.class);
-            Map<String, Object> event = (Map<String, Object>) data.get("event");
-            if (event == null) {
+            String uuid = getPresent(data, "uuid", String.class);
+            String sessionId = getPresent(data, "session_id", String.class);
+            if (!data.containsKey("event")) {
                 throw new MessageParseException("Missing 'event' field in stream_event message", data);
             }
-            String parentToolUseId = (String) data.get("parent_tool_use_id");
+            Map<String, Object> event = optMap(data, "event");
+            String parentToolUseId = optString(data, "parent_tool_use_id");
 
             return new StreamEvent(uuid, sessionId, event, parentToolUseId,
                     parseUserMessageUuid(data), parseUserMessageUuids(data));
@@ -636,6 +684,92 @@ public final class MessageParser {
             logger.fine("Unknown RateLimitType value: " + value);
             return null;
         }
+    }
+
+    private static @Nullable TaskNotificationStatus parseTaskNotificationStatus(@Nullable Object value) {
+        TaskNotificationStatus status = (value instanceof String s)
+                ? TaskNotificationStatus.fromValueOrNull(s)
+                : null;
+        if ((status == null) && (value != null)) {
+            logger.fine("Unknown TaskNotificationStatus value: " + value);
+        }
+        return status;
+    }
+
+    /**
+     * The compatibility view of {@code tool_use_result} on
+     * {@link UserMessage#toolUseResult()}: the object itself when the CLI sent
+     * one, otherwise the value wrapped as {@code {"unknown": value}}.
+     *
+     * <p>
+     * The wrapped value is the one received, not its {@code toString()}: for a
+     * string that is what this method always produced, and for a list or number
+     * the old {@code toString()} was Java's own rendering, which no caller could
+     * read back. The wrapping itself is deprecated in favour of
+     * {@link UserMessage#toolUseResultRaw()}.
+     */
+    @SuppressWarnings("unchecked")
+    private static @Nullable Map<String, Object> toolUseResultAsMap(@Nullable Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        if (raw instanceof Map<?, ?> m) {
+            return (Map<String, Object>) m;
+        }
+        return Map.of("unknown", raw);
+    }
+
+    /** Reads an optional string; absent, null or any other type reads as null. */
+    private static @Nullable String optString(Map<String, Object> data, String key) {
+        return (data.get(key) instanceof String s) ? s : null;
+    }
+
+    /** Reads an optional object; absent, null or any other type reads as null. */
+    @SuppressWarnings("unchecked")
+    private static @Nullable Map<String, Object> optMap(Map<String, Object> data, String key) {
+        return (data.get(key) instanceof Map<?, ?> m) ? (Map<String, Object>) m : null;
+    }
+
+    private static int intOrZero(@Nullable Number value) {
+        return (value != null) ? value.intValue() : 0;
+    }
+
+    /**
+     * Fails when {@code key} is absent, as indexing a missing key does in the
+     * Python SDK. A key that is present with a null value passes.
+     */
+    private static void requireKey(Map<String, Object> data, String key) throws MessageParseException {
+        if (!data.containsKey(key)) {
+            throw new MessageParseException("Missing required field: " + key, data);
+        }
+    }
+
+    /**
+     * Reads a field the frame must carry, accepting an explicit null.
+     *
+     * <p>
+     * Matches the Python SDK, whose {@code data[key]} fails only on an absent
+     * key and returns {@code None} for a present null. A non-null value of the
+     * wrong type is still rejected: the typed record cannot hold it.
+     *
+     * @return the value, or null if the key is present with a null value
+     * @throws MessageParseException if the key is absent or the value has the
+     *                               wrong type
+     */
+    private static <T> @Nullable T getPresent(Map<String, Object> data, String key, Class<T> type)
+            throws MessageParseException {
+        requireKey(data, key);
+        Object value = data.get(key);
+        if (value == null) {
+            return null;
+        }
+        if (!type.isInstance(value)) {
+            throw new MessageParseException(
+                    "Invalid type for field '" + key + "': expected " + type.getSimpleName() + ", got "
+                            + value.getClass().getSimpleName(),
+                    data);
+        }
+        return type.cast(value);
     }
 
     private static <T> T getRequired(Map<String, Object> data, String key, Class<T> type) throws MessageParseException {

@@ -1,8 +1,13 @@
 package in.vidyalai.claude.sdk.types.hook.input;
 
+import java.util.Map;
+
 import org.jspecify.annotations.Nullable;
 
+import com.fasterxml.jackson.annotation.JacksonInject;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.OptBoolean;
 
 import in.vidyalai.claude.sdk.types.hook.HookEvent;
 
@@ -27,6 +32,9 @@ import in.vidyalai.claude.sdk.types.hook.HookEvent;
  *                       hooks that fire within a tool-use context (PreToolUse,
  *                       PostToolUse, Stop, SubagentStop, etc.) on models that
  *                       support effort
+ * @param raw the CLI's original hook input, every key included (also the
+ *            ones this record does not model); empty when constructed
+ *            directly
  */
 public record SubagentStartHookInput(
         @JsonProperty("session_id") String sessionId,
@@ -36,7 +44,32 @@ public record SubagentStartHookInput(
         @JsonProperty("agent_id") String agentId,
         @JsonProperty("agent_type") String agentType,
         @JsonProperty("prompt_id") @Nullable String promptId,
-        @JsonProperty("effort") @Nullable HookEffort effort) implements HookInput {
+        @JsonProperty("effort") @Nullable HookEffort effort,
+        @JsonIgnore @JacksonInject(value = HookInput.RAW_INJECTABLE_ID, useInput = OptBoolean.FALSE,
+                optional = OptBoolean.TRUE) Map<String, Object> raw) implements HookInput {
+
+    /**
+     * Copies {@code raw} (the CLI's original input) into an unmodifiable
+     * map; {@code null} reads as empty.
+     */
+    public SubagentStartHookInput {
+        raw = HookInputRaw.copy(raw);
+    }
+
+    /**
+     * Constructor without {@code raw}: {@link #raw()} is empty.
+     */
+    public SubagentStartHookInput(String sessionId,
+            String transcriptPath,
+            String cwd,
+            @Nullable String permissionMode,
+            String agentId,
+            String agentType,
+            @Nullable String promptId,
+            @Nullable HookEffort effort) {
+        this(sessionId, transcriptPath, cwd, permissionMode, agentId, agentType, promptId, effort,
+                null);
+    }
 
     /**
      * Backwards-compatible constructor without {@code promptId},

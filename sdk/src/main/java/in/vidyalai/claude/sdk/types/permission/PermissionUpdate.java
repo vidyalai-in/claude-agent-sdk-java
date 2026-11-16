@@ -60,8 +60,17 @@ public final class PermissionUpdate {
      * Creates a PermissionUpdate from a Map (for Jackson deserialization).
      * This is the inverse of {@link #toMap()}.
      *
+     * <p>
+     * Absent optional fields (including the {@code mode} of a
+     * {@code setMode} update) read as null. A value this SDK cannot represent
+     * (an unknown {@code type}, {@code destination}, {@code behavior} or
+     * {@code mode}) throws; when the CLI offers such a suggestion on a
+     * permission request, the SDK skips that one suggestion and still runs
+     * the {@code canUseTool} callback with the others.
+     *
      * @param map the map representation from JSON
      * @return a PermissionUpdate instance
+     * @throws IllegalArgumentException if a value cannot be represented
      */
     @JsonCreator
     @SuppressWarnings("unchecked")
@@ -84,7 +93,10 @@ public final class PermissionUpdate {
                 yield new PermissionUpdate(type, rules, behavior, null, null, destination);
             }
             case SET_MODE -> {
-                PermissionMode mode = PermissionMode.fromValue((String) map.get(MODE));
+                // A missing mode is kept as null, as the Python SDK keeps it
+                // (toMap() then omits it), rather than failing the update.
+                String modeStr = (String) map.get(MODE);
+                PermissionMode mode = ((modeStr != null) ? PermissionMode.fromValue(modeStr) : null);
                 yield new PermissionUpdate(type, null, null, mode, null, destination);
             }
             case ADD_DIRS, REMOVE_DIRS -> {

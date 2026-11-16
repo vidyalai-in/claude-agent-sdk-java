@@ -10,14 +10,22 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * System message emitted when a task completes, fails, or is stopped.
  *
  * <p>
- * Subclass of SystemMessage: existing {@code instanceof} checks and pattern matching
- * on {@code SystemMessage} continue to match. The base {@code subtype} and {@code data}
- * fields remain populated with the raw payload.
+ * <b>Not a {@link SystemMessage} instance.</b> On the wire this is a
+ * {@code system} message, and {@link #type()} returns {@code "system"}, but
+ * Java records cannot extend one another, so it is a sibling record in the
+ * sealed {@link Message} hierarchy: {@code instanceof SystemMessage} is
+ * {@code false} for it. (In the Python SDK it subclasses
+ * {@code SystemMessage}.) Match it by its own type, or, to handle every
+ * system message alike, test {@code "system".equals(message.type())} and read
+ * {@code subtype()} and {@code data()}, which hold what a
+ * {@code SystemMessage} would: the subtype and the raw payload.
  *
  * @param subtype    always "task_notification"
  * @param data       raw message data
  * @param taskId     unique task identifier
- * @param status     task completion status
+ * @param status     task completion status, or null when the CLI sent a value
+ *                   this SDK version does not recognize (or none); the wire
+ *                   string is on {@link #statusValue()}
  * @param outputFile path to task output file
  * @param summary    human-readable task summary
  * @param uuid       message UUID
@@ -29,7 +37,7 @@ public record TaskNotificationMessage(
         @JsonProperty("subtype") String subtype,
         @JsonProperty("data") Map<String, Object> data,
         @JsonProperty("task_id") String taskId,
-        @JsonProperty("status") TaskNotificationStatus status,
+        @JsonProperty("status") @Nullable TaskNotificationStatus status,
         @JsonProperty("output_file") String outputFile,
         @JsonProperty("summary") String summary,
         @JsonProperty("uuid") String uuid,
@@ -40,6 +48,19 @@ public record TaskNotificationMessage(
     @Override
     public String type() {
         return "system";
+    }
+
+    /**
+     * The {@code status} string exactly as the CLI sent it.
+     *
+     * <p>
+     * Use it when {@link #status()} is null: the CLI reported a status this SDK
+     * version does not model.
+     *
+     * @return the wire status, or null if it is absent or not a string
+     */
+    public @Nullable String statusValue() {
+        return ((data.get("status") instanceof String s) ? s : null);
     }
 
     /**

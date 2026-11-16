@@ -347,25 +347,42 @@ public final class SessionResume {
      * when set, else {@code ~/.claude.json} (NOT
      * {@code ~/.claude/.claude.json})</li>
      * </ul>
+     *
+     * <p>Each variable is read from {@code options.env()} first, then the
+     * process environment; an empty value counts as unset, as in Python.
      */
     private static void copyAuthFiles(Path tmpBase, Map<String, String> optEnv) {
-        String callerConfigDir = optEnv.get("CLAUDE_CONFIG_DIR");
-        if (callerConfigDir == null) {
-            callerConfigDir = System.getenv("CLAUDE_CONFIG_DIR");
-        }
+        AuthEnvironment authEnv = authEnvironment;
+        String callerConfigDir = envValue(optEnv, authEnv, "CLAUDE_CONFIG_DIR");
         Path sourceConfigDir = callerConfigDir != null
                 ? Path.of(callerConfigDir)
-                : Path.of(System.getProperty("user.home"), ".claude");
+                : authEnv.homeDir().resolve(".claude");
 
         // Copy .credentials.json with refreshToken redacted.
         byte[] credsBytes = readIfPresent(sourceConfigDir.resolve(".credentials.json"));
         String credsJson = credsBytes != null ? new String(credsBytes, StandardCharsets.UTF_8) : null;
+
+        // macOS default setup keeps OAuth tokens in the Keychain, not a file.
+        // Redirecting CLAUDE_CONFIG_DIR changes the Keychain service-name
+        // suffix, so the subprocess's lookup misses and falls back to
+        // plainTextStorage at tmpBase/.credentials.json. Populate that file
+        // from the parent's Keychain so the resumed subprocess can auth.
+        // Skipped when env-based auth or a custom config dir is already in
+        // play. As in Python, a Keychain hit wins over a credentials file.
+        if (callerConfigDir == null
+                && envValue(optEnv, authEnv, "ANTHROPIC_API_KEY") == null
+                && envValue(optEnv, authEnv, "CLAUDE_CODE_OAUTH_TOKEN") == null) {
+            String keychain = readKeychainCredentials(authEnv);
+            if (keychain != null) {
+                credsJson = keychain;
+            }
+        }
         writeRedactedCredentials(credsJson, tmpBase.resolve(".credentials.json"));
 
         // Copy .claude.json from CLAUDE_CONFIG_DIR or ~/.claude.json (NOT ~/.claude/.claude.json).
         Path claudeJsonSrc = callerConfigDir != null
                 ? Path.of(callerConfigDir).resolve(".claude.json")
-                : Path.of(System.getProperty("user.home"), ".claude.json");
+                : authEnv.homeDir().resolve(".claude.json");
         copyIfPresent(claudeJsonSrc, tmpBase.resolve(".claude.json"));
 
         // User settings carry `apiKeyHelper` (a fourth auth mechanism alongside
@@ -379,6 +396,160 @@ public final class SessionResume {
             copyIfPresent(sourceConfigDir.resolve(name), tmpBase.resolve(name),
                     SessionResume::stripSettingsForResume);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // macOS Keychain fallback
+    // -----------------------------------------------------------------------
+
+    /** Keychain service the CLI stores OAuth credentials under for the default config dir. */
+    static final String KEYCHAIN_SERVICE_NAME = "Claude Code-credentials";
+
+    /** Timeout for the {@code security} lookup, as in Python ({@code timeout=5}). */
+    static final long KEYCHAIN_TIMEOUT_MS = 5_000L;
+
+    /** Exit status and standard output of a finished command. */
+    record CommandResult(int exitCode, String stdout) {
+    }
+
+    /**
+     * What {@link #copyAuthFiles} reads from the host: process environment,
+     * home directory, platform, and external commands. A seam so tests can
+     * simulate macOS and the {@code security} tool on any platform.
+     */
+    interface AuthEnvironment {
+
+        @Nullable
+        String getenv(String name);
+
+        Path homeDir();
+
+        boolean isMacOs();
+
+        /**
+         * Run {@code command}, waiting at most {@code timeoutMs}. Returns
+         * {@code null} when it cannot be started or does not finish in time.
+         */
+        @Nullable
+        CommandResult run(List<String> command, long timeoutMs);
+    }
+
+    /** The real host. */
+    static final AuthEnvironment SYSTEM_AUTH_ENVIRONMENT = new AuthEnvironment() {
+        @Override
+        public @Nullable String getenv(String name) {
+            return System.getenv(name);
+        }
+
+        @Override
+        public Path homeDir() {
+            return Path.of(System.getProperty("user.home"));
+        }
+
+        @Override
+        public boolean isMacOs() {
+            return System.getProperty("os.name", "").startsWith("Mac");
+        }
+
+        @Override
+        public @Nullable CommandResult run(List<String> command, long timeoutMs) {
+            return runCommand(command, timeoutMs);
+        }
+    };
+
+    private static volatile AuthEnvironment authEnvironment = SYSTEM_AUTH_ENVIRONMENT;
+
+    /** Test hook: replace the host seam, returning the previous one. */
+    static AuthEnvironment setAuthEnvironment(AuthEnvironment env) {
+        AuthEnvironment previous = authEnvironment;
+        authEnvironment = env;
+        return previous;
+    }
+
+    /** {@code optEnv[name] or os.environ[name]}, with empty strings treated as unset. */
+    private static @Nullable String envValue(Map<String, String> optEnv, AuthEnvironment authEnv, String name) {
+        String v = optEnv.get(name);
+        if (v != null && !v.isEmpty()) {
+            return v;
+        }
+        v = authEnv.getenv(name);
+        return v != null && !v.isEmpty() ? v : null;
+    }
+
+    /**
+     * Read the OAuth credentials JSON from the macOS Keychain (default service
+     * name), with the same {@code security find-generic-password} invocation
+     * and timeout as Python's {@code _read_keychain_credentials}.
+     *
+     * <p>Best effort: returns {@code null} off macOS, when the command cannot
+     * run, times out or exits non-zero, or prints nothing.
+     */
+    static @Nullable String readKeychainCredentials(AuthEnvironment authEnv) {
+        if (!authEnv.isMacOs()) {
+            return null;
+        }
+        String user = authEnv.getenv("USER");
+        if (user == null || user.isEmpty()) {
+            user = System.getProperty("user.name");
+        }
+        if (user == null || user.isEmpty()) {
+            user = "claude-code-user";
+        }
+        CommandResult result;
+        try {
+            result = authEnv.run(
+                    List.of("security", "find-generic-password", "-a", user, "-w", "-s",
+                            KEYCHAIN_SERVICE_NAME),
+                    KEYCHAIN_TIMEOUT_MS);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if (result == null || result.exitCode() != 0) {
+            return null;
+        }
+        String out = result.stdout().strip();
+        return out.isEmpty() ? null : out;
+    }
+
+    /**
+     * Run a command, capturing stdout (stderr discarded). Returns {@code null}
+     * when it cannot be started, is interrupted, or outlives {@code timeoutMs};
+     * a command that times out is killed.
+     */
+    private static @Nullable CommandResult runCommand(List<String> command, long timeoutMs) {
+        Process process;
+        try {
+            process = new ProcessBuilder(command)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+        try {
+            process.getOutputStream().close();
+        } catch (IOException ignored) {
+            // The command does not read stdin.
+        }
+        java.io.ByteArrayOutputStream stdout = new java.io.ByteArrayOutputStream();
+        Thread reader = Threads.start("SessionResume-Keychain-", () -> {
+            try (var in = process.getInputStream()) {
+                in.transferTo(stdout);
+            } catch (IOException ignored) {
+                // Process killed or stream closed.
+            }
+        });
+        try {
+            if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                return null;
+            }
+            reader.join(timeoutMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            process.destroyForcibly();
+            return null;
+        }
+        return new CommandResult(process.exitValue(), stdout.toString(StandardCharsets.UTF_8));
     }
 
     /** User-settings filenames seeded into the temp config dir on resume. */
@@ -488,7 +659,8 @@ public final class SessionResume {
             if (oauth instanceof Map<?, ?> oauthMap) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> mutable = new LinkedHashMap<>((Map<String, Object>) oauthMap);
-                if (mutable.remove("refreshToken") != null) {
+                if (mutable.containsKey("refreshToken")) {
+                    mutable.remove("refreshToken");
                     data.put("claudeAiOauth", mutable);
                     out = MAPPER.writeValueAsString(data);
                 }

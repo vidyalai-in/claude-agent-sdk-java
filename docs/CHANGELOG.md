@@ -5,6 +5,150 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-11-16
+
+A full parity audit against Python SDK v0.2.182 (commit `4720d36`). Earlier syncs ported only the Python commits made since the previous sync, so a gap one sync missed was never looked at again. This release compares the current code of both SDKs area by area: control protocol, transport, message parsing, hook/permission/config types, SDK MCP servers, local sessions and SessionStore. It fixes every difference found, or records it below and in `PYTHON_SDK_PARITY.md` as deliberate.
+
+### Breaking
+- **`ClaudeAgentOptions.user(...)` now fails `connect()`** with `CLIConnectionException`, and is deprecated. The option was accepted and silently ignored: the CLI ran as the JVM's user. Python runs the CLI as that user, which a Java `ProcessBuilder` cannot do.
+- **`ClaudeSDK.listSessions(Path)` includes the directory's git worktrees**, as Python's default does. Pass `includeWorktrees=false` to the three- or four-argument overload to opt out.
+- **New record components:**
+  - `UserMessage.toolUseResultRaw`, `AssistantMessage.errorRaw` and `AgentDefinition.numericEffort`.
+  - A `raw` component on all ten hook input records.
+
+  Every previous constructor is kept. Record deconstruction patterns on JDK 21+ must add the new components.
+- **Exceptions and failures that change:**
+  - Spawn errors other than a missing executable (EACCES, for example) are now `CLIConnectionException` with the cause chained, no longer `CLINotFoundException`.
+  - A plugin whose type isn't `local` now throws, as do an MCP config and a JSON schema that can't be serialized. These used to be skipped with a warning.
+  - A complete stdout line that starts like JSON but doesn't parse, or has content after the object, now throws `CLIJSONDecodeException`.
+  - `getSessionInfoFromStore` lets an adapter's `load()` failure propagate instead of reporting the session as not found.
+- **`PermissionUpdateDestination.CLI_ARG`** is a new constant, so an exhaustive `switch` over the enum needs a case for it.
+
+### Added
+- **`@ToolParam(name, description, required)`** for `@Tool` method parameters and record components. The description goes on the property; `name` covers code compiled without `-parameters`; `required = false` makes a parameter optional. `AutoSchemaGeneration` shows it with `typed` (`-Dexec.args="typed"`).
+- **`@Tool` parameter types** get real schemas, and arguments are converted with the same per-type rules:
+  - `List`/`Set`/arrays with typed `items`;
+  - enums as a string `enum`;
+  - `char` as a one-character string;
+  - `Optional<T>` as an optional `T`;
+  - `UUID`, `URI`, `Path` and `java.time` types as formatted strings;
+  - `Map<String, V>`;
+  - records as nested objects.
+- **Input-schema shorthand** `Map.of("text", String.class)`, which expands to an object schema with every key required, as Python's `{"text": str}` does. Only a map whose values are all Java types (`Class`, `Type`, `TypeReference`) is the shorthand; any other map is a JSON Schema and is published as written. One without a top-level `type` gets `"type": "object"`, which MCP requires. A map with no JSON Schema keyword (such as `Map.of("text", "string")`) is logged as a warning.
+- **`McpMessageHandler.openSession()` / `SdkMcpServer.openSession()`**: every client gets its own session of a shared SDK MCP server.
+- **MCP protocol version 2025-11-25** is now offered and is the latest.
+- **`HookInput.raw()`**: the CLI's hook input exactly as sent, including fields newer than the typed record.
+- **`HookOutput.Builder.extraField(...)` / `extraFields(...)`** for output keys the typed builder doesn't model.
+- **Numeric agent effort:** `AgentDefinition.withEffort(int)` is sent as a JSON number. `withEffort(String)` and `withEffort(EffortLevel)` are also new. `AgentsExample` uses it.
+- **`UserMessage.toolUseResultRaw()`**: `tool_use_result` exactly as sent, even when it isn't an object.
+- **`AssistantMessage.errorRaw()`**: the wire `error` value, kept when it maps to `UNKNOWN`.
+- **`TaskNotificationMessage.statusValue()`** and `TaskNotificationStatus.fromValueOrNull(String)`.
+- **macOS Keychain credentials on store resume.** When `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are unset, the SDK reads the login from the Keychain (`security find-generic-password`), as Python does. It writes it into the temporary config directory with the refresh token redacted.
+- **`ClaudeAgentOptions.extraArgs`** accepts `null` values (a bare flag) and keeps insertion order. A blank value still means a bare flag.
+- **`ThinkingConfigEnabled(0)`** is accepted and sends `--max-thinking-tokens 0`, as Python does.
+
+### Changed
+- **`canUseTool` and hook callbacks have no SDK-side time limit**, as in Python. They used to be cut off after 60 seconds, which failed a human approval or a hook whose own `timeout` was longer. Cancellation (`control_cancel_request`, `close()`) still stops them. Outbound control requests keep their 60-second timeout.
+- **A full message queue applies back-pressure** instead of dropping messages after 5 seconds. The end of the stream and any error are always delivered, even to an iterator created later.
+- **Transcript-mirror flushes** before a result, at the end of the stream and on close now wait for the store. They are no longer cut off at 5 seconds, so the store holds the turn when the result arrives. Every flush still finishes within `TranscriptMirrorBatcher.flushTimeoutMs()`: append timeout × attempts plus backoff, 181 seconds by default.
+- **`close()` cancels in-flight `canUseTool` and hook callbacks** at once, instead of waiting up to 5 seconds.
+- **Control messages keep `null` values.** Tool input, `updatedInput`, MCP results and hook outputs are sent exactly as given, as Python's `json.dumps` sends them.
+  - Initialize sends `"hooks": null` and `"matcher": null`.
+  - String prompts send `"parent_tool_use_id": null`.
+  - A JSON-RPC error sends `"id": null`.
+- **Empty strings and `0` are no longer sent as CLI flags.** This covers `model`, `fallbackModel`, `maxTurns`, `permissionPromptToolName`, `resume`, `sessionId`, `settings` and an empty `mcpServersJson`, which Python omits by truthiness.
+- **CLI stderr is inherited** by the JVM when no `stderrCallback` is set, as in Python. It used to be piped and never read.
+- **stderr lines reach `stderrCallback` as Python frames them:**
+  - split on `\n` only;
+  - trailing whitespace stripped;
+  - blank lines skipped;
+  - a line is cut at `maxBufferSize`.
+- **`connect("")` sends the empty prompt**, as Python does.
+- **Interrupting a thread that waits for messages throws** `ClaudeSDKException` (cause `InterruptedException`, interrupt flag restored), instead of ending the stream as if it were complete. `ClaudeSDK.query` throws `QueryFailedException` with the messages collected so far instead of returning a truncated list.
+- **`maxMsgQSize` is a soft limit.** The reader waits when the queue is full, but keeps reading while an outbound control request (`interrupt()`, `setModel()`, `getMcpStatus()`, ...) waits for its answer, so that answer can arrive. Nothing is dropped, and order is kept. The overflow lasts at most until that request is answered or times out (60 seconds). `Builder.maxMsgQSize` now rejects values below 1 immediately, instead of after `connect()` has started the CLI.
+- **`connect()`, `disconnect()` and `close()` are serialized.** A `close()` that arrives while `connect()` is running makes `connect()` release everything and throw `IllegalStateException`.
+- **A `@Tool` method that returns `null`**, or whose future completes with `null`, is answered with an error result ("no result"), as Python answers a handler returning `None`. A method declared `void`, `Void` or `CompletableFuture<Void>` still answers with a success whose text is `"null"`, as before.
+- **First-prompt extraction matches Python.** It covers `firstPrompt`, the summary fallback, fork titles and the `SessionSummary` fold.
+  - The same skip rules, including `[Request interrupted…]`, IDE tags, `<tick>` and `<goal>`.
+  - The slash-command fallback for any text that has a command tag.
+  - Compact summaries are skipped.
+  - Newlines collapse to spaces, and every text block is tried.
+- **Session paths:**
+  - Directories are canonicalized (realpath + NFC) before session lookups, for disk and store alike. `CLAUDE_CONFIG_DIR` is NFC-normalized too.
+  - An empty `customTitle`, `gitBranch` or `cwd` falls through to the next source.
+- **Store-derived `SDKSessionInfo`** goes through the disk parser:
+  - `fileSize` is the JSONL byte size.
+  - `firstPrompt` and `createdAt` come from the first 64 KB.
+  - `lastModified` comes from the last line.
+  - A row whose load failed has `cwd = null`.
+- **`SessionStoreEntry` no longer requires a `type`**, and `type()` may be null, as Python's entries are opaque. `SessionStoreEntry.of` keeps key order. `importSessionToStore` no longer stops at an untyped line.
+- **`transcript_mirror` entries that are not JSON objects are skipped with a warning**, where they used to be dropped silently. The object entries of the same frame are still mirrored. Python passes such entries to the store, but a `SessionStoreEntry` wraps an object, so the typed `SessionStore` API cannot carry them. The CLI writes transcript lines as objects.
+- **`SessionStoreConformance` is stricter.** It rejects `null` where an empty list is required, and rejects a summarized session missing from `listSessions`. A third-party adapter that returns `null` lists now fails it.
+- **The `TaskNotificationMessage.status()` Javadoc** says it is nullable: an unknown status reads as `null`.
+- **`PreCompactHookInput.trigger()` can be null**, for an unknown value.
+- **`AssistantMessage.model()` is `@Nullable`**: an explicit `"model": null` from the CLI is now read as `null` instead of failing the frame.
+- **`getServerInfo()` returns `{}`**, not null, when the initialize response has no body.
+
+### Fixed
+- **MCP server configs and sandbox settings were sent with unset fields as `null`.**
+  - The CLI silently dropped the MCP server: `new McpStdioServerConfig(cmd)`, `(cmd, args)`, `new McpHttpServerConfig(url)` and `new McpSseServerConfig(url)` never loaded.
+  - A sandbox without `network` failed the run.
+  - An MCP config record inside `AgentDefinition.mcpServers` lost its `"type"`.
+- **Connect failures leaked resources.** `ClaudeSDKClient.connect()` and `ClaudeSDK.query(...)` left the process, the threads and the temporary `CLAUDE_CONFIG_DIR` (with its credentials copy) behind when initialize or the spawn failed. They now clean all of it up and rethrow.
+- **`@Tool` tool parameters:**
+  - A `List`, array, enum, `char` or `Optional` parameter got a schema that rejected every valid argument, so the tool could not be called.
+  - A tool whose future completed with `null` never answered.
+  - A tool exception without a message was reported as `NullPointerException`.
+- **One `SdkMcpServer` shared by concurrent clients mixed their calls.** Request ids collided, one client's cancel reached the other's call, and one client's close failed the other's calls.
+- **Message stream:**
+  - An unknown `task_notification` status ended the message stream.
+  - A malformed `control_response` killed the reader.
+  - One malformed stdout line swallowed every message after it.
+- **Permission and hook leniency:**
+  - A permission suggestion with an unknown type, destination, behavior or mode stopped `canUseTool` from being called; the suggestion is now skipped.
+  - An unknown `PreCompact` trigger failed the hook.
+- **Process lifecycle:**
+  - `close()` could hang forever on a CLI that stayed silent or on a blocked write. Every step now has a bound: 5 s for the lock, 5 s wait, SIGTERM then 5 s, SIGKILL then 5 s.
+  - A non-zero CLI exit could go unreported.
+- **Undrained stderr** could block the CLI once more than a pipe buffer of it had been written.
+- **`disconnect()`/`close()` from a `canUseTool`, hook or SDK MCP tool callback, or from an interrupted thread,** no longer kills the CLI without closing stdin. The CLI gets EOF and its grace period, and the interrupt flag is preserved. The callback's own request is left unanswered.
+- **A control call made while nobody drains the message queue** (`interrupt()`, `setModel()`, `getMcpStatus()` before `receiveResponse()`) no longer times out after 60 seconds behind a full queue.
+- **A `MirrorErrorMessage` always arrives before the `ResultMessage` of its turn**, and before the error that ends a failed stream. In eager mode it could arrive after the result, and on a reader failure it could be lost.
+- **Concurrent `disconnect()`/`close()` calls** could delete a store-backed resume's temporary `CLAUDE_CONFIG_DIR` while the CLI was still exiting.
+- **Transcript mirroring:** in eager mode, drains could append batches out of order. Drains are now strictly FIFO.
+- **Local sessions:**
+  - Lookups could return a different project whose name merely started with the same 50 characters.
+  - Symlinked, relative and NFD directories missed their sessions.
+  - A 0-byte stub transcript hid the real session in a worktree.
+  - The worktree scan included the parent repository's sessions.
+- **Session mutations:**
+  - `renameSession`/`tagSession` had no worktree fallback.
+  - They wrote with seek-then-write, which could overwrite a line a running CLI had just appended. They now use an atomic append that never creates the file, and they report real write errors.
+  - Uppercase session ids were rejected.
+  - An empty `upToMessageId` means a full fork.
+  - Forked transcripts are created with mode 0600.
+- **Store sessions:**
+  - `tagSessionViaStore` now sanitizes like `tagSession` (NFKC plus format and private-use characters).
+  - A `forkSessionViaStore` title falls back to the first prompt.
+  - The fold's `command_fallback` is replaced when it is empty.
+  - Timestamps without an offset are read as UTC.
+- **Transcript reading:**
+  - A truncated last field value is ignored.
+  - A line holding two JSON objects is skipped.
+  - `simpleHash` no longer gives a negative suffix.
+- **Message parsing:**
+  - An explicit `null` or a wrong-typed optional field no longer fails the frame.
+  - A non-object `input`, `content` or `source` on a block no longer fails it.
+  - A non-boolean `is_error` no longer fails it.
+  - A non-string `type` is skipped instead of throwing `ClassCastException`.
+  - A non-object `tool_use_result` is wrapped with the value itself instead of its `toString()`.
+- **SDK MCP request handling:**
+  - A malformed content block in a tool result became an empty success; it is now an error result.
+  - A malformed `mcp_message` was answered with success.
+  - Non-object `arguments` were treated as `{}`.
+  - Tools were listed in hash order instead of registration order.
+- **The task, hook-event and mirror-error message Javadoc** said they were `SystemMessage` subclasses. They are sibling records: `type()` is `"system"`, and they carry `subtype()` and `data()`.
+
 ## [0.2.5] - 2026-11-15
 
 Synced on 2026-11-15 with Python SDK v0.2.182 (commit `4720d36`), from v0.2.168. Most of the 14 releases are bundled-CLI bumps (2.1.304 → 2.1.325) and CI work. The changes below are the ones that affect the SDK.

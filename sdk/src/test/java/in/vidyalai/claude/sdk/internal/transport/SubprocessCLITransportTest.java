@@ -646,6 +646,7 @@ class SubprocessCLITransportTest {
         assertThat(options.extraArgs()).containsEntry("custom-flag", "custom-value");
     }
 
+    @SuppressWarnings("deprecation")
     @Test
     void testOptionsWithUser() {
         ClaudeAgentOptions options = ClaudeAgentOptions.builder()

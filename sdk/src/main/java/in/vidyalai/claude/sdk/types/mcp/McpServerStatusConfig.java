@@ -19,7 +19,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  * <li>{@link McpClaudeAIProxyServerConfig} - Claude AI proxy MCP server</li>
  * </ul>
  */
-@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type", defaultImpl = McpStdioServerConfig.class)
+@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.EXISTING_PROPERTY, property = "type",
+        defaultImpl = McpStdioServerConfig.class)
 @JsonSubTypes({
         @JsonSubTypes.Type(value = McpStdioServerConfig.class, name = "stdio"),
         @JsonSubTypes.Type(value = McpSseServerConfig.class, name = "sse"),

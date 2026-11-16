@@ -2,9 +2,11 @@ package in.vidyalai.claude.sdk.internal.transport;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -26,6 +28,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -34,16 +37,20 @@ import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 
 import in.vidyalai.claude.sdk.ClaudeAgentOptions;
 import in.vidyalai.claude.sdk.exceptions.CLIConnectionException;
 import in.vidyalai.claude.sdk.exceptions.CLIJSONDecodeException;
 import in.vidyalai.claude.sdk.exceptions.CLINotFoundException;
 import in.vidyalai.claude.sdk.exceptions.ProcessException;
+import in.vidyalai.claude.sdk.internal.PyStrings;
 import in.vidyalai.claude.sdk.internal.SdkVersion;
 import in.vidyalai.claude.sdk.internal.Threads;
+import in.vidyalai.claude.sdk.internal.Uninterruptibly;
 import in.vidyalai.claude.sdk.transport.Transport;
 import in.vidyalai.claude.sdk.types.config.SdkBeta;
 import in.vidyalai.claude.sdk.types.config.SettingSource;
@@ -83,11 +90,10 @@ import in.vidyalai.claude.sdk.types.mcp.McpServerConfig;
  * from a shared BufferedReader which is not thread-safe for concurrent
  * access.</li>
  * <li><b>close()</b>: Thread-safe. Can be called concurrently with other
- * operations.
- * Shuts down both executor services gracefully (with 2s timeout each, then
- * forced shutdown with 1s verification), terminates the CLI process (5s
- * graceful, then forced), and cleans up all resources. Logs warnings if
- * resources don't terminate within timeouts.</li>
+ * operations. Every step is bounded, as in the Python SDK: the write lock
+ * (5s), the wait for the CLI to exit after stdin EOF (5s), SIGTERM then 5s,
+ * SIGKILL then 5s, and each executor shutdown (2s, then 1s forced). Logs
+ * warnings if resources don't terminate within timeouts.</li>
  * </ul>
  *
  * <h2>Usage Pattern</h2>
@@ -148,19 +154,15 @@ import in.vidyalai.claude.sdk.types.mcp.McpServerConfig;
  * <p>
  * When {@link #close()} is called:
  * <ol>
- * <li>Cleans up temporary files created for command-line arguments</li>
- * <li>Closes stdin stream to signal end of input to the CLI process</li>
- * <li>Closes stdout and stderr streams</li>
- * <li>Shuts down stderr executor gracefully (2s timeout), then forced (1s
- * verification)</li>
- * <li>Shuts down message reader executor gracefully (2s timeout), then forced
- * (1s verification)</li>
- * <li>Logs warnings if executor threads don't terminate after forced
- * shutdown</li>
- * <li>Terminates CLI process gracefully via {@code destroy()} (5s timeout)</li>
- * <li>Forces process termination via {@code destroyForcibly()} if still alive
- * (2s wait)</li>
- * <li>Logs warning if process termination required force-kill</li>
+ * <li>Closes stdin to signal end of input to the CLI process, under the write
+ * lock (waited for up to 5s; without it, stdin is closed later off the calling
+ * thread)</li>
+ * <li>Waits up to 5s for the CLI to exit, then sends SIGTERM and waits 5s, then
+ * SIGKILL and waits 5s. stdout and stderr stay open meanwhile, so the CLI's
+ * last output still reaches the readers</li>
+ * <li>Shuts down the stderr and message reader executors (2s graceful, then 1s
+ * forced)</li>
+ * <li>Closes the stdout and stderr pipes underneath their readers</li>
  * </ol>
  * <p>
  * <b>Note:</b> In rare cases where threads are stuck in uninterruptible I/O or
@@ -284,9 +286,10 @@ public class SubprocessCLITransport implements Transport {
     @Nullable
     private volatile BufferedWriter stdin;
     @Nullable
-    private volatile BufferedReader stdout;
-    @Nullable
-    private volatile BufferedReader stderr;
+    private volatile Reader stdout;
+    // Set once close() has finished, so a reader stuck on a pipe some other
+    // process still holds open cannot keep hasNext() waiting forever.
+    private volatile boolean closeCompleted;
     @Nullable
     private volatile Exception exitError;
 
@@ -1160,6 +1163,24 @@ public class SubprocessCLITransport implements Transport {
         return new SkillsDefaultsResult(allowedTools, settingSources);
     }
 
+    /** Python truthiness for an optional string flag: neither null nor empty. */
+    private static boolean isSet(@Nullable String value) {
+        return (value != null) && !value.isEmpty();
+    }
+
+    /**
+     * Serializes a flag's JSON value, failing the connect if it can't be.
+     *
+     * @throws CLIConnectionException if the value cannot be serialized
+     */
+    private static String toJson(Object value, String what) {
+        try {
+            return MAPPER.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new CLIConnectionException("Failed to serialize " + what + ": " + e.getOriginalMessage(), e);
+        }
+    }
+
     @SuppressWarnings({ "unchecked", "null" })
     List<String> buildCommand() {
         List<String> cmd = new ArrayList<>();
@@ -1213,7 +1234,12 @@ public class SubprocessCLITransport implements Transport {
             cmd.add(String.join(",", effectiveAllowedTools));
         }
 
-        if (options.maxTurns() != null) {
+        // Several flags below are skipped when empty or zero rather than only
+        // when null: the Python SDK tests them for truthiness, so "" and 0
+        // mean "not set" there. Flags it tests with `is not None`
+        // (maxBudgetUsd, taskBudget, thinking, effort, resumeDropsTurn,
+        // settingSources) keep the null check.
+        if ((options.maxTurns() != null) && (options.maxTurns() != 0)) {
             cmd.add("--max-turns");
             cmd.add(String.valueOf(options.maxTurns()));
         }
@@ -1233,12 +1259,12 @@ public class SubprocessCLITransport implements Transport {
             cmd.add(String.valueOf(options.taskBudget().total()));
         }
 
-        if (options.model() != null) {
+        if (isSet(options.model())) {
             cmd.add("--model");
             cmd.add(options.model());
         }
 
-        if (options.fallbackModel() != null) {
+        if (isSet(options.fallbackModel())) {
             cmd.add("--fallback-model");
             cmd.add(options.fallbackModel());
         }
@@ -1248,7 +1274,7 @@ public class SubprocessCLITransport implements Transport {
             cmd.add(String.join(",", options.betas().stream().map(SdkBeta::getValue).toList()));
         }
 
-        if (options.permissionPromptToolName() != null) {
+        if (isSet(options.permissionPromptToolName())) {
             cmd.add("--permission-prompt-tool");
             cmd.add(options.permissionPromptToolName());
         }
@@ -1267,19 +1293,19 @@ public class SubprocessCLITransport implements Transport {
         // dash-leading value is not bound to the flag and is instead parsed as
         // a separate CLI flag -- letting an untrusted value inject arbitrary
         // flags. The equals form always binds the value to the flag.
-        if (options.resume() != null) {
+        if (isSet(options.resume())) {
             rejectWindowsCmdMetacharacters("resume", options.resume());
             cmd.add("--resume=" + options.resume());
         }
 
-        if (options.sessionId() != null) {
+        if (isSet(options.sessionId())) {
             rejectWindowsCmdMetacharacters("sessionId", options.sessionId());
             cmd.add("--session-id=" + options.sessionId());
         }
 
         // Settings and sandbox
         String settingsValue = buildSettingsValue();
-        if (settingsValue != null) {
+        if (isSet(settingsValue)) {
             cmd.add("--settings");
             cmd.add(settingsValue);
         }
@@ -1294,15 +1320,13 @@ public class SubprocessCLITransport implements Transport {
             if (options.mcpServers() instanceof Map<?, ?> servers) {
                 Map<String, McpServerConfig> mcpServers = (Map<String, McpServerConfig>) servers;
                 if (!mcpServers.isEmpty()) {
-                    try {
-                        String val = MAPPER.writeValueAsString(new McpConfigPayload(mcpServers));
-                        cmd.add("--mcp-config");
-                        cmd.add(val);
-                    } catch (JsonProcessingException e) {
-                        logger.warning("Failed to serialize MCP config: " + e.getMessage());
-                    }
+                    // Raise rather than drop the flag, as json.dumps does in
+                    // the Python SDK: a session without the caller's servers
+                    // is not the session they configured.
+                    cmd.add("--mcp-config");
+                    cmd.add(toJson(new McpConfigPayload(mcpServers), "MCP server config"));
                 }
-            } else if (options.mcpServers() instanceof String s) {
+            } else if ((options.mcpServers() instanceof String s) && !s.isEmpty()) {
                 cmd.add("--mcp-config");
                 cmd.add(s);
             } else if (options.mcpServers() instanceof Path p) {
@@ -1363,14 +1387,20 @@ public class SubprocessCLITransport implements Transport {
             if ("local".equals(plugin.type())) {
                 cmd.add("--plugin-dir");
                 cmd.add(plugin.path());
+            } else {
+                // As the Python SDK's ValueError: a plugin the caller asked
+                // for is never silently left out.
+                throw new IllegalArgumentException("Unsupported plugin type: " + plugin.type());
             }
         }
 
         // Extra args
-        for (Map.Entry<String, String> entry : options.extraArgs().entrySet()) {
+        for (Map.Entry<String, @Nullable String> entry : options.extraArgs().entrySet()) {
             String value = entry.getValue();
             if ((value == null) || value.isBlank()) {
-                // Boolean flag without value
+                // Boolean flag without value. Null is the Python SDK's
+                // spelling; blank is the Java one, because Map.of cannot hold
+                // a null.
                 cmd.add("--" + entry.getKey());
             } else if (value.startsWith("-")) {
                 // In the two-token form a dash-leading value is not bound to its
@@ -1434,13 +1464,8 @@ public class SubprocessCLITransport implements Transport {
         if ((outputFormat != null) && ("json_schema".equals(outputFormat.get("type")))) {
             Object schema = outputFormat.get("schema");
             if (schema != null) {
-                try {
-                    String val = MAPPER.writeValueAsString(schema);
-                    cmd.add("--json-schema");
-                    cmd.add(val);
-                } catch (JsonProcessingException e) {
-                    logger.warning("Failed to serialize output schema: " + e.getMessage());
-                }
+                cmd.add("--json-schema");
+                cmd.add(toJson(schema, "output format JSON schema"));
             }
         }
 
@@ -1456,6 +1481,8 @@ public class SubprocessCLITransport implements Transport {
         if (process != null) {
             return;
         }
+
+        rejectUnsupportedUser(options);
 
         // Validate the resolved CLI before spawning it. This covers every route
         // to the executable path: PATH discovery, an explicit
@@ -1482,11 +1509,15 @@ public class SubprocessCLITransport implements Transport {
                 env.put("PWD", cwd.toString());
             }
 
-            // Pipe stderr only when the caller registered a callback. The
-            // legacy ``--debug-to-stderr`` flag detection was removed in
-            // upstream prep for the CLI flag's removal.
+            // Pipe stderr only when the caller registered a callback.
+            // Otherwise the CLI inherits this process's stderr, as the Python
+            // SDK's stderr=None does: a pipe nobody drains fills up (about
+            // 64 KB) and blocks the CLI on its next write.
             boolean shouldPipeStderr = options.stderrCallback() != null;
             pb.redirectErrorStream(false);
+            if (!shouldPipeStderr) {
+                pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+            }
 
             logger.fine("Claude ENV:" + env);
             process = pb.start();
@@ -1494,56 +1525,304 @@ public class SubprocessCLITransport implements Transport {
 
             stdin = new BufferedWriter(
                     new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
-            stdout = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+            stdout = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8);
 
             // Start stderr reader thread if needed
             if (shouldPipeStderr) {
-                stderr = new BufferedReader(
-                        new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8));
+                Reader localStderr = new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8);
                 // Submit stderr reading task to dedicated executor
-                stderrExecutor.submit(() -> handleStderr(stderr));
+                stderrExecutor.submit(() -> handleStderr(localStderr));
             }
 
             ready.set(true);
 
         } catch (IOException e) {
-            if ((cwd != null) && (!Files.exists(cwd))) {
-                CLIConnectionException error = new CLIConnectionException(
-                        "Working directory does not exist: " + cwd, e);
+            // Only a missing file is "not found", as the Python SDK maps only
+            // FileNotFoundError: a CLI that exists but can't be run (EACCES,
+            // ENOEXEC, ...) is a connection failure with its cause intact.
+            if (isFileNotFound(e)) {
+                if ((cwd != null) && (!Files.exists(cwd))) {
+                    CLIConnectionException error = new CLIConnectionException(
+                            "Working directory does not exist: " + cwd, e);
+                    exitError = error;
+                    throw error;
+                }
+                CLINotFoundException error = new CLINotFoundException("Claude Code not found at", cliPath, e);
                 exitError = error;
                 throw error;
             }
-            CLINotFoundException error = new CLINotFoundException("Claude Code not found at", cliPath);
+            CLIConnectionException error = new CLIConnectionException(
+                    "Failed to start Claude Code: " + describe(e), e);
             exitError = error;
             throw error;
-        } catch (Exception e) {
-            CLIConnectionException error = new CLIConnectionException("Failed to start Claude Code");
+        } catch (RuntimeException e) {
+            CLIConnectionException error = new CLIConnectionException(
+                    "Failed to start Claude Code: " + describe(e), e);
             exitError = error;
             throw error;
         }
     }
 
-    @SuppressWarnings("null")
-    // Package-private for tests.
-    void handleStderr(BufferedReader stderr) {
+    /**
+     * Refuses the {@code user} option, which the Java SDK cannot honor.
+     *
+     * <p>
+     * The Python SDK spawns the CLI as that user. {@link ProcessBuilder} has
+     * no way to switch users, and running the CLI as the JVM's user instead
+     * would quietly give it a different identity, home directory and
+     * credentials than the caller asked for.
+     *
+     * @throws CLIConnectionException if {@code user} is set
+     */
+    static void rejectUnsupportedUser(ClaudeAgentOptions options) {
+        if (options.user() != null) {
+            throw new CLIConnectionException(
+                    "The 'user' option (\"" + options.user() + "\") is not supported by the Java SDK: "
+                            + "Java cannot start the Claude Code CLI as another OS user, and running it as "
+                            + "the JVM's user would ignore the option. Remove user(...) from the options, "
+                            + "or point cliPath(...) at a wrapper that switches users "
+                            + "(e.g. a script running: sudo -u <user> claude \"$@\").");
+        }
+    }
+
+    /**
+     * Whether a spawn failure means the file is missing ({@code ENOENT}).
+     *
+     * <p>
+     * {@link ProcessBuilder#start()} reports every OS error as a plain
+     * {@link IOException} whose message carries the errno, e.g.
+     * {@code Cannot run program "x": error=2, No such file or directory}, or
+     * {@code Exec failed, error: 2 (No such file or directory)} from newer
+     * JDKs' spawn helper; {@code CreateProcess error=2} on Windows has the
+     * same number.
+     */
+    static boolean isFileNotFound(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if ((t instanceof java.nio.file.NoSuchFileException) || (t instanceof java.io.FileNotFoundException)) {
+                return true;
+            }
+            String message = t.getMessage();
+            if ((message != null) && ENOENT_MESSAGE.matcher(message).find()) {
+                return true;
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return false;
+    }
+
+    /** The errno part of a spawn failure for a missing file. */
+    private static final Pattern ENOENT_MESSAGE = Pattern.compile("error(?:=|: )2(?!\\d)");
+
+    /** A throwable's message, or its class name when it has none. */
+    private static String describe(Throwable e) {
+        return (e.getMessage() != null) ? e.getMessage() : e.getClass().getName();
+    }
+
+    /**
+     * Reads the CLI's stderr and hands each line to the stderr callback.
+     *
+     * <p>
+     * Frames lines as the Python SDK's {@code _handle_stderr} does: split on
+     * {@code \n} only (a bare {@code \r}, as a progress line uses, stays in the
+     * line), trailing whitespace stripped, blank lines skipped. A line longer
+     * than {@code maxBufferSize} is passed on in pieces rather than buffered
+     * without bound, and a last line with no newline is still delivered.
+     *
+     * <p>
+     * Package-private for tests.
+     */
+    void handleStderr(Reader stderr) {
+        LineFramer framer = new LineFramer(stderr, maxBufferSize);
         try (stderr) {
             String line;
-            while ((line = stderr.readLine()) != null) {
-                if (options.stderrCallback() != null) {
-                    // Isolate per-line so a raise in the user's callback doesn't
-                    // terminate the loop and silently drop every subsequent
-                    // stderr line for the rest of the session.
-                    try {
-                        options.stderrCallback().accept(line);
-                    } catch (Throwable t) {
-                        logger.log(Level.FINE, "stderr callback raised; continuing", t);
-                    }
-                }
+            while ((line = framer.readLine()) != null) {
+                emitStderrLine(line);
             }
         } catch (Exception e) {
             logger.log(Level.FINE, "stderr stream read failed", e);
+            // Deliver what was read of the line the failure cut off: a
+            // diagnostic written just before the CLI died is the one the
+            // caller needs.
+            emitStderrLine(framer.flush());
         }
+    }
+
+    private void emitStderrLine(String rawLine) {
+        String line = PyStrings.rstrip(rawLine);
+        if (line.isEmpty()) {
+            return;
+        }
+        Consumer<String> callback = options.stderrCallback();
+        if (callback != null) {
+            // Isolate per-line so a raise in the user's callback doesn't
+            // terminate the loop and silently drop every subsequent stderr
+            // line for the rest of the session.
+            try {
+                callback.accept(line);
+            } catch (Throwable t) {
+                logger.log(Level.FINE, "stderr callback raised; continuing", t);
+            }
+        }
+    }
+
+    /** Reads one JSON object per stdout line, rejecting anything after it. */
+    private static final ObjectReader STDOUT_LINE_READER = MAPPER
+            .readerFor(new TypeReference<Map<String, Object>>() {
+            })
+            .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
+    /**
+     * Parses one complete line of the CLI's NDJSON stdout, as the Python SDK's
+     * {@code _parse_stdout_line} does.
+     *
+     * <p>
+     * Returns null for lines that carry no message: blank lines, and non-JSON
+     * output such as {@code [SandboxDebug] ...} that some CLI builds write to
+     * stdout. A line that starts like JSON but does not parse is corrupt — the
+     * line is complete, so no later data can complete it — and throws, as does
+     * one with content after the object ({@code {"a":1} junk}), which Python's
+     * {@code json.loads} rejects too.
+     *
+     * <p>
+     * Package-private for tests.
+     *
+     * @throws CLIJSONDecodeException if the line looks like JSON but is not a
+     *                                single valid JSON object
+     */
+    @Nullable
+    static Map<String, Object> parseStdoutLine(String rawLine) {
+        // A complete line's surrounding whitespace (e.g. the \r of a CRLF) is
+        // meaningless; whitespace inside a value is never at a line's edge.
+        String line = PyStrings.strip(rawLine);
+        if (line.isEmpty()) {
+            return null;
+        }
+        if (!line.startsWith("{")) {
+            logger.fine("Skipping non-JSON line from CLI stdout: " + line.substring(0, Math.min(line.length(), 200)));
+            return null;
+        }
+        try {
+            return STDOUT_LINE_READER.readValue(line);
+        } catch (JsonProcessingException e) {
+            throw new CLIJSONDecodeException(line, e);
+        }
+    }
+
+    /**
+     * The message one framed stdout line carries, or null if none.
+     *
+     * <p>
+     * Bounds a single message, whether it is complete yet or not: a line
+     * longer than {@code maxBufferSize} throws. A line cut off by the end of
+     * the stream ({@code terminated} false and within the bound) is either a
+     * last message whose newline the producer omitted (returned) or one cut
+     * off mid-write, which is unrecoverable and dropped rather than raised.
+     *
+     * <p>
+     * Package-private for tests.
+     *
+     * @throws CLIJSONDecodeException if the line is too long, or is a complete
+     *                                line that looks like JSON but does not
+     *                                parse
+     */
+    @Nullable
+    static Map<String, Object> stdoutMessage(String line, boolean terminated, int maxBufferSize) {
+        if (line.length() > maxBufferSize) {
+            throw new CLIJSONDecodeException(
+                    "JSON message exceeded maximum buffer size of " + maxBufferSize + " bytes",
+                    new IllegalStateException(
+                            "Buffer size " + line.length() + " exceeds limit " + maxBufferSize));
+        }
+        if (terminated) {
+            return parseStdoutLine(line);
+        }
+        try {
+            return parseStdoutLine(line);
+        } catch (CLIJSONDecodeException e) {
+            logger.fine("Dropping truncated JSON at end of CLI stdout: "
+                    + line.substring(0, Math.min(line.length(), 200)));
+            return null;
+        }
+    }
+
+    /**
+     * Splits a character stream into lines on {@code \n}, the way the Python
+     * SDK's {@code _LineFramer} does for a chunked stream.
+     *
+     * <p>
+     * Unlike {@link BufferedReader#readLine()}, a bare {@code \r} does not end a
+     * line, and a line is never held past {@code maxLength}: once the pending
+     * part of a line exceeds it, that part is returned unterminated so the
+     * caller can reject it (stdout) or pass it on (stderr). Characters are
+     * never stripped here; only a complete line may be.
+     *
+     * <p>
+     * Not thread-safe: one reader thread owns it.
+     */
+    static final class LineFramer {
+
+        private final Reader in;
+        private final int maxLength;
+        private final char[] buf = new char[8192];
+        private int pos;
+        private int lim;
+        private final StringBuilder pending = new StringBuilder();
+        private boolean terminated;
+
+        LineFramer(Reader in, int maxLength) {
+            this.in = in;
+            this.maxLength = maxLength;
+        }
+
+        /**
+         * Returns the next line without its {@code \n}, the part of a line
+         * that grew past {@code maxLength}, or the unterminated tail at end of
+         * stream; null once the stream is exhausted.
+         */
+        @Nullable
+        String readLine() throws IOException {
+            terminated = false;
+            while (true) {
+                if (pos >= lim) {
+                    int n = in.read(buf, 0, buf.length);
+                    if (n < 0) {
+                        lim = 0;
+                        pos = 0;
+                        return (pending.length() == 0) ? null : flush();
+                    }
+                    lim = n;
+                    pos = 0;
+                }
+                int start = pos;
+                while ((pos < lim) && (buf[pos] != '\n')) {
+                    pos++;
+                }
+                pending.append(buf, start, pos - start);
+                if (pos < lim) {
+                    pos++; // consume the newline
+                    terminated = true;
+                    return flush();
+                }
+                if (pending.length() > maxLength) {
+                    return flush();
+                }
+            }
+        }
+
+        /** Whether the last line {@link #readLine()} returned ended in a newline. */
+        boolean lastLineTerminated() {
+            return terminated;
+        }
+
+        /** Takes whatever part of a line has been read so far. */
+        String flush() {
+            String line = pending.toString();
+            pending.setLength(0);
+            return line;
+        }
+
     }
 
     /**
@@ -1715,7 +1994,17 @@ public class SubprocessCLITransport implements Transport {
         return ready.get();
     }
 
-    @SuppressWarnings("null")
+    /**
+     * Closes stdin, waits for the CLI to exit, then terminates it if needed.
+     *
+     * <p>
+     * Every step is bounded: the write lock, the grace period after stdin
+     * EOF, SIGTERM, SIGKILL, and joining the reader threads. A caller whose
+     * interrupt flag is set, or who is interrupted meanwhile, still gets the
+     * whole graceful sequence: the flag is cleared for the duration and set
+     * again on return. Otherwise an interrupted close() would skip stdin EOF
+     * and kill the CLI before it could flush its session file.
+     */
     @Override
     public void close() {
         logger.fine("Closing CLI transport");
@@ -1723,113 +2012,169 @@ public class SubprocessCLITransport implements Transport {
         if (closed.getAndSet(true)) {
             return; // Already closed
         }
+        boolean interrupted = Thread.interrupted();
+        try {
+            interrupted |= closeGracefully();
+        } finally {
+            if (interrupted || Thread.interrupted()) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
 
-        if (process == null) {
+    /**
+     * The body of {@link #close()}, run with the interrupt flag clear.
+     *
+     * @return whether an interrupt arrived meanwhile
+     */
+    private boolean closeGracefully() {
+        boolean interrupted = false;
+        Process localProcess = process;
+        if (localProcess == null) {
             ready.set(false);
             // Shutdown executors even if process is null
-            shutdownExecutors();
-            return;
+            interrupted |= shutdownExecutors();
+            closeCompleted = true;
+            return interrupted;
         }
 
-        // Close stdin
-        writeLock.lock();
-        try {
-            ready.set(false);
-            if (stdin != null) {
-                try {
-                    stdin.close();
-                } catch (IOException e) {
-                    // Ignore
-                }
-                stdin = null;
-            }
-        } finally {
-            writeLock.unlock();
-        }
-
-        // Close stdout
-        if (stdout != null) {
+        // Close stdin, holding the write lock so a concurrent write() can't
+        // race it. Bounded, as in the Python SDK: a writer blocked on a full
+        // stdin pipe must not pin close() forever.
+        boolean locked = false;
+        long lockDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(closeStepTimeoutMillis);
+        while (true) {
             try {
-                stdout.close();
-            } catch (IOException e) {
-                // Ignore
-            }
-        }
-
-        // Close stderr reader
-        if (stderr != null) {
-            try {
-                stderr.close();
-            } catch (IOException e) {
-                // Ignore
-            }
-        }
-
-        // Shutdown executor services (interrupts running tasks)
-        shutdownExecutors();
-
-        // Wait for graceful shutdown after stdin EOF, then terminate if needed.
-        // The subprocess needs time to flush its session file after receiving
-        // EOF on stdin. Without this grace period, SIGTERM can interrupt the
-        // write and cause the last assistant message to be lost.
-        if ((process != null) && process.isAlive()) {
-            try {
-                boolean exited = process.waitFor(5, TimeUnit.SECONDS);
-                if (!exited && process.isAlive()) {
-                    // Graceful shutdown timed out — force terminate
-                    logger.warning("Process did not exit within grace period, sending SIGTERM");
-                    process.destroy();
-                    boolean terminated = process.waitFor(5, TimeUnit.SECONDS);
-                    if (!terminated && process.isAlive()) {
-                        logger.warning("Process did not terminate after SIGTERM, forcing kill");
-                        process.destroyForcibly();
-                        process.waitFor(2, TimeUnit.SECONDS);
-                    }
-                }
+                locked = writeLock.tryLock(Math.max(0L, lockDeadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+                break;
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                process.destroyForcibly();
+                interrupted = true;
             }
         }
+        ready.set(false);
+        if (locked) {
+            try {
+                closeQuietly(stdin);
+                stdin = null;
+            } finally {
+                writeLock.unlock();
+            }
+        } else {
+            logger.warning("A write to the CLI's stdin is still blocked; stopping the CLI without closing stdin");
+        }
+
+        // Wait for graceful shutdown after stdin EOF, then terminate if
+        // needed. The subprocess needs time to flush its session file after
+        // receiving EOF on stdin; without this grace period, SIGTERM can
+        // interrupt the write and lose the last assistant message. Every step
+        // is bounded, as in the Python SDK.
+        //
+        // stdout and stderr stay open meanwhile: the CLI may still be writing
+        // (and the stderr callback still reading) while it shuts down, and
+        // closing a BufferedReader would block on the lock its reader thread
+        // holds inside readLine() anyway. The ProcessHandle signals are used
+        // rather than Process.destroy(), which also closes the streams and so
+        // can block on a writer stuck in a full stdin pipe.
+        ProcessHandle handle = localProcess.toHandle();
+        AtomicBoolean interruptedWaiting = new AtomicBoolean();
+        if (!waitForExit(localProcess, interruptedWaiting)) {
+            logger.warning("Process did not exit within grace period, sending SIGTERM");
+            handle.destroy();
+            if (!waitForExit(localProcess, interruptedWaiting)) {
+                logger.warning("Process did not terminate after SIGTERM, forcing kill");
+                handle.destroyForcibly();
+                waitForExit(localProcess, interruptedWaiting);
+            }
+        }
+        interrupted |= interruptedWaiting.get();
 
         // Only stop tracking a child we actually reaped. A still-running process
         // (destroyForcibly raced, or waitFor timed out) stays in the set so the
         // JVM shutdown-hook reaper gets a chance at it — dropping it here is what
         // turns a wedged close() into a leaked child.
-        if ((process != null) && !process.isAlive()) {
-            ACTIVE_CHILDREN.remove(process);
+        if (!localProcess.isAlive()) {
+            ACTIVE_CHILDREN.remove(localProcess);
         }
+
+        // The readers have reached end of stream now unless something else
+        // holds the pipes open; give them their bounded time to deliver what
+        // is left, then close the streams underneath them. Closing the raw
+        // streams (not the readers) never waits on a reader's lock.
+        interrupted |= shutdownExecutors();
+        if (!locked) {
+            // The blocked write fails once the CLI is gone; close stdin when
+            // it lets go of the lock, off this thread.
+            Threads.start("SPCTransport-StdinClose-", () -> {
+                writeLock.lock();
+                try {
+                    closeQuietly(stdin);
+                    stdin = null;
+                } finally {
+                    writeLock.unlock();
+                }
+            });
+        }
+        closeQuietly(localProcess.getInputStream());
+        closeQuietly(localProcess.getErrorStream());
+
         process = null;
         stdout = null;
-        stderr = null;
         exitError = null;
+        closeCompleted = true;
+        return interrupted;
+    }
+
+    /**
+     * Waits up to {@link #closeStepTimeoutMillis} for {@code process} to
+     * exit. An interrupt does not cut the wait short; it is recorded in
+     * {@code interrupted}.
+     *
+     * @return whether the process exited
+     */
+    private boolean waitForExit(Process process, AtomicBoolean interrupted) {
+        return Uninterruptibly.waitFor(process, closeStepTimeoutMillis, TimeUnit.MILLISECONDS, interrupted);
+    }
+
+    /**
+     * The bound on each step of {@link #close()}: lock, wait, terminate, kill.
+     * Package-private so tests can shorten it.
+     */
+    long closeStepTimeoutMillis = TimeUnit.SECONDS.toMillis(5);
+
+    private static void closeQuietly(@Nullable Closeable closeable) {
+        if (closeable == null) {
+            return;
+        }
+        try {
+            closeable.close();
+        } catch (IOException e) {
+            // Ignore
+        }
     }
 
     /**
      * Shuts down executor services gracefully with timeout.
+     *
+     * @return whether an interrupt arrived meanwhile (the waits go on)
      */
-    private void shutdownExecutors() {
-        shutdownExecutor(stderrExecutor, "Stderr");
-        shutdownExecutor(messageReaderExecutor, "MsgReader");
+    private boolean shutdownExecutors() {
+        boolean interrupted = shutdownExecutor(stderrExecutor, "Stderr");
+        interrupted |= shutdownExecutor(messageReaderExecutor, "MsgReader");
+        return interrupted;
     }
 
-    private void shutdownExecutor(ExecutorService executor, String name) {
-        // Shutdown executor
+    private static boolean shutdownExecutor(ExecutorService executor, String name) {
+        AtomicBoolean interrupted = new AtomicBoolean();
         executor.shutdown();
-        try {
-            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                logger.fine(name + " executor did not terminate gracefully, forcing shutdown");
-                executor.shutdownNow();
-                // Verify forced termination
-                boolean terminated = executor.awaitTermination(1, TimeUnit.SECONDS);
-                if (!terminated) {
-                    logger.warning(name + " executor did not terminate even after shutdownNow()");
-                }
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        if (!Uninterruptibly.awaitTermination(executor, 2, TimeUnit.SECONDS, interrupted)) {
+            logger.fine(name + " executor did not terminate gracefully, forcing shutdown");
             executor.shutdownNow();
+            // Verify forced termination
+            if (!Uninterruptibly.awaitTermination(executor, 1, TimeUnit.SECONDS, interrupted)) {
+                logger.warning(name + " executor did not terminate even after shutdownNow()");
+            }
         }
+        return interrupted.get();
     }
 
     /**
@@ -1847,10 +2192,15 @@ public class SubprocessCLITransport implements Transport {
             messageReaderExecutor.submit(this::readLoop);
         }
 
-        @SuppressWarnings({ "unchecked", "null" })
+        /**
+         * Reads stdout until it ends, as the Python SDK's
+         * {@code _read_messages_impl} does: one message per line, a corrupt or
+         * oversized line ends the stream with {@link CLIJSONDecodeException},
+         * and a clean end of stream is followed by the exit-code check.
+         */
         private void readLoop() {
             // Capture references locally to prevent NPE from concurrent close()
-            BufferedReader localStdout = stdout;
+            Reader localStdout = stdout;
             Process localProcess = process;
 
             if ((localStdout == null) || (localProcess == null)) {
@@ -1858,79 +2208,71 @@ public class SubprocessCLITransport implements Transport {
                 return;
             }
 
-            StringBuilder jsonBuffer = new StringBuilder();
-
+            Exception error = null;
+            boolean checkExit = true;
+            LineFramer framer = new LineFramer(localStdout, maxBufferSize);
             try {
                 String line;
-                while ((line = localStdout.readLine()) != null) {
-                    line = line.trim();
-                    if (line.isEmpty()) {
+                while ((line = framer.readLine()) != null) {
+                    Map<String, Object> data = stdoutMessage(line, framer.lastLineTerminated(), maxBufferSize);
+                    if (data == null) {
                         continue;
                     }
-
-                    // Skip non-JSON lines (e.g. [SandboxDebug]) when not
-                    // mid-parse — they corrupt the buffer otherwise.
-                    if (jsonBuffer.isEmpty() && !line.startsWith("{")) {
-                        logger.fine("Skipping non-JSON line from CLI stdout: "
-                                + line.substring(0, Math.min(line.length(), 200)));
-                        continue;
-                    }
-
-                    // Accumulate partial JSON
-                    jsonBuffer.append(line);
-
-                    if (jsonBuffer.length() > maxBufferSize) {
-                        int bufferLength = jsonBuffer.length();
-                        jsonBuffer.setLength(0);
-                        throw new CLIJSONDecodeException(
-                                "JSON message exceeded maximum buffer size of " + maxBufferSize + " bytes",
-                                new IllegalStateException(
-                                        "Buffer size " + bufferLength + " exceeds limit " + maxBufferSize));
-                    }
-
-                    try {
-                        String json = jsonBuffer.toString();
-                        Map<String, Object> data = MAPPER.readValue(json, Map.class);
-                        logger.fine("Received message from CLI: " + json);
-                        jsonBuffer.setLength(0);
-                        checkClaudeVersion(data);
-                        // Use offer() with timeout instead of put() to avoid indefinite blocking
-                        if (!queue.offer(data, 5, TimeUnit.SECONDS)) {
-                            logger.warning("Failed to enqueue message - consumer may have stopped consuming");
-                            // Continue trying - consumer might catch up
-                        }
-                    } catch (JsonProcessingException e) {
-                        // Incomplete JSON, continue accumulating
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
+                    logger.fine("Received message from CLI: " + line);
+                    checkClaudeVersion(data);
+                    if (!enqueue(data)) {
                         break;
                     }
                 }
             } catch (CLIJSONDecodeException e) {
-                // Buffer overflow or JSON decode error - store for consumer
-                exitError = e;
+                // As in the Python SDK, the decode error ends the stream; the
+                // CLI is still running, so there is no exit code to wait for.
+                error = e;
+                checkExit = false;
             } catch (IOException e) {
                 // Stream closed - normal termination
-            } catch (Exception e) {
-                // Catch any other unexpected exceptions
-                exitError = new CLIConnectionException("Unexpected error reading messages: " + e.getMessage(), e);
+            } catch (RuntimeException e) {
+                error = new CLIConnectionException("Unexpected error reading messages: " + e.getMessage(), e);
+                checkExit = false;
             } finally {
-                done.set(true);
-
-                // Check process exit code using local reference
-                try {
-                    if (localProcess != null) {
+                if (checkExit) {
+                    try {
                         int exitCode = localProcess.waitFor();
                         if (exitCode != 0) {
-                            exitError = new ProcessException(
+                            error = new ProcessException(
                                     "Command failed with exit code " + exitCode,
                                     exitCode,
                                     "Check stderr output for details");
                         }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
                     }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
                 }
+                // The error first, then done: hasNext() reads exitError once it
+                // sees done, so the other order can end the stream without it.
+                if (error != null) {
+                    exitError = error;
+                }
+                done.set(true);
+                closeQuietly(localStdout);
+            }
+        }
+
+        /**
+         * Hands a message to the consumer, waiting for room rather than
+         * dropping it. Returns false if interrupted or the transport closed.
+         */
+        private boolean enqueue(Map<String, Object> data) {
+            try {
+                while (!queue.offer(data, 400, TimeUnit.MILLISECONDS)) {
+                    if (closed.get()) {
+                        return false;
+                    }
+                }
+                return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
             }
         }
 
@@ -1940,10 +2282,10 @@ public class SubprocessCLITransport implements Transport {
                 return true;
             }
 
-            while (!(done.get() && queue.isEmpty())) {
+            while (!(readerFinished() && queue.isEmpty())) {
                 try {
                     Map<String, Object> msg;
-                    if (!done.get()) {
+                    if (!readerFinished()) {
                         // Reader still active - wait up to 0.4s for next message
                         msg = queue.poll(400, TimeUnit.MILLISECONDS);
                         if (msg != null) {
@@ -1977,6 +2319,10 @@ public class SubprocessCLITransport implements Transport {
             }
 
             return false;
+        }
+
+        private boolean readerFinished() {
+            return done.get() || closeCompleted;
         }
 
         @Override

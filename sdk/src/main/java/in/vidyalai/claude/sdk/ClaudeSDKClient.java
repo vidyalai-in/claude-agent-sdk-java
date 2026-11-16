@@ -1,12 +1,13 @@
 package in.vidyalai.claude.sdk;
 
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -137,10 +138,25 @@ public class ClaudeSDKClient implements AutoCloseable {
     private final ClaudeAgentOptions options;
     @Nullable
     private final Transport customTransport;
+    /**
+     * Builds the default transport from the effective options when no custom
+     * transport was given. A seam for tests that need a scripted transport
+     * while store-backed resume still runs (a custom transport skips it).
+     */
+    private final Function<ClaudeAgentOptions, Transport> transportFactory;
 
     // Thread safety: AtomicBoolean for state management
     private final AtomicBoolean connected = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
+
+    /**
+     * Serializes connect(), disconnect() and close(), so a disconnect cannot
+     * delete the materialized CLAUDE_CONFIG_DIR while another thread is still
+     * closing the CLI that uses it, nor slip in during a connect and leave
+     * {@code connected} set on a closed handler. Reentrant: a failed connect
+     * releases its resources while holding it.
+     */
+    private final ReentrantLock lifecycleLock = new ReentrantLock();
 
     // Thread safety: Volatile for visibility across threads
     @Nullable
@@ -184,8 +200,23 @@ public class ClaudeSDKClient implements AutoCloseable {
      *                  default subprocess transport
      */
     public ClaudeSDKClient(ClaudeAgentOptions options, @Nullable Transport transport) {
+        this(options, transport, SubprocessCLITransport::new);
+    }
+
+    /**
+     * Creates a client whose default transport comes from
+     * {@code transportFactory}. Package-private: a test seam.
+     */
+    static ClaudeSDKClient withTransportFactory(ClaudeAgentOptions options,
+            Function<ClaudeAgentOptions, Transport> transportFactory) {
+        return new ClaudeSDKClient(options, null, transportFactory);
+    }
+
+    private ClaudeSDKClient(ClaudeAgentOptions options, @Nullable Transport transport,
+            Function<ClaudeAgentOptions, Transport> transportFactory) {
         this.options = options;
         this.customTransport = transport;
+        this.transportFactory = transportFactory;
     }
 
     /**
@@ -208,12 +239,38 @@ public class ClaudeSDKClient implements AutoCloseable {
      * This method is thread-safe and idempotent. Multiple concurrent calls are
      * protected by synchronization, and only one connection will be established.
      *
+     * <p>
+     * A failed connect leaves nothing behind: whatever it had set up by then
+     * (the CLI process and transport, the control-protocol threads, the
+     * SessionStore mirror, the temporary {@code CLAUDE_CONFIG_DIR} a
+     * store-backed resume materializes, which holds a copy of the
+     * credentials) is released before the failure is rethrown, as the Python
+     * SDK's {@code connect()} does.
+     *
+     * <p>
+     * Any non-null {@code initialPrompt} is sent, the empty string included,
+     * as in the Python SDK; pass {@code null} to connect without one.
+     *
+     * <p>
+     * {@code connect()}, {@link #disconnect()} and {@link #close()} are
+     * serialized: each waits for one already running on another thread. A
+     * {@code close()} that arrives while a connect is under way makes that
+     * connect release what it set up and throw {@link IllegalStateException}.
+     *
      * @param initialPrompt optional initial prompt to send
      * @throws CLIConnectionException if connection fails
      * @throws IllegalStateException  if client has been closed
      */
-    @SuppressWarnings("null")
-    public synchronized void connect(@Nullable String initialPrompt) throws CLIConnectionException {
+    public void connect(@Nullable String initialPrompt) throws CLIConnectionException {
+        lifecycleLock.lock();
+        try {
+            connectLocked(initialPrompt);
+        } finally {
+            lifecycleLock.unlock();
+        }
+    }
+
+    private void connectLocked(@Nullable String initialPrompt) {
         // Check if already closed
         if (closed.get()) {
             throw new IllegalStateException("Client is closed. Cannot connect.");
@@ -234,7 +291,8 @@ public class ClaudeSDKClient implements AutoCloseable {
         // Skipped when a custom transport was supplied — the materialized
         // options never reach a pre-constructed transport, so loading the
         // store and writing .credentials.json to a temp dir would be wasted
-        // work.
+        // work. A failure here leaves nothing behind: materialization removes
+        // its own temp dir before throwing.
         if (customTransport == null) {
             try {
                 materialized = SessionResume.materializeResumeSession(options);
@@ -244,33 +302,40 @@ public class ClaudeSDKClient implements AutoCloseable {
             }
         }
 
+        try {
+            connectInner(initialPrompt);
+        } catch (RuntimeException | Error e) {
+            // Whatever failed (building the transport, e.g. a missing CLI;
+            // spawning it; initialize, or its timeout; the initial prompt),
+            // release everything set up so far: the query handler with its
+            // threads and mirror batcher, the transport and its process, and
+            // only then the temp CLAUDE_CONFIG_DIR they point at. Mirrors the
+            // Python SDK, whose connect() calls disconnect() on any failure.
+            releaseResources();
+            throw e;
+        }
+        if (closed.get()) {
+            // close() was called meanwhile and could not wait for us (its
+            // thread was interrupted): nobody else will release this.
+            releaseResources();
+            throw new IllegalStateException("Client was closed while connecting");
+        }
+    }
+
+    private void connectInner(@Nullable String initialPrompt) {
         // Validate permission settings and route prompts over the control protocol
         ClaudeAgentOptions effectiveOptions = CanUseToolConfig.configureCanUseTool(options);
 
-        if (materialized != null) {
-            effectiveOptions = SessionResume.applyMaterializedOptions(effectiveOptions, materialized);
+        SessionResume.MaterializedResume resume = materialized;
+        if (resume != null) {
+            effectiveOptions = SessionResume.applyMaterializedOptions(effectiveOptions, resume);
         }
 
-        // Use provided custom transport or create subprocess transport
-        if (customTransport != null) {
-            transport = customTransport;
-        } else {
-            transport = new SubprocessCLITransport(effectiveOptions);
-        }
-
-        try {
-            transport.connect();
-        } catch (RuntimeException e) {
-            // If transport connect fails, clean up the materialized temp dir
-            // before propagating — disconnect() won't run because connected=false.
-            // CLIConnectionException extends ClaudeSDKException extends RuntimeException
-            // so a single catch covers both checked-style and unchecked failures.
-            if (materialized != null) {
-                materialized.cleanup();
-                materialized = null;
-            }
-            throw e;
-        }
+        // Use provided custom transport or create subprocess transport.
+        // Assigned before connect() so a failure from here on closes it.
+        Transport chosen = ((customTransport != null) ? customTransport : transportFactory.apply(effectiveOptions));
+        transport = chosen;
+        chosen.connect();
 
         // Calculate initialize timeout
         long timeoutMs = Long.parseLong(System.getenv().getOrDefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "60000"));
@@ -284,8 +349,8 @@ public class ClaudeSDKClient implements AutoCloseable {
         Boolean excludeDynamicSections = extractExcludeDynamicSections(effectiveOptions);
 
         // Create QueryHandler
-        query = new QueryHandler(
-                transport,
+        QueryHandler q = new QueryHandler(
+                chosen,
                 true, // ClaudeSDKClient always uses streaming mode
                 effectiveOptions.canUseTool(),
                 effectiveOptions.hooks(),
@@ -299,15 +364,15 @@ public class ClaudeSDKClient implements AutoCloseable {
                 QueryHandler.runEndCeilingMs(effectiveOptions.env()),
                 initializeTimeout,
                 effectiveOptions.maxMsgQSize());
+        query = q;
 
         // Wire the SessionStore mirror batcher BEFORE starting the read
         // loop so we don't miss any transcript_mirror frames the CLI emits
         // immediately on init.
         if (effectiveOptions.sessionStore() != null) {
-            QueryHandler q = query;
             TranscriptMirrorBatcher batcher = SessionResume.buildMirrorBatcher(
                     effectiveOptions.sessionStore(),
-                    materialized,
+                    resume,
                     effectiveOptions.env(),
                     q::reportMirrorError,
                     effectiveOptions.sessionStoreFlush());
@@ -315,32 +380,43 @@ public class ClaudeSDKClient implements AutoCloseable {
         }
 
         // Start reading messages and initialize
-        query.start();
-        query.initialize();
+        q.start();
+        q.initialize();
 
-        // Mark as connected
-        connected.set(true);
-
-        // Send initial prompt if provided (streaming mode doesn't send it via command
-        // line). Send directly via transport.write() rather than sendMessage() to
-        // ensure the prompt is sent during connection setup.
-        if ((initialPrompt != null) && (!initialPrompt.isBlank())) {
+        // Send the initial prompt if provided (streaming mode doesn't send it
+        // via the command line), the empty string included, as the Python
+        // SDK does. Written directly with transport.write() rather than
+        // sendMessage() so it is part of connection setup.
+        if (initialPrompt != null) {
+            Map<String, Object> message = userMessage(initialPrompt, "default");
             try {
-                Map<String, Object> message = new HashMap<>();
-                message.put("type", "user");
-                Map<String, Object> messageContent = new HashMap<>();
-                messageContent.put("role", "user");
-                messageContent.put("content", initialPrompt);
-                message.put("message", messageContent);
-                message.put("parent_tool_use_id", null);
-                message.put("session_id", "default");
                 String json = MAPPER.writeValueAsString(
                         QueryHandler.stampUserMessage(message, effectiveOptions.verbatimPrompts()));
-                transport.write(json + "\n");
+                chosen.write(json + "\n");
             } catch (JsonProcessingException e) {
                 throw new CLIConnectionException("Failed to serialize initial prompt", e);
             }
         }
+
+        // Connected only once everything above succeeded.
+        connected.set(true);
+    }
+
+    /**
+     * The message {@link #sendMessage(String, String)}, {@link #query(String)}
+     * and {@link #connect(String)} write for a string prompt, with an explicit
+     * {@code parent_tool_use_id: null} as the Python SDK sends it.
+     */
+    private static Map<String, Object> userMessage(String prompt, String sessionId) {
+        Map<String, Object> messageContent = new LinkedHashMap<>();
+        messageContent.put("role", "user");
+        messageContent.put("content", prompt);
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("type", "user");
+        message.put("message", messageContent);
+        message.put("parent_tool_use_id", null);
+        message.put("session_id", sessionId);
+        return message;
     }
 
     /**
@@ -365,14 +441,7 @@ public class ClaudeSDKClient implements AutoCloseable {
     public void sendMessage(String prompt, String sessionId) throws CLIConnectionException {
         ensureConnected();
 
-        Map<String, Object> message = new HashMap<>();
-        message.put("type", "user");
-        message.put("session_id", sessionId);
-
-        Map<String, Object> innerMessage = new HashMap<>();
-        innerMessage.put("role", "user");
-        innerMessage.put("content", prompt);
-        message.put("message", innerMessage);
+        Map<String, Object> message = userMessage(prompt, sessionId);
 
         try {
             transport.write(MAPPER.writeValueAsString(
@@ -522,6 +591,13 @@ public class ClaudeSDKClient implements AutoCloseable {
      * }
      * }</pre>
      *
+     * <p>
+     * If the consuming thread is interrupted while {@code hasNext()} waits for
+     * a message, {@code hasNext()} restores the interrupt flag and throws a
+     * {@link ClaudeSDKException} whose cause is the
+     * {@link InterruptedException}; an interrupt never looks like the end of
+     * the stream.
+     *
      * @return an iterator over messages
      * @throws CLIConnectionException if not connected
      * @throws IllegalStateException  if client is closed
@@ -547,6 +623,11 @@ public class ClaudeSDKClient implements AutoCloseable {
      * <p>
      * For multi-response workflows, use {@link #receiveMessages()} directly and
      * manually check for ResultMessage.
+     *
+     * <p>
+     * An interrupt while waiting for a message is reported as in
+     * {@link #receiveMessages()}: a {@link ClaudeSDKException} caused by the
+     * {@link InterruptedException}, with the interrupt flag restored.
      *
      * <p>
      * Usage:
@@ -766,8 +847,8 @@ public class ClaudeSDKClient implements AutoCloseable {
      * - Current and available output styles
      * - Server capabilities
      *
-     * @return server info from the initialize response (null only if the CLI
-     *         returned none)
+     * @return server info from the initialize response ({@code {}} when the
+     *         CLI's response carried no body)
      * @throws CLIConnectionException if not connected
      * @throws IllegalStateException  if client is closed
      */
@@ -787,35 +868,79 @@ public class ClaudeSDKClient implements AutoCloseable {
      * called directly.
      *
      * <p>
-     * This method is safe to call multiple times (idempotent).
+     * This method is safe to call multiple times (idempotent), and from
+     * inside a callback ({@code canUseTool}, a hook, an SDK MCP tool): the
+     * request that callback is serving is then left unanswered, and the CLI
+     * still gets stdin EOF and its grace period to exit. It is also safe with
+     * the calling thread's interrupt flag set; the flag is preserved.
+     *
+     * <p>
+     * It is serialized with {@link #connect()} and {@link #close()}: a call
+     * made while another thread connects or disconnects waits for it, so the
+     * temporary {@code CLAUDE_CONFIG_DIR} of a store-backed resume is only
+     * removed after the CLI using it has exited. If the calling thread is
+     * interrupted during that wait (as {@code disconnect()} from a callback is
+     * when another thread is already disconnecting and cancels that
+     * callback), it returns at once with the interrupt flag set and leaves
+     * the work to the other thread.
      */
     public void disconnect() {
-        if (!connected.get()) {
-            return;
-        }
-
-        // Close QueryHandler (which will close transport)
-        if (query != null) {
+        // tryLock() first: an uncontended disconnect must run even when the
+        // caller's interrupt flag is already set.
+        if (!lifecycleLock.tryLock()) {
             try {
-                query.close();
+                lifecycleLock.lockInterruptibly();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.fine("Interrupted waiting for a concurrent connect/disconnect; leaving it to that thread");
+                return;
+            }
+        }
+        try {
+            releaseResources();
+        } finally {
+            lifecycleLock.unlock();
+        }
+    }
+
+    /**
+     * Releases whatever a connect set up, connected or not, so it also runs
+     * for a connect that failed partway. Idempotent: each resource is
+     * dropped once released. Called with {@link #lifecycleLock} held.
+     */
+    private void releaseResources() {
+        // Close QueryHandler (which closes the transport, the mirror batcher
+        // and its own threads)
+        QueryHandler q = query;
+        Transport t = transport;
+        query = null;
+        transport = null;
+        if (q != null) {
+            try {
+                q.close();
             } catch (Exception e) {
                 logger.log(Level.WARNING, "Error closing QueryHandler", e);
             }
-            query = null;
+        } else if (t != null) {
+            // The transport was built (and maybe spawned) but the query
+            // handler that owns closing it was not.
+            try {
+                t.close();
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Error closing transport", e);
+            }
         }
-
-        // Clear cached state
-        transport = null;
 
         // Clean up materialized resume temp dir AFTER the subprocess/reader
         // have closed so we don't pull the rug out from under them.
-        if (materialized != null) {
+        SessionResume.MaterializedResume m = materialized;
+        materialized = null;
+        if (m != null) {
             try {
-                materialized.cleanup();
+                m.cleanup();
             } catch (Exception e) {
                 logger.log(Level.WARNING, "Error cleaning up materialized resume temp dir", e);
             }
-            materialized = null;
         }
 
         // Reset connection flag

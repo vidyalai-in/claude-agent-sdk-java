@@ -21,8 +21,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * ThinkingConfig config = new ThinkingConfigEnabled(10000, ThinkingDisplay.SUMMARIZED);
  * }</pre>
  *
- * @param budgetTokens the maximum number of tokens to use for thinking (must be
- *                     positive)
+ * @param budgetTokens the maximum number of tokens to use for thinking (zero or
+ *                     more). Zero is forwarded as {@code --max-thinking-tokens 0},
+ *                     as the Python SDK sends it.
  * @param display      optional display mode forwarded to the CLI as
  *                     {@code --thinking-display}; null leaves the model's
  *                     default in place.
@@ -38,11 +39,11 @@ public record ThinkingConfigEnabled(
      * Creates an enabled thinking config with the specified token budget.
      *
      * @param budgetTokens the maximum number of tokens to use for thinking
-     * @throws IllegalArgumentException if budgetTokens is not positive
+     * @throws IllegalArgumentException if budgetTokens is negative
      */
     public ThinkingConfigEnabled {
-        if (budgetTokens <= 0) {
-            throw new IllegalArgumentException("budgetTokens must be positive, got: " + budgetTokens);
+        if (budgetTokens < 0) {
+            throw new IllegalArgumentException("budgetTokens must not be negative, got: " + budgetTokens);
         }
     }
 

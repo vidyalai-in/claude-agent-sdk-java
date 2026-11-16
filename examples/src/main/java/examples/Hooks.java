@@ -179,6 +179,9 @@ public class Hooks {
         HookMatcher.HookCallback preHook = (input, context) -> {
             if (input instanceof PreToolUseHookInput pre) {
                 System.out.println("[PRE] About to run: " + pre.toolName());
+                // raw() is the CLI's input exactly as sent, including any
+                // field newer than this SDK's typed record.
+                System.out.println("[PRE] Input fields: " + pre.raw().keySet());
             }
             return CompletableFuture.completedFuture(HookOutput.empty());
         };
