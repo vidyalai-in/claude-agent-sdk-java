@@ -43,7 +43,7 @@ Execute query with custom options.
 - `IllegalArgumentException` - If both canUseTool and permissionPromptToolName are set
 - `CLIConnectionException` - Connection failed
 - `ProcessException` - CLI process failed
-- `QueryFailedException` - The run ended in an error result (`error_max_turns`, `error_max_budget_usd`, a resume refused by `resumeDropsTurn`). Carries the messages collected before it — see below.
+- `QueryFailedException` - The run ended in an error result (`error_max_turns`, `error_max_budget_usd`, a resume refused by `resumeDropsTurn`), or, since 0.2.6, the calling thread was interrupted while waiting for messages. Carries the messages collected before it — see below. On an interrupt the cause is a `ClaudeSDKException` caused by the `InterruptedException`, the CLI is still shut down gracefully, and the interrupt flag is restored (before 0.2.6 an interrupt returned a truncated list).
 
 ### query(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options)
 
@@ -255,12 +255,14 @@ List all sessions across all projects, sorted by most-recently-modified first. R
 public static List<SDKSessionInfo> listSessions(Path directory)
 ```
 
-List sessions for a specific project directory.
+List sessions for a specific project directory and its git worktrees.
+
+The directory is canonicalized (symlinks resolved, NFC-normalized) before it is matched against the project directories. When it is inside a git repository with more than one worktree, sessions from every worktree are included, the same as `listSessions(directory, null, true)`. Before 0.2.6 this overload read only the directory itself; pass `includeWorktrees = false` to the three- or four-argument overload to keep that behavior.
 
 **Parameters**:
 - `directory` - the project working directory to filter by
 
-**Returns**: `List<SDKSessionInfo>`
+**Returns**: `List<SDKSessionInfo>` sorted by last-modified descending
 
 ### listSessions(Path directory, Integer limit, boolean includeWorktrees)
 
@@ -475,7 +477,7 @@ public static void renameSession(
 ) throws IOException
 ```
 
-Rename a session scoped to a specific project directory.
+Rename a session scoped to a specific project directory. When the session is not in that directory's project, the directory's git worktrees are tried next. The entry is written with an atomic append that never creates the file, so it cannot overwrite a line a running CLI has just appended.
 
 **Parameters**:
 - `sessionId` - UUID of the session to rename
@@ -512,7 +514,7 @@ public static void tagSession(
 ) throws IOException
 ```
 
-Tag a session scoped to a specific project directory.
+Tag a session scoped to a specific project directory. Like `renameSession`, it falls back to the directory's git worktrees and writes with an atomic append.
 
 **Parameters**:
 - `sessionId` - UUID of the session to tag
@@ -588,8 +590,10 @@ Fork a session with optional truncation point and custom title.
 **Parameters**:
 - `sessionId` - UUID of the source session
 - `directory` - Project directory (null searches all projects)
-- `upToMessageId` - Slice transcript at this message UUID (inclusive); null copies all
-- `title` - Custom title for the fork; null derives from original + " (fork)"
+- `upToMessageId` - Slice transcript at this message UUID (inclusive); null or empty copies all
+- `title` - Custom title for the fork; null derives from the original's custom title, AI title or first prompt + " (fork)"
+
+The forked transcript is created with mode `0600` on file systems with POSIX permissions.
 
 ### listSessions(Path directory, Integer limit, int offset, boolean includeWorktrees)
 
@@ -646,6 +650,8 @@ public static @Nullable SDKSessionInfo getSessionInfoFromStore(
 ```
 
 Read metadata for a single session from a store. Returns `null` for invalid UUIDs, missing sessions, sidechain sessions, or sessions with no extractable summary.
+
+The loaded entries are serialized to JSONL and parsed exactly like a local transcript: `fileSize` is the JSONL byte size, `firstPrompt` and `createdAt` come from its first 64 KB, and `lastModified` is the last entry's `timestamp`. An exception thrown by the adapter's `load()` propagates; it is not reported as a missing session.
 
 ### getSessionMessagesFromStore(SessionStore, String, Path, Integer, int)
 
@@ -719,7 +725,7 @@ public static ForkSessionResult forkSessionViaStore(
     @Nullable String upToMessageId, @Nullable String title) throws java.io.IOException
 ```
 
-Fork a session into a new branch with fresh UUIDs via the store. Runs the same UUID-remap transform as the on-disk fork — a storage-layer copy is NOT sufficient.
+Fork a session into a new branch with fresh UUIDs via the store. Runs the same UUID-remap transform as the on-disk fork — a storage-layer copy is NOT sufficient. Without a `title`, the fork title falls back to the source's custom title, AI title or first prompt, as on disk.
 
 **Throws**: `IllegalArgumentException` for invalid UUIDs; `FileNotFoundException` if the source session is not found in the store.
 

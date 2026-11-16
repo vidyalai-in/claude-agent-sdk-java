@@ -81,7 +81,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - `sendMessage()` / `query()` - Send messages
   - `receiveMessages()` / `receiveResponse()` - Receive messages
   - Control methods: `interrupt()`, `setModel()`, `setPermissionMode()`, etc.
-- **Thread Safety**: Partially thread-safe with documented guarantees
+- **Thread Safety**: Partially thread-safe with documented guarantees. `connect()`, `disconnect()` and `close()` are serialized on one lifecycle lock (since 0.2.6); a `close()` that arrives during `connect()` makes the connect release everything and throw `IllegalStateException`
 - **Resource Management**: Implements AutoCloseable for proper cleanup
 
 **Design Pattern**: Builder + Resource Management (try-with-resources)
@@ -127,9 +127,15 @@ The SDK follows a layered architecture with clear separation of concerns:
 - **Key Features**:
   - Async control protocol using CompletableFuture
   - Request ID generation and tracking
-  - Message queue with configurable size
+  - Bounded message queue (`maxMsgQSize`, default 1000) with **back-pressure**: when it is full the reader waits for the consumer instead of dropping the message, as the Python SDK's awaited send does. Before 0.2.6 a message that waited 5 seconds was dropped. The end of the stream and any error are recorded as terminal state, so a full queue can delay them but never lose them, and an iterator created later still sees them
+  - The limit is **soft**: while an outbound control request waits for its `control_response`, the reader keeps reading past it, since the response comes on the same stdout. A control call made by a thread that is not draining messages therefore cannot time out behind a full queue. The queue stays one FIFO, so order is unchanged. `MirrorErrorMessage` reports are queued past the limit too
+  - **Interrupts**: a consumer interrupted while waiting in `hasNext()` gets a `ClaudeSDKException` caused by the `InterruptedException`, with the flag restored, not a normal end of stream. `close()` clears the flag for its duration and sets it again on return, so an interrupted caller still closes gracefully
+  - **Closing from a callback**: `close()` called from a `canUseTool`, hook or SDK MCP callback cancels the request that callback serves (it is never answered) but neither interrupts nor waits for the closing thread
   - Background reader thread (virtual on Java 21+)
   - Control executor for async callbacks
+  - **Timeouts**: an *outbound* control request (SDK to CLI, such as `interrupt`, `setModel` or `setPermissionMode`) keeps its 60-second deadline; `initialize` has its own, set by `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT`. *Inbound* requests (`canUseTool`, hook callbacks, SDK MCP calls) have no SDK-side deadline since 0.2.6, as in the Python SDK; they end when the callback answers, on a `control_cancel_request`, or on `close()`. The CLI enforces a hook matcher's own `timeout`
+  - **Lenient control responses**: a `control_response` without a known `request_id` is ignored, any `subtype` other than `"error"` counts as success, and a success body that is not an object reads as empty, so a malformed frame can no longer kill the reader
+  - **Transcript-mirror waits**: the flush before each `result`, at end of stream and on close is awaited with no outer cap (it was cut off at 5 s before 0.2.6), so the store holds the turn by the time the consumer sees its result, and any `MirrorErrorMessage` for the turn arrives before its `ResultMessage`. The pre-result flush runs on the reader thread, so a slow store also delays control responses until it finishes. The batcher itself bounds every flush; see [TranscriptMirrorBatcher](#transcriptmirrorbatcher-internal)
 
 **Design Pattern**: Async Request/Response + Observer (for hooks)
 
@@ -140,6 +146,7 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Support for all message types (user, assistant, system, result, stream_event)
   - Content block parsing (text, thinking, tool_use, tool_result)
   - Error handling and validation
+  - Lenient optional fields (since 0.2.6): an explicit `null` or a wrong-typed optional field, or a non-string `type`, no longer fails the frame. Wire values the typed fields cannot hold stay readable (`UserMessage.toolUseResultRaw()`, `AssistantMessage.errorRaw()`, `TaskNotificationMessage.statusValue()`)
 
 **Design Pattern**: Parser + Factory
 
@@ -165,7 +172,10 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Manages CLI subprocess lifecycle
   - Stdin/stdout communication
   - Buffered reading with configurable limits
-  - Stderr callback support with per-line exception isolation (a throwing user callback no longer kills the read loop)
+  - NDJSON stdout framing on `\n` only: a complete line that starts with `{` but is not exactly one JSON object raises `CLIJSONDecodeException`; other non-JSON lines are skipped (see [Transport Layer → Line framing](./feature-transport-layer.md#line-framing-and-back-pressure-026))
+  - Stderr piped only for a `stderrCallback`, otherwise inherited by the JVM; piped lines framed as the Python SDK frames them, with per-line exception isolation (a throwing user callback does not kill the read loop)
+  - Spawn failures: only a missing executable is `CLINotFoundException`; any other failure is `CLIConnectionException` with the cause chained
+  - Bounded `close()`: 5 s for the write lock, 5 s for the CLI to exit after stdin EOF, SIGTERM then 5 s, SIGKILL then 5 s. An interrupt does not cut a step short: an interrupted caller still sends stdin EOF and waits out the grace period, and the flag is set again on return
   - Automatic process cleanup
   - **JVM shutdown hook**: a static `ConcurrentHashMap.newKeySet()` tracks every spawned `Process`; a `Runtime.addShutdownHook` registered at class init calls `destroy()` on each live child so stray `claude` subprocesses do not leak when the parent JVM exits before `close()`. Mirrors the Python SDK's `atexit` handler.
 - **Implementation Details**:
@@ -190,7 +200,13 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Automatic schema generation from @Tool annotations
   - CompletableFuture-based async execution
   - Server info, and `initialize` version negotiation over
-    `2025-06-18` / `2024-11-05`
+    `2025-11-25` / `2025-06-18` / `2024-11-05`
+  - Typed `@Tool` parameter schemas (`ToolSchemas`): one binding per Java type
+    drives both the published schema and the argument conversion, so a schema
+    never admits arguments the method cannot receive
+  - One session per connection (`openSession()`): tools and schemas are
+    shared, while the calls in flight, their cancellation and `close()` are per
+    client
   - MCP protocol messages (`initialize`, `ping`, `tools/list`, `tools/call`)
   - Argument validation against each tool's `inputSchema`, compiled once when
     the server is constructed
@@ -225,6 +241,12 @@ The SDK follows a layered architecture with clear separation of concerns:
   `null` for anything that expects no reply. `close()` means "the connection
   using you is going away", not "shut down": one handler can serve more than
   one client, so it must be idempotent and stay usable.
+- **Per-client sessions**: each client calls `openSession()` once per server
+  when it starts, routes that server's messages to the handler returned, and
+  closes that handler when it shuts down. The default returns `this`;
+  `SdkMcpServer` returns a fresh session, so concurrent clients sharing one
+  server cannot collide on JSON-RPC ids, cancel each other's calls, or fail
+  each other's calls on close.
 
 #### ToolCallContext
 - **Purpose**: lets a running tool see that its call was cancelled.
@@ -263,6 +285,8 @@ The SDK follows a layered architecture with clear separation of concerns:
   - Explicit flush before each `result` message and at end-of-stream / close.
   - Coalesces frames per `filePath` so each unique file gets one `append` call per flush.
   - Bounded retry: `MIRROR_APPEND_MAX_ATTEMPTS=3` attempts with `[200ms, 800ms]` backoff. Timeouts are not retried (in-flight call may still land).
+  - Strictly FIFO drains: each drain is chained behind every earlier one, so eager drains and explicit flushes append in enqueue order.
+  - Bounded completion: `flush()` and `close()` always complete within `flushTimeoutMs()` (append timeout × attempts + backoff, 181 000 ms by default); past that the future completes anyway and the drain carries on in the background.
   - Frames whose path falls outside the configured `projectsDir` are dropped with a warning.
   - Failures surface as `MirrorErrorMessage` in the consumer's stream — never block the conversation.
 
@@ -273,7 +297,7 @@ The SDK follows a layered architecture with clear separation of concerns:
 - **Flow**:
   1. Load entries via `store.loadAsync()` (or pick the most-recently-modified non-sidechain session for `continueConversation`).
   2. Write JSONL to a temp directory laid out like `~/.claude/`.
-  3. Copy `.credentials.json` (with `refreshToken` redacted to prevent token consumption from the temp dir) and `.claude.json`.
+  3. Copy `.credentials.json` (with `refreshToken` redacted to prevent token consumption from the temp dir) and `.claude.json`. On macOS, when no `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` is set, the login is read from the Keychain instead (`security find-generic-password`), as in the Python SDK.
   4. Materialize subagent transcripts and `.meta.json` sidecars when the store implements `listSubkeys`.
   5. Spawn the CLI with `CLAUDE_CONFIG_DIR=<temp dir>`.
   6. Cleanup on disconnect with retry on transient Windows AV/indexer locks.
@@ -543,6 +567,10 @@ that loses it does nothing, so a cancel never interrupts a response halfway
 through being written to stdin. This matches the Python SDK, which cancels the
 handler's task and skips the response.
 
+`close()` does the same for every inbound request still being answered, at
+once, without answering any of them. Before 0.2.6 it waited up to 5 seconds
+for them first.
+
 ### Stdin Lifecycle and the End of a Run
 
 > **`controlExecutor` must stay thread-per-task.** An SDK MCP tool call parks
@@ -622,7 +650,7 @@ The SDK uses a multi-threaded architecture (virtual threads on Java 21+, daemon 
 - **AtomicBoolean**: Used for connection and closed state
 - **Volatile**: Used for visibility of QueryHandler and Transport
 - **Synchronization**: Used for connect() to prevent race conditions
-- **BlockingQueue**: Thread-safe message queue
+- **BlockingQueue**: Thread-safe, bounded message queue; a full queue blocks the producer (back-pressure) rather than dropping
 - **ConcurrentHashMap**: Thread-safe control request tracking
 
 ### Resource Management
@@ -799,7 +827,7 @@ Python and TypeScript SDKs.
 
 1. **Virtual Threads**: Thousands of concurrent operations possible on Java 21+
 2. **Buffered I/O**: Reduces system calls for subprocess communication
-3. **Message Queue**: Configurable size to balance memory and throughput
+3. **Message Queue**: Configurable size to balance memory and throughput; a full queue slows the CLI down rather than losing messages
 4. **Lazy Initialization**: QueryHandler created only when needed
 5. **Resource Pooling**: Reuse ExecutorService across operations
 6. **Direct Memory**: Jackson uses efficient buffer handling

@@ -7,7 +7,7 @@ Error handling and exception hierarchy.
 ```
 ClaudeSDKException (RuntimeException)
 ├── CLIConnectionException
-├── CLINotFoundException
+│   └── CLINotFoundException
 ├── ProcessException
 │   └── ResultException
 ├── CLIJSONDecodeException
@@ -26,6 +26,11 @@ public class ClaudeSDKException extends RuntimeException {
 }
 ```
 
+Thrown as is (cause `InterruptedException`) by the message iterators of
+`ClaudeSDKClient.receiveMessages()` and `receiveResponse()` when the thread
+waiting in `hasNext()` is interrupted. The interrupt flag is restored. Since
+0.2.6; before, an interrupt ended the stream as if it were complete.
+
 ## CLIConnectionException
 
 Connection to Claude Code CLI failed.
@@ -38,8 +43,11 @@ public class CLIConnectionException extends ClaudeSDKException {
 ```
 
 **Causes**:
-- CLI not found
-- Process failed to start
+- CLI not found (as the `CLINotFoundException` subclass)
+- Process failed to start for any reason other than a missing executable, for example `EACCES` (not executable) or `ENOEXEC` (not a valid binary): `"Failed to start Claude Code: ..."`, with the spawn's `IOException` as the cause. Before 0.2.6 these were reported as `CLINotFoundException`
+- The `cwd` working directory does not exist
+- `user(...)` is set: the Java SDK cannot run the CLI as another OS user (see [user()](./feature-configuration-options.md#user))
+- An `mcpServers` map or an `outputFormat` JSON schema that cannot be serialized (`"Failed to serialize ..."`); before 0.2.6 the flag was dropped with a warning
 - Connection timeout
 - Network issues (remote transport)
 - `settings` that can't be loaded for merging with `sandbox` (`"Failed to load settings: ..."`): a missing or unreadable file, invalid JSON, or JSON that is not an object. See [settings()](./feature-configuration-options.md#settings)
@@ -50,13 +58,24 @@ public class CLIConnectionException extends ClaudeSDKException {
 Claude Code CLI executable not found.
 
 ```java
-public class CLINotFoundException extends ClaudeSDKException {
+public class CLINotFoundException extends CLIConnectionException {
+    public CLINotFoundException();                                         // default install hint
     public CLINotFoundException(String message);
+    public CLINotFoundException(String message, String cliPath);
+    public CLINotFoundException(String message, String cliPath, Throwable cause);
+
+    @Nullable public String getCliPath();   // the path that was searched
 }
 ```
 
+A subclass of `CLIConnectionException`, so catch it first when you handle both.
+
 Thrown when the transport is built, before anything is spawned, if no CLI is
-found. On Windows only a native `claude.exe` in an absolute `PATH` entry, or
+found, and by `connect()` when the spawn fails because the executable does not
+exist (`ENOENT`; the spawn's exception is the cause). Since 0.2.6 it means only
+that: a CLI that exists but cannot be run raises a plain
+`CLIConnectionException` instead, so a permissions problem is no longer
+reported as "not installed". On Windows only a native `claude.exe` in an absolute `PATH` entry, or
 `~/.local/bin/claude.exe`, is found; npm's `claude.cmd` shim is found only with
 `allowUnsafeWindowsBatchCli(true)`, and the message says so.
 
@@ -143,14 +162,18 @@ Failed to parse JSON from CLI.
 
 ```java
 public class CLIJSONDecodeException extends ClaudeSDKException {
-    public CLIJSONDecodeException(String message, Throwable cause);
+    public CLIJSONDecodeException(String line, Throwable cause);
+
+    public String getLine();   // the raw line that failed to parse
 }
 ```
 
 **Causes**:
-- Malformed JSON
-- Unexpected format
+- A complete stdout line that starts with `{` but does not parse, or has content after the JSON object (`{"a":1} junk`). Since 0.2.6 this ends the message stream with this exception (the collecting `ClaudeSDK.query(...)` wraps it in a `QueryFailedException`); before, one such line silently swallowed every message after it. Lines that do not start with `{` are skipped, not reported
+- A stdout line longer than `maxBufferSize`
 - CLI version mismatch
+
+See [Transport Layer → Line framing and back-pressure](./feature-transport-layer.md#line-framing-and-back-pressure-026).
 
 ## MessageParseException
 
@@ -163,14 +186,18 @@ public class MessageParseException extends ClaudeSDKException {
 ```
 
 **Causes**:
-- Unknown message type
+- A message without a `type` field
 - Missing required fields
-- Type conversion error
+- A known message type with invalid structure (for example `assistant` content that is not a list)
+
+An unknown message type is skipped, not reported. Since 0.2.6 an explicit
+`null` or a wrong-typed *optional* field no longer raises this either; see
+[Message Types](./feature-message-types.md).
 
 ## QueryFailedException
 
-A collecting query ended in an error result. Carries the messages that had
-already arrived.
+A collecting query ended in an error result, or its thread was interrupted.
+Carries the messages that had already arrived.
 
 ```java
 public class QueryFailedException extends ClaudeSDKException {
@@ -185,6 +212,10 @@ public class QueryFailedException extends ClaudeSDKException {
 - `error_max_turns` — `maxTurns` reached
 - `error_max_budget_usd` — `maxBudgetUsd` reached
 - `error_during_execution` — including a resume refused by `resumeDropsTurn`
+- The calling thread was interrupted while waiting for messages (since 0.2.6).
+  The cause is a `ClaudeSDKException` caused by the `InterruptedException`,
+  `resultMessage()` is usually `null`, and the interrupt flag is restored. The
+  CLI is still shut down gracefully before the exception is thrown.
 
 **Why it exists**: the CLI reports these conditions by emitting a *complete*
 turn — assistant messages plus a final `ResultMessage` carrying the subtype,

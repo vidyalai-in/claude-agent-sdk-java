@@ -20,8 +20,10 @@ public record SdkPluginConfig(String type, String path) {
 ```
 
 Only the `"local"` type is supported. For each `local` plugin the transport
-adds `--plugin-dir <path>` to the CLI command; a config with any other `type`
-is skipped without an error, so always build configs with `local(...)`.
+adds `--plugin-dir <path>` to the CLI command. Since 0.2.6 a config with any
+other `type` makes `connect()` throw `IllegalArgumentException`
+(`Unsupported plugin type: …`), as the Python SDK raises `ValueError`; it used
+to be skipped with a warning. Build configs with `local(...)`.
 
 ## Configuring Plugins
 

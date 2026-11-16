@@ -41,8 +41,9 @@ record UserMessage(
     Object content,                               // String or List<ContentBlock>
     @Nullable String uuid,                        // Unique message identifier
     @Nullable String parentToolUseId,             // Set when inside a subagent tool use
-    @Nullable Map<String, Object> toolUseResult,  // Tool execution metadata
-    @Nullable MessageOrigin origin                // Provenance; null when unattributed
+    @Nullable Map<String, Object> toolUseResult,  // Tool execution metadata (a non-object value is wrapped; deprecated)
+    @Nullable MessageOrigin origin,               // Provenance; null when unattributed
+    @Nullable Object toolUseResultRaw             // tool_use_result exactly as sent (Map, String, List, Number or Boolean)
 ) implements Message {
     String type();                    // Returns "user"
     @Nullable String contentAsString();           // Content as String, or null if structured
@@ -50,10 +51,18 @@ record UserMessage(
 }
 ```
 
-A backwards-compatible 4-parameter constructor without `origin` remains
+Backwards-compatible constructors without `toolUseResultRaw` (5 parameters,
+which set it to `toolUseResult`) and without `origin` (4 parameters) remain
 available. `origin` is populated on injected turns (task notifications,
 channel/peer messages) and on user messages the CLI replays; tool-result
 messages never carry it. See [MessageOrigin](#messageorigin).
+
+`toolUseResultRaw` (since 0.2.6) holds `tool_use_result` as the CLI sent it,
+even when it is not a JSON object; it is what the Python SDK's
+`tool_use_result` holds. `toolUseResult` is the same map when the CLI sent an
+object. Any other value is wrapped as `{"unknown": value}` (the value itself,
+not its `toString()`), and that wrapping is deprecated: read
+`toolUseResultRaw` instead.
 
 ## AssistantMessage
 
@@ -69,7 +78,8 @@ record AssistantMessage(
     @Nullable String sessionId,                   // Session ID this message belongs to
     @Nullable String uuid,                        // Unique identifier in the session transcript
     @Nullable String userMessageUuid,             // uuid of the user message this turn is answering
-    @Nullable List<String> userMessageUuids       // uuid of every user message this turn has taken in so far
+    @Nullable List<String> userMessageUuids,      // uuid of every user message this turn has taken in so far
+    @Nullable Object errorRaw                     // top-level "error" exactly as sent (normally a String)
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
@@ -84,10 +94,22 @@ new AssistantMessage(content, model, parentToolUseId, error)  // usage and all l
 new AssistantMessage(content, model, parentToolUseId, error, usage)  // messageId and later fields default to null
 ```
 
-The 9-parameter constructor (without `userMessageUuid` and `userMessageUuids`)
-is kept too. Both are set only on the first top-level assistant message after
-the value is set or changes, which can be partway through a turn, and are null
-on all others. See [Matching a result to your prompt](#matching-a-result-to-your-prompt).
+The 11-parameter constructor without `errorRaw` (which sets it to
+`error.getValue()`) and the 9-parameter constructor (without `userMessageUuid`
+and `userMessageUuids`) are kept too. `userMessageUuid` and `userMessageUuids`
+are set only on the first top-level assistant message after the value is set
+or changes, which can be partway through a turn, and are null on all others.
+See [Matching a result to your prompt](#matching-a-result-to-your-prompt).
+
+`error` reads as `AssistantMessageError.UNKNOWN` when the CLI sends a value this
+SDK version does not recognize, or one that is not a string. `errorRaw` (since
+0.2.6) keeps the wire value, so you can still see what it was:
+
+```java
+if (assistant.error() == AssistantMessageError.UNKNOWN) {
+    System.err.println("Unrecognized error: " + assistant.errorRaw());
+}
+```
 
 ### AssistantMessageError
 
@@ -683,7 +705,7 @@ record TaskNotificationMessage(
     String subtype,                  // always "task_notification"
     Map<String, Object> data,        // raw message data
     String taskId,                   // unique task identifier
-    TaskNotificationStatus status,   // COMPLETED, FAILED, or STOPPED
+    @Nullable TaskNotificationStatus status, // COMPLETED, FAILED, STOPPED; null if unknown (see statusValue())
     String outputFile,               // path to task output file
     String summary,                  // human-readable summary
     String uuid,                     // message UUID
@@ -691,9 +713,14 @@ record TaskNotificationMessage(
     @Nullable String toolUseId,      // tool use ID (may be null)
     @Nullable TaskUsage usage        // final usage statistics (may be null)
 ) implements Message {
-    String type();  // Returns "system"
+    String type();                   // Returns "system"
+    @Nullable String statusValue();  // the status string exactly as sent
 }
 ```
+
+`status()` is `null` when the CLI sends a status this SDK version does not
+recognize (or none); `statusValue()` then holds the wire string. Up to 0.2.5 an
+unknown status ended the message stream.
 
 ### TaskNotificationStatus
 
@@ -704,7 +731,8 @@ enum TaskNotificationStatus {
     STOPPED;    // "stopped"
 
     String getValue();
-    static TaskNotificationStatus fromValue(String);
+    static TaskNotificationStatus fromValue(String);                      // throws on unknown
+    static @Nullable TaskNotificationStatus fromValueOrNull(String);      // null on unknown/null
 }
 ```
 

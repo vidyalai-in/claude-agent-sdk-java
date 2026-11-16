@@ -43,10 +43,18 @@ combined with `permissionPromptToolName`:
 })
 ```
 
+The SDK sets no time limit on the callback, as in the Python SDK, so it can
+wait for a human to approve. Before 0.2.6 it was cut off after 60 seconds,
+which failed any approval that took longer. (The SDK's own outbound control
+requests, such as `setModel`, keep their 60-second timeout.)
+
 If the CLI abandons the permission request before the callback answers (it
 sends a `control_cancel_request`, for example when the turn is interrupted),
 the SDK cancels the future the callback returned, interrupts the thread waiting
-on it, and sends no answer.
+on it, and sends no answer. Closing the client does the same, at once, for
+every callback still running. The callback may close the client itself (since
+0.2.6): the CLI still gets stdin EOF and its grace period, the closing thread
+is not interrupted, and that callback's own request is left unanswered.
 
 > **`canUseTool` only fires for `"ask"` decisions.** This callback is the SDK replacement for the interactive permission prompt — it runs only when the CLI's permission rules evaluate to `"ask"`. It is **not** invoked for tool calls already permitted by `allowedTools`, `permissionMode` (e.g. `ACCEPT_EDITS`, `BYPASS_PERMISSIONS`), or `permissions.allow` rules in settings — those never reach a prompt. To observe or gate **every** tool call regardless of permission rules, register a `PreToolUse` hook via `hooks(...)` instead.
 
@@ -117,6 +125,10 @@ record ToolPermissionContext(
     @Nullable String description             // human-readable subtitle for the permission UI
 )
 ```
+
+`suggestions` is read leniently: a suggestion whose type, destination, behavior or mode this SDK version does not know is skipped (logged at `FINE`) rather than failing the request, and a value that is not a list reads as empty. Before 0.2.6 one such suggestion kept the callback from being called at all.
+
+A suggestion's `destination` is a `PermissionUpdateDestination`: `USER_SETTINGS`, `PROJECT_SETTINGS`, `LOCAL_SETTINGS`, `SESSION`, or `CLI_ARG` (`"cliArg"`, rules that came from the command line, such as `--allowedTools`). `CLI_ARG` is new in 0.2.6, so an exhaustive `switch` over the enum needs a case for it.
 
 Backwards-compatible constructors are preserved for code written before the enrichment fields existed:
 

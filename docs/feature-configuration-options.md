@@ -223,7 +223,12 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
 
 A map is serialized as `{"mcpServers": {...}}` before it reaches
 `--mcp-config`; a path or JSON string is passed through untouched, so a JSON
-string must use that same top-level `mcpServers` key.
+string must use that same top-level `mcpServers` key. A map that cannot be
+serialized fails `connect()` with `CLIConnectionException` (since 0.2.6; the
+flag used to be dropped with a warning). Unset fields of a server config are
+left out of the JSON rather than sent as `null`, so
+`new McpStdioServerConfig("node")` or `new McpHttpServerConfig(url)` loads as
+expected.
 
 ## Permission Settings
 
@@ -305,9 +310,11 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` requires `store.implementsListSessions()`.
 - `sessionStore + enableFileCheckpointing` is rejected — checkpoints are local-disk only.
 
+**A slow store holds up the stream.** Before each `ResultMessage` the reader waits for the pending entries to be appended, and reads nothing else from the CLI meanwhile, so a control call such as `interrupt()` waits too. `close()` likewise waits for the final flush. Each wait is bounded by the batcher's flush timeout, 181 s by default. The Python SDK behaves the same way; see the [caveat in the Session Store guide](./feature-session-store.md#flush-mode-batched-vs-eager).
+
 ### sessionStoreFlush()
 
-Controls when transcript-mirror entries are flushed to the configured `sessionStore`. Defaults to `SessionStoreFlushMode.BATCHED` (flush once per turn or on buffer overflow). Use `SessionStoreFlushMode.EAGER` to schedule a background flush after every frame for near-real-time delivery — appends remain serialized in enqueue order, but a slow adapter will not stall the read loop. Ignored when `sessionStore` is unset.
+Controls when transcript-mirror entries are flushed to the configured `sessionStore`. Defaults to `SessionStoreFlushMode.BATCHED` (flush once per turn or on buffer overflow). Use `SessionStoreFlushMode.EAGER` to schedule a background flush after every frame for near-real-time delivery — appends remain serialized in enqueue order, but a slow adapter will not stall the read loop between results (the flush before each `ResultMessage` still waits for it, in both modes). Ignored when `sessionStore` is unset.
 
 ```java
 import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
@@ -337,6 +344,11 @@ Maximum conversation turns.
 ```java
 .maxTurns(10)  // Limit to 10 turns
 ```
+
+`0` counts as unset: like the Python SDK, the SDK omits `--max-turns` for it, so the CLI's default applies.
+The same holds for an empty string in `model`, `fallbackModel`,
+`permissionPromptToolName`, `resume`, `sessionId` and `settings`, and an empty
+`mcpServersJson`: since 0.2.6 the flag is left out rather than sent empty.
 
 **Use cases**:
 - Budget control
@@ -388,7 +400,7 @@ Default: 100MB. Increase for large outputs.
 
 **Types**:
 - `ThinkingConfigAdaptive` - Adaptive thinking with 32,000 token default
-- `ThinkingConfigEnabled(int budgetTokens)` - Fixed token budget (must be > 0)
+- `ThinkingConfigEnabled(int budgetTokens)` - Fixed token budget (zero or more; `0` is sent as `--max-thinking-tokens 0`)
 - `ThinkingConfigDisabled` - No thinking tokens
 
 **Note**: This option takes precedence over the deprecated `maxThinkingTokens()`.
@@ -465,7 +477,20 @@ Maximum message queue size.
 .maxMsgQSize(1000)
 ```
 
-Increase for high-throughput scenarios.
+Default: 1000. When the queue is full, the reader waits until your code takes
+a message (back-pressure, like the Python SDK's awaited send), so a slow
+consumer slows the CLI down rather than losing output. Before 0.2.6 a message
+that found the queue full for 5 seconds was dropped. The end of the stream and
+any error are always delivered, even to an iterator created later. Increase
+the size for high-throughput scenarios.
+
+It is a soft limit (since 0.2.6). While a control request the SDK sent
+(`interrupt()`, `setModel()`, `getMcpStatus()`, ...) waits for its answer, the
+reader keeps reading past the limit, because that answer arrives on the same
+stdout as the messages. A control call made before anyone drains the queue
+therefore no longer times out behind a full queue. Nothing is dropped and the
+order is kept. The value must be at least 1: a smaller one fails `connect()`
+(or `ClaudeSDK.query`) with `IllegalArgumentException`.
 
 ## Model Configuration
 
@@ -656,6 +681,18 @@ Keys are flag names **without** the leading `--`; the transport adds it. A
 the `--flag=value` form so it cannot be parsed as a separate flag; any other
 value is sent as two tokens.
 
+Since 0.2.6 the map may hold `null` values (the Python SDK's spelling of a bare
+flag), and the flags are passed in the map's iteration order. `Map.of` holds
+no nulls and has no defined order, so use a `LinkedHashMap` when either
+matters:
+
+```java
+Map<String, String> flags = new LinkedHashMap<>();
+flags.put("replay-user-messages", null);   // --replay-user-messages
+flags.put("debug", "api");                  // --debug api, always after it
+.extraArgs(flags)
+```
+
 ## Callbacks
 
 ### canUseTool()
@@ -686,7 +723,15 @@ BiFunction<String, Object, ToolPermissionContext, CompletableFuture<PermissionRe
 ### stderrCallback()
 
 Receive stderr output from CLI. Invoked once per stderr line as the CLI emits
-it (only piped when this callback is set).
+it. Stderr is piped only when this callback is set. Without one, the CLI
+inherits the JVM's stderr since 0.2.6, as in the Python SDK, so its output
+appears on your process's stderr. (It used to be piped and never read, which
+could block the CLI once it had written more than a pipe buffer.)
+
+Lines are framed as the Python SDK frames them: split on `\n` only (a bare
+`\r`, as a progress line uses, stays in the line), trailing whitespace
+stripped, and blank lines skipped. A line longer than `maxBufferSize` is passed
+on in pieces, and a last line without a newline is still delivered.
 
 ```java
 .stderrCallback(line -> {
@@ -746,11 +791,13 @@ See [Hooks → Failure policy](./feature-hooks.md#failure-policy-onfailure).
 
 ### user()
 
-Set user identity for tracking.
-
-```java
-.user("user-12345")
-```
+**Deprecated, and not supported by the Java SDK.** The Python SDK runs the CLI
+subprocess as this OS user; Java's `ProcessBuilder` cannot switch users. Up to
+0.2.5 the option was accepted and silently ignored, so the CLI ran as the JVM's
+user. Since 0.2.6, `connect()` (and `ClaudeSDK.query(...)`) fails with
+`CLIConnectionException` when it is set. Remove it from your options. To run
+the CLI as another user, point [`cliPath()`](#clipath) at a wrapper script that
+switches users (for example one that runs `sudo -u <user> claude "$@"`).
 
 ### includePartialMessages()
 
@@ -959,7 +1006,7 @@ Load Claude Code plugins from local directories.
 ))
 ```
 
-Each `local` plugin becomes `--plugin-dir <path>`. See [Plugin System](./feature-plugin-system.md).
+Each `local` plugin becomes `--plugin-dir <path>`. Any other `type` makes `connect()` throw `IllegalArgumentException` (since 0.2.6; it used to be skipped). See [Plugin System](./feature-plugin-system.md).
 
 ### outputFormat()
 
@@ -978,6 +1025,9 @@ Structured output format (Messages API style).
     )
 ))
 ```
+
+The schema is sent as `--json-schema`. One that cannot be serialized fails
+`connect()` with `CLIConnectionException` rather than being dropped.
 
 ### enableFileCheckpointing()
 

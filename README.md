@@ -418,6 +418,35 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+### Typed Parameters
+
+`@Tool` methods can take typed parameters instead of a `Map`: the SDK publishes
+a matching JSON Schema (lists and arrays, enums, `Optional`, records, `UUID`,
+`java.time` types and more) and converts each argument to the parameter's type.
+`@ToolParam` adds a description, names a parameter for code compiled without
+`-parameters`, or makes it optional:
+
+```java
+import in.vidyalai.claude.sdk.mcp.ToolParam;
+
+public class PaintTools {
+
+    public enum Color { WHITE, CREAM, SAGE, NAVY }
+
+    @Tool(name = "paint_walls", description = "Order paint for some walls of a room")
+    public ToolResult paintWalls(
+            @ToolParam(description = "Names of the walls to paint") List<String> walls,
+            @ToolParam(description = "Paint color") Color color,
+            @ToolParam(description = "Coats of paint (default 2)") Optional<Integer> coats) {
+        return ToolResult.text("Ordered paint for " + walls + " in " + color
+                + ", " + coats.orElse(2) + " coats.");
+    }
+}
+```
+
+See [docs/feature-mcp-servers.md](docs/feature-mcp-servers.md#1-typed-parameters-recommended)
+for the full type mapping.
+
 ### Using SdkMcpTool Directly
 
 ```java
@@ -506,6 +535,10 @@ covers work that cannot poll, such as a blocking read.
 parts of MCP the built-in server does not serve — resources, prompts,
 completions — can implement the interface itself and register it the same way.
 See [docs/feature-mcp-servers.md](docs/feature-mcp-servers.md#custom-mcp-handlers).
+
+One `SdkMcpServer` can be shared by several clients at once: each client opens
+its own session of it (`openSession()`), so their calls, cancellations and
+shutdowns never mix.
 
 ### Benefits Over External MCP Servers
 
@@ -1042,7 +1075,9 @@ hands the collected messages back via `partialMessages()` and the
 `resultMessage()` convenience accessor; its `getCause()` is the
 `ResultException` described above. Catch it whenever you set `maxTurns`
 or `maxBudgetUsd`: reaching a cap you configured is an expected outcome, not
-a crash.
+a crash. Since 0.2.6 it is also thrown, with the messages received so far and
+the interrupt flag restored, when the thread running `ClaudeSDK.query(...)` is
+interrupted; a streaming iterator throws `ClaudeSDKException` in that case.
 
 ## Streaming Events
 

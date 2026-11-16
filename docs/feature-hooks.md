@@ -84,6 +84,12 @@ record HookContext(
 The SDK waits for the returned future before answering the CLI. Return
 `CompletableFuture.completedFuture(...)` for synchronous work.
 
+The SDK sets no time limit of its own on that wait, as in the Python SDK. The
+CLI enforces the matcher's `timeoutSeconds` (60 seconds by default) and sends a
+`control_cancel_request` when it expires. Before 0.2.6 the SDK also cut every
+callback off after 60 seconds, which failed a hook whose own `timeout` was
+longer.
+
 A callback that throws, returns a future that completes exceptionally,
 completes with `null` or returns a `null` future is answered with an error. A
 callback with no opinion returns `HookOutput.empty()`, never `null`. Whether an
@@ -94,7 +100,10 @@ If the CLI abandons the hook call (it sends a `control_cancel_request`, for
 example when the turn is interrupted), the SDK cancels the future the callback
 returned, interrupts the thread waiting on it, and sends no answer. A callback
 that blocks its thread sees an `InterruptedException`; one that hands work to
-another thread can react to the cancelled future.
+another thread can react to the cancelled future. Closing the client cancels
+in-flight callbacks the same way, at once. A hook may close the client itself
+(since 0.2.6): the CLI still gets stdin EOF and its grace period, the closing
+thread is not interrupted, and that hook's own request is left unanswered.
 
 > **Dispatch order:** when multiple matchers are registered on the same event,
 > the CLI dispatches all matching hook callbacks **concurrently** (in parallel),
@@ -151,6 +160,7 @@ handle the refusal.
 | `permissionMode()` | `@Nullable String` | Current permission mode |
 | `promptId()` | `@Nullable String` | UUID of the user prompt being processed. Matches the `prompt.id` attribute on OpenTelemetry events. Null until the first user input |
 | `effort()` | `@Nullable HookEffort` | Effort in effect for the current turn, as `HookEffort(String level)` (e.g. `"low"`, `"high"`, `"max"`, after any downgrade for the selected model). Present for hooks that fire within a tool-use context on models that support effort |
+| `raw()` | `Map<String, Object>` | The input exactly as the CLI sent it, every key included, also ones the record does not model. Unmodifiable; empty for an input built with a constructor (since 0.2.6) |
 
 Event-specific fields:
 
@@ -164,13 +174,35 @@ Event-specific fields:
 | `StopHookInput` | `stopHookActive`, `lastAssistantMessage`, `backgroundTasks`, `sessionCrons` |
 | `SubagentStartHookInput` | `agentId`, `agentType` |
 | `SubagentStopHookInput` | `stopHookActive`, `agentId`, `agentTranscriptPath`, `agentType`, `lastAssistantMessage`, `backgroundTasks`, `sessionCrons` |
-| `PreCompactHookInput` | `trigger` (`CompactTriggerType`), `customInstructions` |
+| `PreCompactHookInput` | `trigger` (`CompactTriggerType`, `null` for a value this SDK does not know), `customInstructions` |
 | `NotificationHookInput` | `message`, `title`, `notificationType` |
 
 Fields the CLI may omit are `null` when absent: `permissionMode`, `promptId`,
 `effort`, `agentId`/`agentType` on the tool inputs, `isInterrupt`,
 `durationMs`, `lastAssistantMessage`, `backgroundTasks`, `sessionCrons`,
-`permissionSuggestions`, `title` and `customInstructions`.
+`permissionSuggestions`, `title` and `customInstructions`. `PreCompactHookInput.trigger()`
+is also `null` when the CLI sends a trigger this SDK version does not know;
+before 0.2.6 such a value failed the hook.
+
+### Reading fields newer than the SDK
+
+`raw()` gives every hook the CLI's input as sent, as the Python SDK hands its
+hooks the raw dict. Use it for a key that a newer CLI sends and the typed
+record does not yet model, or for the wire value behind a `null` enum:
+
+```java
+HookMatcher.HookCallback onCompact = (input, context) -> {
+    if (input instanceof PreCompactHookInput compact && compact.trigger() == null) {
+        System.out.println("Unknown compact trigger: " + compact.raw().get("trigger"));
+    }
+    Object extra = input.raw().get("some_new_field");  // null when absent
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+```
+
+Every hook input record gained a trailing `raw` component in 0.2.6. Each
+earlier constructor is kept and leaves `raw()` empty, but a record
+deconstruction pattern (JDK 21+) must add the new component.
 
 ### Subagent context
 
@@ -249,7 +281,20 @@ HookOutput.builder()
 ```
 
 Only the fields you set are sent. When `async` is set, only `async` and
-`asyncTimeout` are sent.
+`asyncTimeout` (plus any extra fields, below) are sent.
+
+For a top-level key the typed builder does not model, such as one newer than
+this SDK, use `extraField(key, value)` or `extraFields(map)` (since 0.2.6). The
+value is sent as given, `null` as JSON `null`, and a typed field that is also
+set wins over an extra field with the same key:
+
+```java
+HookOutput.builder()
+    .systemMessage("Checked")
+    .extraField("someNewKey", true)
+    .extraFields(Map.of("anotherKey", "value"))
+    .build();
+```
 
 ## Hook-Specific Outputs
 

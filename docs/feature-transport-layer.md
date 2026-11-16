@@ -51,15 +51,46 @@ Transport transport = new SubprocessCLITransport(options);
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display` is forwarded only for `Adaptive` and `Enabled` configs (and only when `display != null`); `Disabled` never emits it. |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | Both flags emitted together when `display` is set. |
 | `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | Same as a plain string; `snapshot` travels on the `initialize` request instead. |
-| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | One per `local` plugin; other types are skipped. |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | One per `local` plugin; any other type throws `IllegalArgumentException` (skipped before 0.2.6). |
+| `thinking(ThinkingConfigEnabled(0))` | `--max-thinking-tokens 0` | A zero budget is accepted and sent, as in the Python SDK. |
+| `maxTurns(0)`, `model("")`, `fallbackModel("")`, `permissionPromptToolName("")`, `resume("")`, `sessionId("")`, `settings("")`, `mcpServersJson("")` | *(none)* | Empty strings and `0` are omitted, as Python omits falsy values (since 0.2.6). |
+| `mcpServers(Map)`, `outputFormat(json_schema)` | `--mcp-config`, `--json-schema` | A value that cannot be serialized fails `connect()` with `CLIConnectionException` instead of dropping the flag. |
 
-**Stderr piping**: stderr is piped only when `options.stderrCallback() != null`. The legacy `--debug-to-stderr` extra-arg detection was removed in 0.1.13 (prep for the CLI flag's deprecation). To capture verbose CLI debug output, pass `extraArgs(Map.of("debug-file", "/path/to/log"))` and read that file instead.
+**Stderr piping**: stderr is piped only when `options.stderrCallback() != null`. Otherwise the CLI inherits the JVM's stderr (since 0.2.6, as the Python SDK's `stderr=None` does); before, it was piped and never read, and a CLI that wrote more than a pipe buffer (about 64 KB) of stderr blocked on its next write. The legacy `--debug-to-stderr` extra-arg detection was removed in 0.1.13 (prep for the CLI flag's deprecation). To capture verbose CLI debug output, pass `extraArgs(Map.of("debug-file", "/path/to/log"))` and read that file instead.
 
 **Stderr callback isolation** (0.1.16): each `stderrCallback.accept(line)` call is wrapped in a per-line `try/catch(Throwable)`. A throwing callback is caught, logged at `FINE`, and the read loop continues with the next line. Previously a throw would exit the loop and silently drop every subsequent stderr line for the rest of the session. Outer-loop failures (stream closed unexpectedly, I/O errors) are also logged at `FINE` instead of being silently swallowed.
+
+**Bounded `close()`** (0.2.6): every step of `close()` has a time limit, as in the Python SDK, so a CLI that stays silent or a write blocked on a full stdin pipe can no longer hang it:
+
+1. Take the write lock to close stdin, waiting up to 5 s. If a write still holds it, the CLI is stopped without closing stdin, and stdin is closed later on another thread once the write lets go.
+2. Wait up to 5 s for the CLI to exit after stdin EOF, so it can flush its session file.
+3. SIGTERM, then wait up to 5 s.
+4. SIGKILL, then wait up to 5 s.
+5. Shut down the stderr and stdout reader executors (2 s, then 1 s forced), then close the pipes underneath them.
+
+An interrupt does not shorten these waits. `close()` clears the interrupt flag for its duration and sets it again on return, so a caller whose flag is set, or who is interrupted meanwhile, still closes stdin and gives the CLI its grace period. The same holds for `disconnect()`/`close()` called from inside a `canUseTool`, hook or SDK MCP callback; the request that callback is serving is left unanswered. Before 0.2.6 such a close killed the CLI without closing stdin.
 
 **Orphan-child cleanup** (0.1.18): every spawned CLI process is registered in a static `ACTIVE_CHILDREN` set, and a JVM shutdown hook best-effort terminates any that are still alive if the process exits before `close()` runs. `close()` escalates termination (grace period → `destroy()` / SIGTERM → `destroyForcibly()` / SIGKILL) and then removes the process from `ACTIVE_CHILDREN` **only after confirming it is no longer alive** (`!process.isAlive()`). A child that somehow survives the escalation (a raced kill, or a `waitFor` that timed out) therefore stays tracked, so the shutdown-hook reaper still gets a chance at it instead of leaking as an orphaned `claude` process.
 
 **`resume` / `sessionId` argv flag-injection hardening** (0.1.19): `buildCommand()` emits `resume` and `sessionId` as single `--flag=value` argv tokens (`--resume=<value>`, `--session-id=<value>`) rather than as two separate tokens (`--resume`, `<value>`). The CLI declares `--resume` with an *optional* value, so in the two-token form a dash-leading value is not bound to the flag and is instead parsed as an independent CLI flag. An application that routes untrusted input into `resume`/`sessionId` (e.g. a "resume my session" endpoint that reads a session ID from a request) could therefore inject arbitrary CLI flags — `resume("--version")` silently ran `claude --version` and yielded zero messages. The equals form always binds the value to the flag, and the CLI then rejects a dash-leading value as an invalid session ID. This is argv-level (one argument per option, **no shell is involved**), so it is flag injection, not command execution, and only affects apps forwarding untrusted input into these options. Matches the `--setting-sources=` style already used elsewhere in `buildCommand()`.
+
+### Line framing and back-pressure (0.2.6)
+
+**Stderr**: stderr is split into lines the way the Python SDK's `_handle_stderr` does: on `\n` only, so a bare `\r` (a progress line) stays in the line; trailing whitespace is stripped and blank lines are skipped. A line longer than `maxBufferSize` is passed on in pieces rather than buffered without bound, and a last line with no newline, or the part of a line read before the stream failed, is still delivered.
+
+**Stdout**: stdout is NDJSON, split on `\n` only. Per complete line:
+
+| Line | Result |
+|---|---|
+| blank | skipped |
+| not starting with `{` (e.g. `[SandboxDebug] …`) | skipped, logged at `FINE` |
+| one JSON object | delivered |
+| starts with `{` but does not parse, or has content after the object (`{"a":1} junk`) | `CLIJSONDecodeException` |
+| longer than `maxBufferSize` | `CLIJSONDecodeException` |
+
+A complete line cannot be completed by later data, so a corrupt one is an error rather than something to keep buffering: the exception ends the message stream, as in the Python SDK, and the consumer's iterator rethrows it. Before 0.2.6 a malformed line silently swallowed every message after it. A last line cut off by the end of the stream is delivered if it parses and dropped otherwise. When stdout ends normally, a non-zero CLI exit code is reported as `ProcessException`.
+
+**Back-pressure**: the reader waits for room in its queue rather than dropping a message, so a slow consumer slows the CLI down instead of losing output. The same holds one layer up, in `QueryHandler`'s message queue (see [Architecture → QueryHandler](./architecture.md#queryhandler)). That queue's `maxMsgQSize` is a soft limit: while an outbound control request waits for its answer, `QueryHandler` keeps reading past it, so the `control_response` behind the queued messages can still arrive.
 
 ### Windows: batch-script CLI refusal (0.1.21)
 
@@ -139,6 +170,9 @@ ClaudeAgentOptions.builder().resume("Refactor the parser (part 2)").build();
 | `Map.of("some-flag", "value")` | `--some-flag`, `value` |
 | `Map.of("some-flag", "--evil")` | `--some-flag=--evil` |
 | `Map.of("verbose-thing", "")` | `--verbose-thing` (bare boolean flag) |
+| `verbose-thing` → `null` (in a `HashMap` / `LinkedHashMap`) | `--verbose-thing` (bare boolean flag, since 0.2.6) |
+
+Entries are emitted in the map's iteration order (since 0.2.6), so pass a `LinkedHashMap` when the order of the flags matters.
 
 ### Windows: batch-CLI opt-in (0.1.22)
 

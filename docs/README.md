@@ -69,13 +69,13 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
 - **[MCP Servers](./feature-mcp-servers.md)** - Creating custom tools with Model Context Protocol
   - SDK MCP servers (in-process)
   - External MCP servers (stdio/SSE/HTTP)
-  - @Tool annotation usage
-  - Programmatic tool creation
+  - @Tool annotation usage, typed parameters (lists, enums, `Optional`, records, `java.time`) and `@ToolParam`
+  - Programmatic tool creation, including the `Map.of("text", String.class)` schema shorthand
   - Tool schemas, and argument validation against a tool's `inputSchema`
   - Failure semantics (`isError` results for everything a tool call meets)
   - Cancelling a running tool with `ToolCallContext`
   - Protocol details (version negotiation, notifications, methods)
-  - Custom MCP handlers via `McpMessageHandler`
+  - Custom MCP handlers via `McpMessageHandler`, and one session per client (`openSession()`)
   - Async execution patterns
   - Complete examples (calculator, database, API integration)
 
@@ -83,11 +83,11 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
   - Inline agent definitions
   - Filesystem-based agents
   - Large agent support (260KB+ via stdin)
-  - AgentDefinition API (with skills, memory scope, and MCP server fields)
+  - AgentDefinition API (with skills, memory scope, MCP server fields, and numeric effort via `withEffort(int)`)
   - Observing a subagent's output, and `forwardSubagentText`
 
 - **[Session History](./feature-session-history.md)** - Read and manage historical Claude Code conversation sessions from disk
-  - Listing sessions across all projects or filtered by directory
+  - Listing sessions across all projects or filtered by directory (git worktrees included)
   - Looking up a single session by ID (`getSessionInfo`)
   - Reading full conversation transcripts
   - Reading subagent transcripts (`listSubagents`, `getSubagentMessages`),
@@ -132,7 +132,8 @@ The Claude Agent SDK for Java is a comprehensive library for integrating Claude 
 - **[Hooks System](./feature-hooks.md)** - Intercepting and responding to lifecycle events
   - 10 hook events
   - HookMatcher, HookCallback and HookOutput
-  - Typed hook inputs, including `promptId`, `effort`, tool `durationMs`, and background tasks and scheduled wakeups on Stop
+  - Typed hook inputs, including `promptId`, `effort`, tool `durationMs`, and background tasks and scheduled wakeups on Stop; `raw()` for fields newer than the SDK
+  - `HookOutput.Builder.extraField(...)` for output keys the builder does not model
   - All 21 hook-specific output types (e.g. a Stop hook's `additionalContext` keeps the model going)
   - PostToolUse `updatedToolOutput` (replace any tool's output) and `updatedMCPToolOutput`
   - `PermissionDecision.DEFER` + `DeferredToolUse` on ResultMessage

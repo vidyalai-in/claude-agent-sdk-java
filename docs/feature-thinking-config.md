@@ -74,10 +74,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```
 
 **Parameters**:
-- `budgetTokens` (int) — Maximum thinking tokens (must be positive)
+- `budgetTokens` (int) — Maximum thinking tokens (zero or more). Since 0.2.6, `0` is accepted and sent as `--max-thinking-tokens 0`, as the Python SDK sends it
 - `display` (optional, may be `null`) — see [Thinking Display](#thinking-display) below
 
-**Throws**: `IllegalArgumentException` if `budgetTokens ≤ 0`
+**Throws**: `IllegalArgumentException` if `budgetTokens < 0`
 
 **Best for**:
 - Budget-conscious applications

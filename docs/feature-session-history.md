@@ -38,7 +38,7 @@ record SDKSessionInfo(
     String sessionId,              // UUID identifying the session
     String summary,                // display title (custom title, AI title, lastPrompt, summary, or first prompt)
     long lastModified,             // last-modified time in milliseconds since epoch
-    @Nullable Long fileSize,       // session file size in bytes (null for remote storage backends)
+    @Nullable Long fileSize,       // transcript size in bytes (null when read from a store's summary sidecar)
     @Nullable String customTitle,  // user-set custom title or AI-generated title (may be null)
     @Nullable String firstPrompt,  // first meaningful user prompt (may be null)
     @Nullable String gitBranch,    // git branch at end of session (may be null)
@@ -48,7 +48,24 @@ record SDKSessionInfo(
 )
 ```
 
-The `summary` field is resolved in priority order: custom title > AI title > lastPrompt > auto-generated summary > first prompt.
+The `summary` field is resolved in priority order: custom title > AI title > lastPrompt > auto-generated summary > first prompt. An empty `customTitle`, `gitBranch` or `cwd` counts as absent and falls through to the next source, as in the Python SDK.
+
+### How the first prompt is found
+
+`firstPrompt`, the summary fallback, the default fork title and the
+`SessionSummary` fold all use one extraction, which follows the Python SDK's
+rules since 0.2.6. It reads the user entries from the start of the transcript
+and skips:
+
+- tool results, `isMeta` entries and compact summaries (`isCompactSummary`);
+- auto-generated text: `<local-command-stdout>`, `<session-start-hook>`,
+  `<tick>`, `<goal>`, `[Request interrupted by user…]`, and text that is only an
+  `<ide_opened_file>` or `<ide_selection>` tag.
+
+Every text block of a message is tried, in order, with newlines collapsed to
+spaces. A text that carries a `<command-name>` tag is skipped too, but the
+first command name seen becomes the fallback when no other prompt is found.
+The result is cut at 200 characters plus an ellipsis.
 
 A backwards-compatible constructor without `tag` and `createdAt` is also available.
 
@@ -139,7 +156,13 @@ Path projectDir = Path.of("/my/project");
 List<SDKSessionInfo> sessions = ClaudeSDK.listSessions(projectDir);
 ```
 
-Filters to sessions whose working directory matches `projectDir`.
+Filters to sessions whose working directory matches `projectDir`. The directory is canonicalized first (relative paths made absolute, symlinks resolved, Unicode NFC-normalized), so a symlinked, relative or NFD-spelled path finds the same sessions as the real path.
+
+When `projectDir` is inside a git repository with more than one worktree, sessions from every worktree are included, the same as `listSessions(projectDir, null, true)`. Before 0.2.6 this overload read only `projectDir` itself. To keep that, pass `false` for `includeWorktrees`:
+
+```java
+List<SDKSessionInfo> thisDirOnly = ClaudeSDK.listSessions(projectDir, null, false);
+```
 
 ### With limit and worktrees
 
@@ -151,7 +174,7 @@ List<SDKSessionInfo> recent = ClaudeSDK.listSessions(
 );
 ```
 
-`includeWorktrees = true` runs `git worktree list` and includes sessions from all worktrees of the repository.
+`includeWorktrees = true` runs `git worktree list` and includes sessions from all worktrees of the repository. A project directory is matched to a worktree by its exact name, so `/root/project` does not pick up the sessions of `/root/project-foo`. Prefix matching is used only for paths long enough that the CLI truncates the directory name and appends a hash.
 
 ### With offset pagination
 
@@ -197,6 +220,8 @@ SDKSessionInfo info = ClaudeSDK.getSessionInfo(
 ```
 
 Returns `null` if the session is not found, is a sidechain session, or has no extractable summary.
+
+With a directory, the lookup tries that directory's project first and then each of its git worktrees. A missing transcript or a 0-byte stub counts as "not here", so a stub left in one worktree does not hide the real session in another. `getSessionMessages`, `renameSession` and `tagSession` search the same way.
 
 ## Reading Session Messages
 
@@ -252,10 +277,18 @@ ClaudeSDK.renameSession(
 ```
 
 **Constraints:**
-- `sessionId` must be a valid UUID (lowercase hex with hyphens).
+- `sessionId` must be a valid UUID (hex with hyphens, either letter case).
 - `title` must be non-empty after stripping leading/trailing whitespace.
 - Throws `FileNotFoundException` if the session JSONL file is not found.
 - Throws `IOException` if the file write fails.
+
+**Where the entry is written.** With a directory, the SDK tries that
+directory's project first, then the project of each of its git worktrees, as
+`listSessions` and `getSessionMessages` do. A missing file or a 0-byte stub
+means "not here, keep looking". The file is opened in append mode and is never
+created, so the entry always lands at the current end of the file, even while a
+running CLI is appending to the same transcript. Any other I/O error (permission
+denied, disk full) is thrown rather than treated as "not found".
 
 After renaming, `listSessions()` returns the new title in the `summary` and `customTitle` fields of `SDKSessionInfo`.
 
@@ -284,6 +317,7 @@ ClaudeSDK.tagSession(
 - Tags with dangerous Unicode characters (zero-width chars, directional marks, private-use chars) are automatically sanitized.
 - Throws `FileNotFoundException` if the session JSONL file is not found.
 - Throws `IOException` if the file write fails.
+- The entry is written the same way as a rename: worktree fallback, then an atomic append that never creates the file.
 
 **Concurrent safety:** If the session is currently open in the CLI process, the CLI absorbs SDK-written entries into its cache on next metadata re-append. The most recent write wins.
 
@@ -366,9 +400,15 @@ ForkSessionResult result = ClaudeSDK.forkSession(
 - `sessionId` — UUID of the newly created forked session
 
 **Constraints:**
-- `sessionId` and optional `upToMessageId` must be valid UUIDs.
+- `sessionId` and optional `upToMessageId` must be valid UUIDs. An empty `upToMessageId` is the same as `null`: the whole transcript is copied.
 - Throws `FileNotFoundException` if the source session is not found.
 - Throws `IllegalArgumentException` if the session has no messages or `upToMessageId` is not found.
+
+Without a `title`, the fork is named after the source's custom title, then its
+AI title, then its [first prompt](#how-the-first-prompt-is-found), with
+`" (fork)"` appended (`"Forked session (fork)"` when none exists). The new
+transcript is created exclusively, and with mode `0600` (owner read/write only)
+on file systems with POSIX permissions.
 
 `forkSession()` produces an offline copy without running the CLI. To *resume*
 from an earlier point and keep talking, use truncating resume instead.
@@ -574,7 +614,7 @@ if (sessions.isEmpty()) {
 
 ### Handle missing CLAUDE_CONFIG_DIR
 
-By default, sessions are stored under `~/.claude/projects/`. If the environment variable `CLAUDE_CONFIG_DIR` is set, it overrides the location. The SDK respects this variable automatically.
+By default, sessions are stored under `~/.claude/projects/`. If the environment variable `CLAUDE_CONFIG_DIR` is set, it overrides the location. The SDK respects this variable automatically, and NFC-normalizes it as it does project directories.
 
 ### Use limit to avoid large result sets
 

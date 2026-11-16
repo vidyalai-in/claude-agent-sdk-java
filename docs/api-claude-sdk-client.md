@@ -35,9 +35,13 @@ public void connect() throws CLIConnectionException
 
 Establish connection to Claude Code CLI.
 
-**Thread Safety**: Thread-safe, idempotent
+**Thread Safety**: Thread-safe, idempotent. `connect()`, `disconnect()` and
+`close()` are serialized (since 0.2.6): each waits for one already running on
+another thread.
 
-**Throws**: `IllegalStateException` if called after close()
+**Throws**: `IllegalStateException` if called after close(), or if `close()`
+is called on another thread while the connect is under way (the connect first
+releases everything it set up)
 
 ### connect(String initialMessage)
 
@@ -45,7 +49,14 @@ Establish connection to Claude Code CLI.
 public void connect(String initialMessage) throws CLIConnectionException
 ```
 
-Connect and send initial message.
+Connect and send initial message. Any non-null message is sent, the empty
+string included (since 0.2.6, as in the Python SDK); pass `null`, or call
+`connect()`, to connect without one.
+
+**Throws**: `CLIConnectionException` if the CLI cannot be started (a missing
+executable is the `CLINotFoundException` subclass) or `user(...)` is set. A
+failed connect cleans up the process, its threads and any temporary
+`CLAUDE_CONFIG_DIR` before rethrowing.
 
 ### isConnected()
 
@@ -66,7 +77,13 @@ public void close()
 
 Close connection and cleanup resources.
 
-**Thread Safety**: Thread-safe, idempotent
+**Thread Safety**: Thread-safe, idempotent. Serialized with `connect()`: a call
+made while another thread connects or disconnects waits for it.
+
+Since 0.2.6 it is safe to call from inside a `canUseTool`, hook or SDK MCP tool
+callback, and with the calling thread's interrupt flag set. The CLI still gets
+stdin EOF and its grace period to exit, and the interrupt flag is preserved.
+The request the calling callback is serving is left unanswered.
 
 ## Sending Messages
 
@@ -166,6 +183,11 @@ Get iterator over all messages (continuous).
 
 **Returns**: `Iterator<Message>`
 
+**Throws** (from `hasNext()`): `ClaudeSDKException` caused by
+`InterruptedException` if the waiting thread is interrupted, with the interrupt
+flag restored (since 0.2.6; before, an interrupt ended the stream as if it were
+complete)
+
 ### receiveResponse()
 
 ```java
@@ -177,6 +199,10 @@ Get messages until next ResultMessage (auto-closes).
 **Thread Safety**: Thread-safe
 
 **Returns**: `Iterable<Message>`
+
+**Throws**: like `receiveMessages()`, `ClaudeSDKException` caused by
+`InterruptedException` if the waiting thread is interrupted, with the interrupt
+flag restored
 
 ## Control Methods
 
@@ -296,12 +322,13 @@ public Map<String, Object> getServerInfo()
 Get server initialization info: available commands, output styles and server
 capabilities.
 
-**Returns**: `Map<String, Object>` - The info from the `initialize` response
-(`null` only if the CLI returned none)
+**Returns**: `Map<String, Object>` - The info from the `initialize` response.
+An empty map when the response has no body (since 0.2.6; it used to be
+`null`)
 
 ## Thread Safety
 
-- **connect()**: Thread-safe, synchronized
+- **connect()**: Thread-safe, serialized with `disconnect()` and `close()`
 - **send methods**: Thread-safe
 - **receive methods**: Thread-safe, but share queue
 - **control methods**: Thread-safe

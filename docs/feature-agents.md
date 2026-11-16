@@ -74,8 +74,37 @@ AgentDefinition compat = new AgentDefinition(
 | `initialPrompt` | `String` (nullable) | Initial prompt sent when agent starts |
 | `maxTurns` | `Integer` (nullable) | Max turns for the agent; null means unlimited |
 | `background` | `Boolean` (nullable) | Run the agent in background |
-| `effort` | `String` (nullable) | Effort level: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. `"xhigh"` is Opus 4.7-specific and falls back to `"high"` on other models. See also the [`EffortLevel`](feature-configuration-options.md#effortlevel-enum) enum. |
+| `effort` | `String` (nullable) | Effort level: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. `"xhigh"` is Opus 4.7-specific and falls back to `"high"` on other models. See also the [`EffortLevel`](feature-configuration-options.md#effortlevel-enum) enum. Null when the effort is numeric. |
 | `permissionMode` | `String` (nullable) | Permission mode for the agent |
+| `numericEffort` | `Integer` (nullable) | Effort as a number rather than a level name (since 0.2.6). At most one of `effort` and `numericEffort` may be set; the constructor throws `IllegalArgumentException` for both |
+
+**Effort.** Set it on a copy with `withEffort(...)`, which takes a level name, an
+`EffortLevel` or a number (all since 0.2.6). Both forms go to the CLI under the
+same `"effort"` key, as the Python SDK's `effort: EffortLevel | int` does: a
+level as a string, a number as a JSON number. Each call replaces the other
+form, so `withEffort(32000)` clears `effort()` and `withEffort("high")` clears
+`numericEffort()`.
+
+```java
+import in.vidyalai.claude.sdk.types.config.EffortLevel;
+
+AgentDefinition tester = new AgentDefinition(
+        "Creates and runs tests",
+        "You are a testing expert.",
+        List.of("Read", "Write", "Bash"),
+        "sonnet")
+    .withEffort(32000);                  // "effort": 32000
+
+AgentDefinition reviewer = tester.withEffort(EffortLevel.HIGH);   // "effort": "high"
+AgentDefinition quick = tester.withEffort("low");                 // "effort": "low"
+```
+
+`AgentsExample` sets a numeric effort on its test-runner agent.
+
+The record gained the trailing `numericEffort` component in 0.2.6. Every earlier
+constructor is kept, but a record deconstruction pattern (JDK 21+) must add it.
+An MCP config record in `mcpServers` keeps its `"type"` when the agent is sent
+to the CLI (it was lost before 0.2.6).
 
 **Model field:** The `model` field accepts short aliases (`"sonnet"`, `"opus"`, `"haiku"`, `"inherit"`) or full model IDs (e.g., `"claude-sonnet-4-5"`).
 

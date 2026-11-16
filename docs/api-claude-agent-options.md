@@ -59,22 +59,22 @@ options.toBuilder()
 - `forkSession(boolean)` - Fork resumed session
 - `resumeSessionAt(String)` - Truncating resume: load the resumed conversation only up to and including this transcript-entry UUID, branching from an earlier point. Use with `resume` and usually `forkSession`. Accepts any transcript-entry UUID — typically an `AssistantMessage.uuid()` observed live, or a `SessionMessage.uuid()` from `ClaudeSDK.getSessionMessages(...)`. Emitted as `--resume-session-at=<value>`. See [Truncating Resume](./feature-session-history.md#truncating-resume).
 - `resumeDropsTurn(String)` - With `resumeSessionAt`: the UUID of the user prompt whose turn the truncation intends to discard. The CLI then validates at load time that *every* entry after the fork point belongs to that turn and refuses otherwise — so a queued user message or task notification the session absorbed mid-turn is never silently dropped. A refusal surfaces as an exception whose message contains `Resume rejected by --resume-drops-turn:`; treat it as deterministic and resume plainly rather than retrying. Forwarded whenever non-null, so an empty string reaches the CLI and is rejected there as malformed rather than silently disarming the guard. Emitted as `--resume-drops-turn=<value>`.
-- `sessionStore(SessionStore)` - Mirror transcripts to an external store and resume from it (see [Session Store](./feature-session-store.md)). When set, the SDK forwards `--session-mirror` to the CLI and routes `transcript_mirror` frames to `store.appendAsync(...)`. Pre-flight validation rejects `continueConversation + sessionStore` without `listSessions()` support and `sessionStore + enableFileCheckpointing`.
+- `sessionStore(SessionStore)` - Mirror transcripts to an external store and resume from it (see [Session Store](./feature-session-store.md)). When set, the SDK forwards `--session-mirror` to the CLI and routes `transcript_mirror` frames to `store.appendAsync(...)`. Pre-flight validation rejects `continueConversation + sessionStore` without `listSessions()` support and `sessionStore + enableFileCheckpointing`. A slow store holds the reader during the flush before each `ResultMessage` (control calls wait with it), and `close()` waits for the final flush, each up to 181 s by default.
 - `sessionStoreFlush(SessionStoreFlushMode)` - When transcript-mirror entries are flushed to `sessionStore`. `BATCHED` (default) coalesces entries and flushes once per turn or when the buffer exceeds 500 entries / 1 MiB; `EAGER` schedules a background flush after every frame for near-real-time delivery. Ignored when `sessionStore` is unset. See [Flush Mode](./feature-session-store.md#flush-mode-batched-vs-eager).
 - `loadTimeoutMs(long)` - Per-call timeout for `store.loadAsync()` / `listSubkeysAsync()` during resume materialization, in milliseconds (default `60_000`). A value of `0` means immediate timeout; large values effectively disable.
 
 ### Limits
-- `maxTurns(Integer)` - Max conversation turns
+- `maxTurns(Integer)` - Max conversation turns; `0` is treated as unset and sends no `--max-turns`
 - `maxBudgetUsd(Double)` - Max cost in USD
 - `maxBufferSize(Integer)` - Max stdout buffer bytes
 - `thinking(ThinkingConfig)` - Extended thinking configuration
 - `effort(String)` - Thinking depth level (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`). `"xhigh"` is Opus 4.7-specific and falls back to `"high"` on other models.
 - `effort(EffortLevel)` - Same as above, but type-safe using the [`EffortLevel`](feature-configuration-options.md#effortlevel-enum) enum (`LOW`, `MEDIUM`, `HIGH`, `XHIGH`, `MAX`). Pass `null` to clear.
 - `maxThinkingTokens(Integer)` - **DEPRECATED** Use `thinking()` instead. On newer models the value is treated as on/off (0 = disabled, anything else = adaptive)
-- `maxMsgQSize(Integer)` - Max message queue size
+- `maxMsgQSize(Integer)` - Max message queue size (default 1000, at least 1). A full queue holds the reader back until you consume a message (back-pressure); no message is dropped. A soft limit: while an outbound control request (`interrupt()`, `setModel()`, ...) waits for its answer, the reader keeps reading past it so the answer can arrive
 
 ### Model
-- `model(String)` - AI model name
+- `model(String)` - AI model name; an empty string sends no `--model` (as with `fallbackModel`, `permissionPromptToolName`, `resume`, `sessionId` and `settings`)
 - `fallbackModel(String)` - Fallback model
 - `betas(List<SdkBeta>)` - Beta features
 
@@ -86,17 +86,17 @@ options.toBuilder()
 - `addDirs(List<Path>)` - Additional context dirs
 - `env(Map<String, String>)` - Environment variables, merged over the inherited environment. The SDK also sets `CLAUDE_CODE_ENTRYPOINT` (overridable), `CLAUDE_AGENT_SDK_VERSION`, and `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` unless already named, and drops an inherited `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP`; see [env()](./feature-configuration-options.md#env)
 - `clientApp(String)` - Your app/library identifier (e.g. `"my-app/1.0.0"`), sent on API requests as `CLAUDE_AGENT_SDK_CLIENT_APP`; wins over `env` and the inherited value, `""` sends none. See [clientApp()](./feature-configuration-options.md#clientapp)
-- `extraArgs(Map<String, String>)` - Extra CLI flags; keys without the leading `--`, blank value for a bare flag
+- `extraArgs(Map<String, ? extends @Nullable String>)` - Extra CLI flags; keys without the leading `--`, `null` or blank value for a bare flag. Passed in the map's iteration order (use a `LinkedHashMap` when order matters); see [extraArgs()](./feature-configuration-options.md#extraargs)
 
 ### Callbacks
-- `stderrCallback(Consumer<String>)` - Stderr callback
+- `stderrCallback(Consumer<String>)` - Called once per CLI stderr line (split on `\n`, trailing whitespace stripped, blank lines skipped). Without it, the CLI inherits the JVM's stderr; see [stderrCallback()](./feature-configuration-options.md#stderrcallback)
 
 ### Hooks
 - `hooks(Map<HookEvent, List<HookMatcher>>)` - Hook callbacks. A `HookMatcher` can set `timeoutSeconds` and an `onFailure` policy (`HookOnFailure.CONTINUE` or `BLOCK`); see [Hooks → Failure policy](./feature-hooks.md#failure-policy-onfailure)
 - `includeHookEvents(boolean)` - When `true`, the CLI streams hook lifecycle events (`PreToolUse`, `PostToolUse`, `Stop`, …) into the message stream as `HookEventMessage` objects. The `SessionStart` and `Setup` hook events are emitted regardless. Maps to `--include-hook-events`. See [Hooks → Hook Lifecycle Events on the Stream](./feature-hooks.md#hook-lifecycle-events-on-the-stream).
 
 ### Advanced
-- `user(String)` - User identity
+- `user(String)` - **Deprecated, unsupported.** `connect()` throws `CLIConnectionException` when it is set, since Java cannot run the CLI as another OS user; see [user()](./feature-configuration-options.md#user)
 - `includePartialMessages(boolean)` - Emit a `StreamEvent` per API stream event (`--include-partial-messages`)
 - `verbatimPrompts(boolean)` - Mark every user message the SDK sends `client_composed`, so Claude Code delivers it as written: no `@path` expansion, no slash-command dispatch. Overwrites any per-message value while on. Requires Claude Code 2.1.248+ (the SDK warns on older CLIs). See [verbatimPrompts()](./feature-configuration-options.md#verbatimprompts)
 - `forwardSubagentText(boolean)` - When `true`, subagent text and thinking blocks are forwarded into the message stream alongside the `tool_use` / `tool_result` blocks that are always forwarded. Sent on the `initialize` control request (no CLI flag). See [Agents → Observing a subagent's output](./feature-agents.md#observing-a-subagents-output).
@@ -105,7 +105,7 @@ options.toBuilder()
 - `skills(List<String>)` - Skills allowlist (auto-injects `Skill(name)` into `allowedTools` and defaults `settingSources` to user/project). Names must be exact — wildcards, rule delimiters, and surrounding whitespace throw `IllegalArgumentException` at `connect()`
 - `skillsAll()` - Enable every discovered skill (auto-injects bare `Skill` tool)
 - `sandbox(SandboxSettings)` - Sandbox config for bash commands; its `network` key configures the sandbox's own network isolation (tool-level restrictions stay in permission rules)
-- `plugins(List<SdkPluginConfig>)` - Local plugin directories, `SdkPluginConfig.local(path)` → `--plugin-dir`
+- `plugins(List<SdkPluginConfig>)` - Local plugin directories, `SdkPluginConfig.local(path)` → `--plugin-dir`; any other type throws `IllegalArgumentException` at `connect()`
 - `outputFormat(Map<String, Object>)` - Output format
 - `enableFileCheckpointing(boolean)` - Enable file checkpointing for `rewindFiles()`; incompatible with `sessionStore`
 

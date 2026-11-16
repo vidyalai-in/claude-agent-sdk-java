@@ -45,6 +45,8 @@ for (Message msg : ClaudeSDK.query(prompt)) {
 
 **Unknown type vs. malformed content.** Returning `null` applies to an *unrecognized message type*. A *known* type (`user` / `assistant`) whose structure is invalid is a different case — the parser raises a `MessageParseException` rather than silently dropping it, so a real protocol violation is not hidden. Since 0.1.18 this is enforced explicitly: an `assistant` message whose `content` is not a list (e.g. a bare string) raises `"Invalid assistant content (expected list, got …)"`, and a `content` list element that is not an object (for both `user` and `assistant` messages) raises `"Invalid content block (expected dict, got …)"`. Previously these surfaced as a raw `ClassCastException`; they are now consistently reported as `MessageParseException` (matching the parser's other structural validations).
 
+Since 0.2.6 the parser is lenient about *optional* fields, as the Python SDK is. An explicit `null` or a wrong-typed optional field no longer fails the frame. On a content block, a non-object `input`, `content` or `source`, or a non-boolean `is_error`, no longer fails the frame either (where the typed record cannot hold the value, it reads as `null`), and a block or message whose `type` is not a string is skipped instead of raising `ClassCastException`. A message without a `type` field, and the structural errors above, still raise `MessageParseException`.
+
 ## Message Type Hierarchy
 
 ```
@@ -86,9 +88,18 @@ record UserMessage(
     Object content,                          // String or List<ContentBlock>
     @Nullable String uuid,                   // Unique message identifier
     @Nullable String parentToolUseId,        // Set when inside a subagent tool use
-    @Nullable Map<String, Object> toolUseResult  // Tool execution metadata (file edits, etc.)
+    @Nullable Map<String, Object> toolUseResult, // Tool execution metadata (file edits, etc.)
+    @Nullable MessageOrigin origin,          // Provenance; null when unattributed
+    @Nullable Object toolUseResultRaw        // tool_use_result exactly as sent
 ) implements Message
 ```
+
+`toolUseResultRaw` (since 0.2.6) is `tool_use_result` as the CLI sent it: a
+`Map` for a JSON object (the same map as `toolUseResult`), otherwise a `String`,
+`List`, `Number` or `Boolean`. `toolUseResult` wraps a non-object value as
+`{"unknown": value}`; that wrapping is deprecated, so read `toolUseResultRaw`
+when the value may not be an object. Constructors without `toolUseResultRaw`
+and without `origin` are kept. See [Message Origin](#message-origin).
 
 ### Methods
 
@@ -128,6 +139,12 @@ if (msg instanceof UserMessage user) {
     if (toolResult != null) {
         System.out.println("File edited: " + toolResult.get("filePath"));
     }
+
+    // The value as sent, which need not be an object
+    Object raw = user.toolUseResultRaw();
+    if (raw instanceof String s) {
+        System.out.println("Tool result text: " + s);
+    }
 }
 ```
 
@@ -149,11 +166,14 @@ record AssistantMessage(
     @Nullable String sessionId,              // Session ID this message belongs to
     @Nullable String uuid,                   // Unique identifier in the session transcript
     @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
-    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
+    @Nullable List<String> userMessageUuids, // uuid of every user message this turn has taken in so far
+    @Nullable Object errorRaw                // top-level "error" exactly as sent (normally a String)
 ) implements Message
 ```
 
 The `usage` map contains per-turn API token consumption data when available, including keys like `input_tokens`, `output_tokens`, and cache-related fields. The `messageId`, `stopReason`, `sessionId`, and `uuid` fields capture API-level identifiers. These are nullable and absent for partial/streaming messages. `userMessageUuid` and `userMessageUuids` are set only on the first top-level assistant message after their value is set or changes; see [Matching a result to your prompt](#matching-a-result-to-your-prompt). Backwards-compatible constructors without the newer fields are also available.
+
+`error` reads as `UNKNOWN` for a value this SDK version does not recognize, or one that is not a string. `errorRaw` (since 0.2.6) keeps the wire value, so `assistant.errorRaw()` shows what the CLI actually sent.
 
 ### Methods
 
@@ -172,7 +192,7 @@ The `usage` map contains per-turn API token consumption data when available, inc
 | `RATE_LIMIT` | `"rate_limit"` | Rate limit exceeded |
 | `INVALID_REQUEST` | `"invalid_request"` | Malformed request |
 | `SERVER_ERROR` | `"server_error"` | Internal server error |
-| `UNKNOWN` | `"unknown"` | Unknown or unrecognized error |
+| `UNKNOWN` | `"unknown"` | Unknown or unrecognized error (the wire value is on `errorRaw()`) |
 
 ### Example
 
@@ -348,7 +368,7 @@ record TaskNotificationMessage(
     String subtype,                  // always "task_notification"
     Map<String, Object> data,        // raw message data
     String taskId,                   // unique task identifier
-    TaskNotificationStatus status,   // COMPLETED, FAILED, or STOPPED
+    @Nullable TaskNotificationStatus status, // COMPLETED, FAILED, STOPPED; null if unknown (see statusValue())
     String outputFile,               // path to task output file
     String summary,                  // human-readable summary
     String uuid,                     // message UUID
@@ -356,6 +376,23 @@ record TaskNotificationMessage(
     @Nullable String toolUseId,      // tool use ID (may be null)
     @Nullable TaskUsage usage        // final usage statistics (may be null)
 ) implements Message
+```
+
+| Method | Description |
+|--------|-------------|
+| `type()` | Returns `"system"` |
+| `statusValue()` | The `status` string exactly as the CLI sent it (null if absent or not a string) |
+| `get(String key)` | Gets a value from the raw data map |
+
+`status()` is `null` when the CLI reports a status this SDK version does not
+model. Read `statusValue()` then. Before 0.2.6 an unknown status ended the
+message stream.
+
+```java
+if (msg instanceof TaskNotificationMessage n) {
+    String status = n.status() != null ? n.status().getValue() : n.statusValue();
+    System.out.println("Task " + n.taskId() + " ended: " + status);
+}
 ```
 
 ### TaskNotificationStatus
@@ -367,6 +404,8 @@ enum TaskNotificationStatus {
     STOPPED("stopped")
 }
 ```
+
+`fromValue(String)` throws on an unknown value; `fromValueOrNull(String)` returns `null` for an unknown or `null` value.
 
 ### TaskUpdatedMessage
 

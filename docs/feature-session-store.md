@@ -135,7 +135,7 @@ public record SessionStoreListEntry(String sessionId, long mtime);
 public record SessionSummaryEntry(String sessionId, long mtime, Map<String, Object> data);
 ```
 
-`SessionStoreEntry` is a thin wrapper around `Map<String, Object>` requiring a `type` field; everything else is opaque pass-through:
+`SessionStoreEntry` is a thin wrapper around `Map<String, Object>`, and the whole map is opaque pass-through. Every entry the CLI writes carries a string `type`, but none is required: as in the Python SDK, an entry without one is carried through mirroring, import and listing unchanged, and `type()` returns `null` for it. (Up to 0.2.5 the constructor threw `IllegalArgumentException` for such an entry.) `SessionStoreEntry.of(map)` copies the map and keeps its key order:
 
 ```java
 SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
@@ -146,7 +146,7 @@ SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
     "timestamp", "2026-04-27T00:00:00Z"
 ));
 
-entry.type();      // "user"
+entry.type();      // "user" (null when the entry has no string type)
 entry.uuid();      // "u1"
 entry.timestamp(); // "2026-04-27T00:00:00Z"
 entry.<String>get("custom_field"); // typed convenience accessor
@@ -325,7 +325,11 @@ page offset first (`limit` of `null` or `0` = no limit); see
 
 `listSessionsFromStore` has a fast path when the store implements `listSessionSummaries`: one batch summary call plus a cheap `listSessions` enumeration to gap-fill any sessions missing or stale sidecars. When `listSessionSummaries` isn't implemented, it falls back to one `loadAsync()` per session, **bounded at 16 concurrent calls** (matching the Python SDK), so large project listings don't exhaust adapter connection pools.
 
-If `listSessions` and `listSessionSummaries` are both unimplemented, the call throws `IllegalStateException`. Adapter `loadAsync` failures degrade individual rows to empty-summary entries instead of failing the whole list.
+If `listSessions` and `listSessionSummaries` are both unimplemented, the call throws `IllegalStateException`. Adapter `loadAsync` failures degrade individual rows to empty-summary entries (the listing's mtime, every other field, `cwd` included, `null`) instead of failing the whole list.
+
+Rows derived from `load()` (the fallback path, and `getSessionInfoFromStore`) go through the same parser as a local transcript: the entries are serialized to JSONL, `fileSize` is that JSONL's byte size, and `firstPrompt` and `createdAt` come from its first 64 KB. `getSessionInfoFromStore` takes `lastModified` from the last entry's `timestamp`, and lets an exception from the adapter's `load()` propagate rather than reporting the session as not found. Rows built from a summary sidecar have a `null` `fileSize`. Timestamps without a UTC offset are read as UTC.
+
+The `directory` argument is canonicalized (symlinks resolved, NFC-normalized) before the project key is derived, exactly as for local-disk lookups, so a store key always matches the on-disk project directory name.
 
 ## SessionStore-Backed Mutations
 
@@ -346,9 +350,9 @@ ForkSessionResult fork = ClaudeSDK.forkSessionViaStore(
 Internals:
 
 - `renameSessionViaStore` appends a `custom-title` entry.
-- `tagSessionViaStore` appends a `tag` entry; `null` clears via empty string.
+- `tagSessionViaStore` appends a `tag` entry; `null` clears via empty string. The tag is sanitized exactly as `tagSession` sanitizes it (NFKC normalization, format and private-use characters removed).
 - `deleteSessionViaStore` is a no-op if the store doesn't implement `delete()` (appropriate for WORM/append-only backends like raw S3).
-- `forkSessionViaStore` runs the same UUID-remap transform as the on-disk fork (shared `SessionMutations.buildForkLines`) — a storage-layer copy is NOT sufficient.
+- `forkSessionViaStore` runs the same UUID-remap transform as the on-disk fork (shared `SessionMutations.buildForkLines`) — a storage-layer copy is NOT sufficient. Without a title it falls back to the source's custom title, AI title, then first prompt, plus `" (fork)"`.
 
 `listSubagentsFromStore` requires `listSubkeys()` and throws `IllegalStateException` otherwise.
 
@@ -384,10 +388,21 @@ process environment → `~/.claude` (`.claude.json` lives at
 
 | File | Why it matters |
 |------|----------------|
-| `.credentials.json` | OAuth credentials, with `claudeAiOauth.refreshToken` removed |
+| `.credentials.json` | OAuth credentials, with `claudeAiOauth.refreshToken` removed (read from the macOS Keychain when available, see below) |
 | `.claude.json` | User-level CLI state |
 | `settings.json` | `apiKeyHelper`, plus your `env`, `hooks` and `permissions` |
 | `cowork_settings.json` | The alternate settings filename read in cowork-plugins mode |
+
+**macOS Keychain.** On macOS the CLI's default setup keeps the OAuth login in
+the Keychain, not in `.credentials.json`, and a redirected `CLAUDE_CONFIG_DIR`
+changes the Keychain service name the subprocess looks up. So when none of
+`CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` is set
+(in `options.env` or the process environment), the SDK reads the login with
+`security find-generic-password -a $USER -w -s "Claude Code-credentials"`
+(5-second timeout), as the Python SDK does, and writes it into the temp
+`.credentials.json` with the refresh token redacted. A Keychain hit wins over a
+credentials file. The lookup is best effort: off macOS, or when the command
+fails, times out or prints nothing, the credentials file is used as before.
 
 Seeding `settings.json` matters more than it looks: `apiKeyHelper` is a fourth
 authentication mechanism alongside the credentials file, the macOS Keychain and
@@ -451,6 +466,8 @@ for (Message msg : ClaudeSDK.query("Hello", options)) {
 
 Timeouts are NOT retried (the in-flight call may still land — a retry would launch a concurrent duplicate). Adapters should dedupe on `entry.uuid()` so a partial-succeed retry is duplicate-safe.
 
+A `MirrorErrorMessage` always arrives before the `ResultMessage` of the turn whose batch failed, in both flush modes, and before the error that ends a failed stream (since 0.2.6; in eager mode it could arrive after the result, and on a reader failure it could be lost). So once you see a turn's result, every mirror failure for that turn has already been reported.
+
 ## Flush Mode (Batched vs Eager)
 
 By default the `TranscriptMirrorBatcher` buffers every `transcript_mirror` frame and flushes once per turn (on the `result` message) or when the pending buffer exceeds `MAX_PENDING_ENTRIES=500` entries / `MAX_PENDING_BYTES=1 MiB`. This keeps adapter latency off the streaming hot path and is the right choice for almost every deployment.
@@ -471,7 +488,9 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 | `BATCHED` (default) | Once per `result` message OR when pending exceeds 500 entries / 1 MiB | Almost all production workloads — keeps adapter latency off the streaming hot path |
 | `EAGER` | Background drain scheduled after every enqueued frame | Live transcript streaming to clients, real-time audit pipelines, very large turns where you can't wait until `result` |
 
-`EAGER` zeroes the batcher's pending thresholds — every enqueued frame schedules a background drain on the SDK's own drain executor (one `session-store-mirror-drain-<n>` thread per task; virtual on Java 21+), which calls your adapter's `appendAsync` on the configured `SessionStoreExecutor`. Appends remain serialized in enqueue order; a slow adapter will not stall the read loop but will see frames coalesced while it's busy. The option is ignored when `sessionStore` is unset.
+`EAGER` zeroes the batcher's pending thresholds — every enqueued frame schedules a background drain on the SDK's own drain executor (one `session-store-mirror-drain-<n>` thread per task; virtual on Java 21+), which calls your adapter's `appendAsync` on the configured `SessionStoreExecutor`. Appends remain serialized in enqueue order; a slow adapter will not stall the read loop between results but will see frames coalesced while it's busy. The option is ignored when `sessionStore` is unset.
+
+> **Caveat: a slow store holds up the stream at each result.** In both modes, the reader waits for the pending entries to be appended before it hands over each `ResultMessage`. Nothing else is read from the CLI meanwhile, control responses included, so a control call such as `interrupt()`, `setModel()` or `getMcpStatus()` made during that flush waits with it. `close()` likewise waits for the final flush. Each wait is bounded by `TranscriptMirrorBatcher.flushTimeoutMs()`, 181 s by default (see [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)). The Python SDK behaves the same way. Keep `append` fast, or hand slow work off to a queue inside your adapter.
 
 ## Importing Local Sessions Into a Store
 
@@ -488,7 +507,7 @@ ClaudeSDK.importSessionToStore(
 
 The helper:
 
-- Streams the local JSONL line-by-line (skips blank lines).
+- Streams the local JSONL line-by-line (skips blank lines). A line without a `type` is imported like any other; it no longer stops the import. A line that is valid JSON but not an object is skipped with a warning.
 - Calls `store.append(key, batch)` every `batchSize` entries (default 500) or 1 MiB of line bytes, whichever comes first.
 - When `includeSubagents=true`, recursively imports `<sessionDir>/subagents/**/*.jsonl` and `.meta.json` sidecars (the `.meta.json` becomes an `agent_metadata` entry).
 - Throws `IllegalArgumentException` on invalid UUID, `NoSuchFileException` if the session file isn't found.
@@ -522,6 +541,8 @@ SessionStoreConformance.run(WormStore::new,
 
 The harness uses plain `AssertionError` (no test-framework dependency), so it works under JUnit, TestNG, Spock, or even a plain `main()` smoke test.
 
+Since 0.2.6 the harness is stricter: it rejects `null` where an empty list is required (for example from `listSessions` or `listSubkeys` with nothing to list), and rejects a session that has a summary but is missing from `listSessions`. An adapter that returns `null` lists passed before and now fails.
+
 The 14 contracts cover:
 
 | # | Contract |
@@ -550,7 +571,8 @@ These live in `in.vidyalai.claude.sdk.internal` and are not part of the public A
 Buffers `transcript_mirror` frames the CLI emits on stdout and flushes them to `store.appendAsync(...)`:
 
 - Eager-flush thresholds: `MAX_PENDING_ENTRIES=500`, `MAX_PENDING_BYTES=1 MiB`. With `sessionStoreFlush(EAGER)` both thresholds are zeroed so every enqueued frame schedules a background drain (see [Flush Mode](#flush-mode-batched-vs-eager)).
-- Explicit flush before each `result` message and again at end-of-stream / close.
+- Explicit flush before each `result` message and again at end-of-stream / close. The message stream waits for each of these flushes, with no 5-second cutoff as before 0.2.6, so the store holds the turn by the time you see its `result`. The wait is still bounded: every flush completes within `flushTimeoutMs()`, which is append timeout × attempts plus backoff (`3 × 60 000 + 200 + 800 = 181 000 ms` by default). If that cap is reached the flush returns anyway, logs a warning, and the drain keeps running in the background.
+- Drains are strictly FIFO: eager drains and explicit flushes append in enqueue order, never interleaved.
 - Coalesces frames per `filePath` so each unique file gets one `append` call per flush.
 - Frames whose path falls outside `projectsDir` are dropped with a warning (would happen if `CLAUDE_CONFIG_DIR` differs between parent and subprocess).
 - `MIRROR_APPEND_MAX_ATTEMPTS=3` retries with `[200ms, 800ms]` backoff; timeouts are not retried.

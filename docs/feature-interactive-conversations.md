@@ -152,10 +152,10 @@ client.connect();  // No initial message
 client.connect("Initial prompt");  // With initial message
 ```
 
-**Thread Safety**: Thread-safe and idempotent. Multiple concurrent calls are protected.
+**Thread Safety**: Thread-safe and idempotent. `connect()`, `disconnect()` and `close()` are serialized: each waits for one already running on another thread.
 
 **Throws**:
-- `IllegalStateException` - If called after `close()`
+- `IllegalStateException` - If called after `close()`, or if another thread calls `close()` while the connect is running (the connect releases everything it set up first)
 - `CLIConnectionException` - If connection fails
 
 ### isConnected()
@@ -184,6 +184,8 @@ try (var client = ClaudeSDK.createClient()) {
 ```
 
 **Thread Safety**: Thread-safe and idempotent. Safe to call multiple times.
+
+It is also safe from inside a `canUseTool`, hook or SDK MCP tool callback, and from a thread whose interrupt flag is set: the CLI still gets stdin EOF and its grace period, and the flag is preserved. The request the calling callback serves is left unanswered.
 
 ## Sending Messages
 
@@ -266,6 +268,7 @@ while (messages.hasNext()) {
 - Iterator blocks until message available
 - Returns messages until stream ends
 - Multiple iterators share the same queue (messages distributed)
+- Interrupting the thread blocked in `hasNext()` throws `ClaudeSDKException` (cause `InterruptedException`) with the interrupt flag restored; it is never reported as the end of the stream
 
 ### receiveResponse()
 
@@ -289,6 +292,7 @@ for (Message msg : response) {
 - Blocks until messages available
 - Stops and auto-closes at ResultMessage
 - Returns all messages for one complete response
+- An interrupt while waiting throws `ClaudeSDKException`, as with `receiveMessages()`
 
 ### Processing Messages
 
@@ -499,7 +503,7 @@ client.interrupt();
 client.setModel("claude-sonnet-4-5");
 client.setPermissionMode(PermissionMode.ACCEPT_ALL);
 
-// ✅ Safe: connect() is synchronized
+// ✅ Safe: connect(), disconnect() and close() are serialized
 client.connect();  // Only one connection established
 ```
 
