@@ -45,7 +45,7 @@ public static List<Message> query(
 - `IllegalArgumentException` —— 如果同时设置了 canUseTool 与 permissionPromptToolName
 - `CLIConnectionException` —— 连接失败
 - `ProcessException` —— CLI 进程失败
-- `QueryFailedException` —— 本次运行以错误结果结束（`error_max_turns`、`error_max_budget_usd`，或被 `resumeDropsTurn` 拒绝的恢复）。它携带着此前已收集的消息 —— 见下文。
+- `QueryFailedException` —— 本次运行以错误结果结束（`error_max_turns`、`error_max_budget_usd`，或被 `resumeDropsTurn` 拒绝的恢复），或者（自 0.2.6 起）调用线程在等待消息时被中断。它携带着此前已收集的消息 —— 见下文。发生中断时，cause 是一个由 `InterruptedException` 引起的 `ClaudeSDKException`，CLI 仍会被优雅地关闭，中断标志也会被恢复（在 0.2.6 之前，中断会返回一个被截断的列表）。
 
 ### query(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options)
 
@@ -237,12 +237,14 @@ JSONL 文件 —— 每个文件只读首尾各 64 KB。
 public static List<SDKSessionInfo> listSessions(Path directory)
 ```
 
-列出指定项目目录的会话。
+列出指定项目目录及其 git worktree 的会话。
+
+在与项目目录进行匹配之前，该目录会被规范化（解析符号链接，并做 NFC 规范化）。当它位于拥有多个 worktree 的 git 仓库中时，会包含每个 worktree 的会话，等同于 `listSessions(directory, null, true)`。在 0.2.6 之前，该重载只读取目录本身；若要保留那种行为，请向三参数或四参数重载传入 `includeWorktrees = false`。
 
 **参数**：
 - `directory` —— 用于筛选的项目工作目录
 
-**返回**：`List<SDKSessionInfo>`
+**返回**：按最近修改时间降序排列的 `List<SDKSessionInfo>`
 
 ### listSessions(Path directory, Integer limit, boolean includeWorktrees)
 
@@ -465,7 +467,7 @@ public static void renameSession(
 ) throws IOException
 ```
 
-在指定项目目录范围内重命名会话。
+在指定项目目录范围内重命名会话。当会话不在该目录的项目中时，会继续尝试该目录的 git worktree。该条目以原子追加的方式写入，且绝不会创建文件，因此不会覆盖正在运行的 CLI 刚刚追加的行。
 
 **参数**：
 - `sessionId` —— 要重命名的会话 UUID
@@ -502,7 +504,7 @@ public static void tagSession(
 ) throws IOException
 ```
 
-在指定项目目录范围内为会话打标签。
+在指定项目目录范围内为会话打标签。与 `renameSession` 一样，它会回退到该目录的 git worktree，并以原子追加的方式写入。
 
 **参数**：
 - `sessionId` —— 要打标签的会话 UUID
@@ -579,8 +581,10 @@ public static ForkSessionResult forkSession(
 **参数**：
 - `sessionId` —— 源会话的 UUID
 - `directory` —— 项目目录（null 表示搜索所有项目）
-- `upToMessageId` —— 在该消息 UUID 处截断会话记录（含该条）；null 表示全部复制
-- `title` —— 分叉的自定义标题；null 表示由原标题加 " (fork)" 派生
+- `upToMessageId` —— 在该消息 UUID 处截断会话记录（含该条）；null 或空表示全部复制
+- `title` —— 分叉的自定义标题；null 表示由原会话的自定义标题、AI 标题或首条提示词加 " (fork)" 派生
+
+在具有 POSIX 权限的文件系统上，分叉出的会话记录以 `0600` 模式创建。
 
 ### listSessions(Path directory, Integer limit, int offset, boolean includeWorktrees)
 
@@ -642,6 +646,8 @@ public static @Nullable SDKSessionInfo getSessionInfoFromStore(
 
 从存储中读取单个会话的元数据。对于非法 UUID、不存在的会话、支线会话，或无法提取摘要的会话，
 返回 `null`。
+
+加载的条目会被序列化为 JSONL，并完全按本地会话记录的方式解析：`fileSize` 是 JSONL 的字节大小，`firstPrompt` 和 `createdAt` 来自其前 64 KB，`lastModified` 是最后一个条目的 `timestamp`。适配器的 `load()` 抛出的异常会向上传播，而不会被报告为会话不存在。
 
 ### getSessionMessagesFromStore(SessionStore, String, Path, Integer, int)
 
@@ -718,7 +724,7 @@ public static ForkSessionResult forkSessionViaStore(
 ```
 
 通过存储把会话分叉成一个带全新 UUID 的新分支。它执行与磁盘分叉相同的 UUID 重映射变换 ——
-仅在存储层做拷贝是**不够**的。
+仅在存储层做拷贝是**不够**的。未提供 `title` 时，分叉标题会回退为源会话的自定义标题、AI 标题或首条提示词，与磁盘上的行为一致。
 
 **抛出**：对非法 UUID 抛出 `IllegalArgumentException`；若在存储中找不到源会话，抛出
 `FileNotFoundException`。

@@ -224,7 +224,9 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
 
 Map은 `--mcp-config`에 도달하기 전에 `{"mcpServers": {...}}` 형태로 직렬화됩니다. 경로나
 JSON 문자열은 손대지 않고 그대로 전달되므로, JSON 문자열도 같은 최상위 `mcpServers` 키를
-사용해야 합니다.
+사용해야 합니다. 직렬화할 수 없는 Map은 `connect()`를 `CLIConnectionException`으로 실패시킵니다(0.2.6부터.
+이전에는 경고와 함께 플래그가 빠졌습니다). 서버 구성에서 설정하지 않은 필드는 `null`로 보내지 않고 JSON에서
+빠지므로, `new McpStdioServerConfig("node")`나 `new McpHttpServerConfig(url)`도 기대한 대로 로드됩니다.
 
 ## 권한 설정
 
@@ -306,9 +308,11 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore`에는 `store.implementsListSessions()`가 필요합니다.
 - `sessionStore + enableFileCheckpointing`은 거부됩니다 — 체크포인트는 로컬 디스크 전용입니다.
 
+**느린 저장소는 스트림을 붙잡습니다.** 각 `ResultMessage` 전에 리더는 대기 중인 항목이 추가되기를 기다리며, 그동안 CLI에서 다른 것을 읽지 않으므로 `interrupt()` 같은 제어 호출도 함께 기다립니다. `close()`도 마찬가지로 마지막 플러시를 기다립니다. 각 대기는 배처의 플러시 타임아웃(기본 181초)으로 제한됩니다. Python SDK도 같은 방식으로 동작합니다. [Session Store 가이드의 주의 사항](./feature-session-store.md#플러시-모드-batched-대-eager)을 참고하세요.
+
 ### sessionStoreFlush()
 
-트랜스크립트 미러 항목을 설정된 `sessionStore`로 언제 내보낼지 제어합니다. 기본값은 `SessionStoreFlushMode.BATCHED`(턴마다 또는 버퍼가 넘칠 때 한 번 플러시)입니다. `SessionStoreFlushMode.EAGER`를 쓰면 프레임마다 백그라운드 플러시를 예약해 거의 실시간으로 전달합니다 — 추가 작업은 큐에 넣은 순서대로 직렬화되지만, 느린 어댑터가 읽기 루프를 막지는 않습니다. `sessionStore`가 설정되지 않았다면 무시됩니다.
+트랜스크립트 미러 항목을 설정된 `sessionStore`로 언제 내보낼지 제어합니다. 기본값은 `SessionStoreFlushMode.BATCHED`(턴마다 또는 버퍼가 넘칠 때 한 번 플러시)입니다. `SessionStoreFlushMode.EAGER`를 쓰면 프레임마다 백그라운드 플러시를 예약해 거의 실시간으로 전달합니다 — 추가 작업은 큐에 넣은 순서대로 직렬화되지만, 느린 어댑터가 결과 사이에 읽기 루프를 막지는 않습니다(각 `ResultMessage` 전의 플러시는 두 모드 모두에서 여전히 어댑터를 기다립니다). `sessionStore`가 설정되지 않았다면 무시됩니다.
 
 ```java
 import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
@@ -338,6 +342,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```java
 .maxTurns(10)  // Limit to 10 turns
 ```
+
+`0`은 설정하지 않은 것으로 간주됩니다: Python SDK처럼 SDK가 `--max-turns`를 생략하므로 CLI의 기본값이 적용됩니다.
+`model`, `fallbackModel`, `permissionPromptToolName`, `resume`, `sessionId`, `settings`의 빈 문자열과 빈
+`mcpServersJson`도 마찬가지입니다: 0.2.6부터는 플래그를 빈 값으로 보내지 않고 생략합니다.
 
 **사용 사례**:
 - 예산 관리
@@ -389,7 +397,7 @@ CLI의 stdout을 버퍼링할 최대 바이트 수입니다.
 
 **타입**:
 - `ThinkingConfigAdaptive` — 적응형 사고, 기본 32,000 토큰
-- `ThinkingConfigEnabled(int budgetTokens)` — 고정 토큰 예산(0보다 커야 합니다)
+- `ThinkingConfigEnabled(int budgetTokens)` — 고정 토큰 예산(0 이상. `0`은 `--max-thinking-tokens 0`으로 전송됩니다)
 - `ThinkingConfigDisabled` — 사고 토큰 없음
 
 **참고**: 이 옵션은 더 이상 권장하지 않는 `maxThinkingTokens()`보다 우선합니다.
@@ -466,7 +474,16 @@ String wire = level.getValue(); // "xhigh"
 .maxMsgQSize(1000)
 ```
 
-처리량이 많은 상황에서는 늘리세요.
+기본값: 1000. 큐가 가득 차면 리더는 코드가 메시지를 가져갈 때까지 기다리므로(Python SDK의 await되는 send와 같은
+백프레셔), 느린 소비자는 출력을 잃는 대신 CLI의 속도를 늦춥니다. 0.2.6 이전에는 큐가 5초 동안 가득 차 있으면 메시지가
+버려졌습니다. 스트림의 끝과 모든 오류는 나중에 만든 이터레이터에도 항상 전달됩니다. 처리량이 많은 상황에서는
+크기를 늘리세요.
+
+이는 소프트 한도입니다(0.2.6부터). SDK가 보낸 제어 요청(`interrupt()`, `setModel()`, `getMcpStatus()`, ...)이 응답을
+기다리는 동안에는 응답이 메시지와 같은 stdout으로 도착하므로 리더가 한도를 넘어 계속 읽습니다. 따라서 아무도 큐를
+비우기 전에 한 제어 호출도 더는 가득 찬 큐 뒤에서 타임아웃되지 않습니다. 버려지는 것은 없고 순서도 유지됩니다.
+값은 1 이상이어야 합니다: 더 작은 값이면 `connect()`(또는 `ClaudeSDK.query`)가 `IllegalArgumentException`으로
+실패합니다.
 
 ## 모델 설정
 
@@ -650,6 +667,17 @@ Python SDK와 달리 이 SDK는 기본 식별자를 결코 유도하지 않습�
 있으면 값 없는 플래그로 내보냅니다. `-`로 시작하는 값은 별도의 플래그로 파싱되지 않도록
 `--flag=value` 형태로 보내고, 그 밖의 값은 두 개의 토큰으로 보냅니다.
 
+0.2.6부터 맵에 `null` 값(Python SDK에서 값 없는 플래그를 표기하는 방식)을 넣을 수 있으며, 플래그는 맵의 순회
+순서대로 전달됩니다. `Map.of`는 null을 담을 수 없고 순서가 정해져 있지 않으므로, 둘 중 하나라도 중요하면
+`LinkedHashMap`을 쓰세요:
+
+```java
+Map<String, String> flags = new LinkedHashMap<>();
+flags.put("replay-user-messages", null);   // --replay-user-messages
+flags.put("debug", "api");                  // --debug api, always after it
+.extraArgs(flags)
+```
+
 ## 콜백
 
 ### canUseTool()
@@ -678,7 +706,14 @@ BiFunction<String, Object, ToolPermissionContext, CompletableFuture<PermissionRe
 
 ### stderrCallback()
 
-CLI의 stderr 출력을 받습니다. CLI가 내보내는 stderr 한 줄마다 한 번씩 호출됩니다(이 콜백을 설정했을 때만 파이프됩니다).
+CLI의 stderr 출력을 받습니다. CLI가 내보내는 stderr 한 줄마다 한 번씩 호출됩니다. stderr는 이 콜백을 설정했을 때만
+파이프됩니다. 콜백이 없으면 0.2.6부터 Python SDK와 마찬가지로 CLI가 JVM의 stderr를 물려받으므로, 그 출력이 여러분
+프로세스의 stderr에 나타납니다. (이전에는 파이프되었지만 읽히지 않아서, 파이프 버퍼보다 많이 쓰고 나면 CLI가 블로킹될
+수 있었습니다.)
+
+줄은 Python SDK와 같은 방식으로 구분됩니다: `\n`에서만 나누고(진행률 줄이 쓰는 단독 `\r`은 줄 안에 남습니다), 끝의
+공백은 제거하며, 빈 줄은 건너뜁니다. `maxBufferSize`보다 긴 줄은 여러 조각으로 나누어 전달되고, 줄바꿈 없는 마지막
+줄도 여전히 전달됩니다.
 
 ```java
 .stderrCallback(line -> {
@@ -733,11 +768,12 @@ new HookMatcher("Bash", List.of(guard), null, HookOnFailure.BLOCK)
 
 ### user()
 
-추적용 사용자 식별자를 설정합니다.
-
-```java
-.user("user-12345")
-```
+**더 이상 권장되지 않으며, Java SDK에서는 지원되지 않습니다.** Python SDK는 CLI 서브프로세스를 이 OS
+사용자로 실행하지만, Java의 `ProcessBuilder`는 사용자를 바꿀 수 없습니다. 0.2.5까지는 이 옵션을 받아들이고 조용히
+무시했으므로 CLI가 JVM의 사용자로 실행되었습니다. 0.2.6부터는 이 값이 설정되면 `connect()`(와
+`ClaudeSDK.query(...)`)가 `CLIConnectionException`으로 실패합니다. 옵션에서 제거하세요. CLI를 다른 사용자로
+실행하려면 [`cliPath()`](#clipath)가 사용자를 바꾸는 래퍼 스크립트(예: `sudo -u <user> claude "$@"`를 실행하는
+스크립트)를 가리키게 하세요.
 
 ### includePartialMessages()
 
@@ -936,7 +972,7 @@ SandboxIgnoreViolations.of(Map.of(
 ))
 ```
 
-각 `local` 플러그인은 `--plugin-dir <path>`가 됩니다. [플러그인 시스템](./feature-plugin-system.md)을 참고하세요.
+각 `local` 플러그인은 `--plugin-dir <path>`가 됩니다. 다른 `type`이면 `connect()`가 `IllegalArgumentException`을 던집니다(0.2.6부터. 이전에는 건너뛰었습니다). [플러그인 시스템](./feature-plugin-system.md)을 참고하세요.
 
 ### outputFormat()
 
@@ -955,6 +991,9 @@ SandboxIgnoreViolations.of(Map.of(
     )
 ))
 ```
+
+스키마는 `--json-schema`로 전송됩니다. 직렬화할 수 없는 스키마는 빠지는 대신 `connect()`를
+`CLIConnectionException`으로 실패시킵니다.
 
 ### enableFileCheckpointing()
 

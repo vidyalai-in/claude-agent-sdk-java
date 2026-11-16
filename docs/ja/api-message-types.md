@@ -43,8 +43,9 @@ record UserMessage(
     Object content,                               // String or List<ContentBlock>
     @Nullable String uuid,                        // Unique message identifier
     @Nullable String parentToolUseId,             // Set when inside a subagent tool use
-    @Nullable Map<String, Object> toolUseResult,  // Tool execution metadata
-    @Nullable MessageOrigin origin                // Provenance; null when unattributed
+    @Nullable Map<String, Object> toolUseResult,  // Tool execution metadata (a non-object value is wrapped; deprecated)
+    @Nullable MessageOrigin origin,               // Provenance; null when unattributed
+    @Nullable Object toolUseResultRaw             // tool_use_result exactly as sent (Map, String, List, Number or Boolean)
 ) implements Message {
     String type();                    // Returns "user"
     @Nullable String contentAsString();           // Content as String, or null if structured
@@ -52,9 +53,15 @@ record UserMessage(
 }
 ```
 
-`origin` を持たない後方互換の 4 引数コンストラクタも引き続き利用できます。`origin` は、差し込まれた
+`toolUseResultRaw` を持たない後方互換のコンストラクタ（5 引数。これは `toolUseResultRaw` に `toolUseResult`
+を設定します）と、`origin` を持たないコンストラクタ（4 引数）も引き続き利用できます。`origin` は、差し込まれた
 ターン（タスク通知、チャネル／ピアのメッセージ）と、CLI が再生するユーザーメッセージで埋められます。
 ツール結果のメッセージが持つことはありません。[MessageOrigin](#messageorigin) を参照してください。
+
+`toolUseResultRaw`（0.2.6 以降）は、JSON オブジェクトでない場合でも、CLI が送ったとおりの `tool_use_result`
+を保持します。これは Python SDK の `tool_use_result` が保持するものと同じです。CLI がオブジェクトを送った
+場合、`toolUseResult` は同じマップです。それ以外の値は `{"unknown": value}` として包まれます（`toString()`
+ではなく値そのもの）。この包み方は非推奨なので、代わりに `toolUseResultRaw` を読んでください。
 
 ## AssistantMessage
 
@@ -70,7 +77,8 @@ record AssistantMessage(
     @Nullable String sessionId,                   // Session ID this message belongs to
     @Nullable String uuid,                        // Unique identifier in the session transcript
     @Nullable String userMessageUuid,             // uuid of the user message this turn is answering
-    @Nullable List<String> userMessageUuids       // uuid of every user message this turn has taken in so far
+    @Nullable List<String> userMessageUuids,      // uuid of every user message this turn has taken in so far
+    @Nullable Object errorRaw                     // top-level "error" exactly as sent (normally a String)
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
@@ -85,9 +93,20 @@ new AssistantMessage(content, model, parentToolUseId, error)  // usage and all l
 new AssistantMessage(content, model, parentToolUseId, error, usage)  // messageId and later fields default to null
 ```
 
-9 引数のコンストラクタ（`userMessageUuid` と `userMessageUuids` なし）も残されています。この 2 つは、
-値が設定または変更された後の最初のトップレベルのアシスタントメッセージにだけ設定され（ターンの途中で
-あることもあります）、それ以外ではすべて null です。[プロンプトに対応する結果の特定](#プロンプトに対応する結果の特定)を参照してください。
+`errorRaw` を持たない 11 引数のコンストラクタ（`errorRaw` に `error.getValue()` を設定します）と、9 引数の
+コンストラクタ（`userMessageUuid` と `userMessageUuids` なし）も残されています。`userMessageUuid` と
+`userMessageUuids` は、値が設定または変更された後の最初のトップレベルのアシスタントメッセージにだけ設定され
+（ターンの途中であることもあります）、それ以外ではすべて null です。[プロンプトに対応する結果の特定](#プロンプトに対応する結果の特定)を参照してください。
+
+CLI がこの SDK バージョンの認識しない値、または文字列でない値を送った場合、`error` は
+`AssistantMessageError.UNKNOWN` になります。`errorRaw`（0.2.6 以降）はワイヤ上の値を保持するので、それが
+何だったのかを確認できます：
+
+```java
+if (assistant.error() == AssistantMessageError.UNKNOWN) {
+    System.err.println("Unrecognized error: " + assistant.errorRaw());
+}
+```
 
 ### AssistantMessageError
 
@@ -730,7 +749,7 @@ record TaskNotificationMessage(
     String subtype,                  // always "task_notification"
     Map<String, Object> data,        // raw message data
     String taskId,                   // unique task identifier
-    TaskNotificationStatus status,   // COMPLETED, FAILED, or STOPPED
+    @Nullable TaskNotificationStatus status, // COMPLETED, FAILED, STOPPED; null if unknown (see statusValue())
     String outputFile,               // path to task output file
     String summary,                  // human-readable summary
     String uuid,                     // message UUID
@@ -738,9 +757,14 @@ record TaskNotificationMessage(
     @Nullable String toolUseId,      // tool use ID (may be null)
     @Nullable TaskUsage usage        // final usage statistics (may be null)
 ) implements Message {
-    String type();  // Returns "system"
+    String type();                   // Returns "system"
+    @Nullable String statusValue();  // the status string exactly as sent
 }
 ```
+
+CLI がこの SDK バージョンの認識しないステータスを送った場合（またはステータスがない場合）、`status()` は
+`null` になり、`statusValue()` がワイヤ上の文字列を保持します。0.2.5 までは、未知のステータスがあると
+メッセージストリームが終了していました。
 
 ### TaskNotificationStatus
 
@@ -751,7 +775,8 @@ enum TaskNotificationStatus {
     STOPPED;    // "stopped"
 
     String getValue();
-    static TaskNotificationStatus fromValue(String);
+    static TaskNotificationStatus fromValue(String);                      // throws on unknown
+    static @Nullable TaskNotificationStatus fromValueOrNull(String);      // null on unknown/null
 }
 ```
 

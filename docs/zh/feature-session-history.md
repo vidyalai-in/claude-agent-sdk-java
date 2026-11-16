@@ -44,7 +44,7 @@ record SDKSessionInfo(
     String sessionId,              // UUID identifying the session
     String summary,                // display title (custom title, AI title, lastPrompt, summary, or first prompt)
     long lastModified,             // last-modified time in milliseconds since epoch
-    @Nullable Long fileSize,       // session file size in bytes (null for remote storage backends)
+    @Nullable Long fileSize,       // transcript size in bytes (null when read from a store's summary sidecar)
     @Nullable String customTitle,  // user-set custom title or AI-generated title (may be null)
     @Nullable String firstPrompt,  // first meaningful user prompt (may be null)
     @Nullable String gitBranch,    // git branch at end of session (may be null)
@@ -54,7 +54,19 @@ record SDKSessionInfo(
 )
 ```
 
-`summary` 字段按以下优先顺序解析：自定义标题 > AI 标题 > lastPrompt > 自动生成的摘要 > 首个提示词。
+`summary` 字段按以下优先顺序解析：自定义标题 > AI 标题 > lastPrompt > 自动生成的摘要 > 首个提示词。空的 `customTitle`、`gitBranch` 或 `cwd` 视为缺失，会继续落到下一个来源，与 Python SDK 一致。
+
+### 首个提示词是如何确定的
+
+`firstPrompt`、摘要的回退值、默认的分叉标题以及 `SessionSummary` 折叠都使用同一套提取逻辑，自 0.2.6 起它遵循
+Python SDK 的规则。它从会话记录的开头读取用户条目，并跳过：
+
+- 工具结果、`isMeta` 条目以及压缩摘要（`isCompactSummary`）；
+- 自动生成的文本：`<local-command-stdout>`、`<session-start-hook>`、`<tick>`、`<goal>`、
+  `[Request interrupted by user…]`，以及只包含一个 `<ide_opened_file>` 或 `<ide_selection>` 标签的文本。
+
+消息中的每个文本块都会按顺序尝试，换行会被折叠为空格。带有 `<command-name>` 标签的文本也会被跳过，但第一个
+遇到的命令名会在找不到其他提示词时作为回退值。结果会截断为 200 个字符并加上省略号。
 
 另有一个不含 `tag` 与 `createdAt` 的向后兼容构造函数。
 
@@ -140,7 +152,13 @@ Path projectDir = Path.of("/my/project");
 List<SDKSessionInfo> sessions = ClaudeSDK.listSessions(projectDir);
 ```
 
-筛选出工作目录与 `projectDir` 匹配的会话。
+筛选出工作目录与 `projectDir` 匹配的会话。该目录会先被规范化（相对路径转为绝对路径、解析符号链接、做 Unicode NFC 规范化），因此经由符号链接、相对路径或 NFD 写法的路径，与真实路径找到的是同一批会话。
+
+当 `projectDir` 位于拥有多个 worktree 的 git 仓库中时，会包含每个 worktree 的会话，等同于 `listSessions(projectDir, null, true)`。在 0.2.6 之前，该重载只读取 `projectDir` 本身。若要保留那种行为，请为 `includeWorktrees` 传入 `false`：
+
+```java
+List<SDKSessionInfo> thisDirOnly = ClaudeSDK.listSessions(projectDir, null, false);
+```
 
 ### 带数量上限与 worktree
 
@@ -152,7 +170,7 @@ List<SDKSessionInfo> recent = ClaudeSDK.listSessions(
 );
 ```
 
-`includeWorktrees = true` 会运行 `git worktree list`，并包含该仓库所有 worktree 中的会话。
+`includeWorktrees = true` 会运行 `git worktree list`，并包含该仓库所有 worktree 中的会话。项目目录按其确切名称与 worktree 匹配，因此 `/root/project` 不会拾取 `/root/project-foo` 的会话。只有当路径长到 CLI 会截断目录名并追加哈希时，才会使用前缀匹配。
 
 ### 带偏移量的分页
 
@@ -199,6 +217,8 @@ SDKSessionInfo info = ClaudeSDK.getSessionInfo(
 ```
 
 若会话未找到、属于支线会话，或无法提取摘要，则返回 `null`。
+
+指定目录时，查找会先尝试该目录的项目，然后依次尝试它的每个 git worktree。缺失的会话记录或 0 字节的占位文件都视为“不在这里”，因此某个 worktree 中遗留的占位文件不会遮住另一个 worktree 中真正的会话。`getSessionMessages`、`renameSession` 和 `tagSession` 也以同样的方式搜索。
 
 ## 读取会话消息
 
@@ -253,10 +273,15 @@ ClaudeSDK.renameSession(
 ```
 
 **约束：**
-- `sessionId` 必须是合法的 UUID（小写十六进制，带连字符）。
+- `sessionId` 必须是合法的 UUID（十六进制，带连字符，字母大小写均可）。
 - `title` 在去除首尾空白后必须非空。
 - 若找不到会话的 JSONL 文件，抛出 `FileNotFoundException`。
 - 若文件写入失败，抛出 `IOException`。
+
+**条目写在哪里。** 指定目录时，SDK 会先尝试该目录的项目，然后尝试它每个 git worktree 的项目，与
+`listSessions` 和 `getSessionMessages` 的做法相同。缺失的文件或 0 字节的占位文件意味着“不在这里，继续查找”。
+文件以追加模式打开，且绝不会被创建，因此即使正在运行的 CLI 也在向同一份会话记录追加内容，该条目也总会落在
+文件当前的末尾。其他任何 I/O 错误（权限被拒绝、磁盘已满）都会被抛出，而不会被当作“未找到”。
 
 重命名之后，`listSessions()` 会在 `SDKSessionInfo` 的 `summary` 与 `customTitle` 字段中返回新标题。
 
@@ -286,6 +311,7 @@ ClaudeSDK.tagSession(
 - 含有危险 Unicode 字符（零宽字符、方向标记、私用区字符）的标签会被自动净化。
 - 若找不到会话的 JSONL 文件，抛出 `FileNotFoundException`。
 - 若文件写入失败，抛出 `IOException`。
+- 条目的写入方式与重命名相同：先回退到 worktree，然后以绝不创建文件的原子追加方式写入。
 
 **并发安全性：** 如果该会话当前正在 CLI 进程中打开，CLI 会在下一次重新追加元数据时把 SDK 写入的条目
 吸收进它的缓存。最近一次写入生效。
@@ -375,9 +401,13 @@ ForkSessionResult result = ClaudeSDK.forkSession(
 - `sessionId` —— 新建分叉会话的 UUID
 
 **约束：**
-- `sessionId` 以及可选的 `upToMessageId` 必须是合法的 UUID。
+- `sessionId` 以及可选的 `upToMessageId` 必须是合法的 UUID。空的 `upToMessageId` 等同于 `null`：会复制整份会话记录。
 - 若找不到源会话，抛出 `FileNotFoundException`。
 - 若会话没有任何消息，或找不到 `upToMessageId`，抛出 `IllegalArgumentException`。
+
+未提供 `title` 时，分叉会依次以源会话的自定义标题、AI 标题、[首个提示词](#首个提示词是如何确定的)命名，并追加
+`" (fork)"`（三者都不存在时为 `"Forked session (fork)"`）。新的会话记录以独占方式创建，并在具有 POSIX 权限的
+文件系统上使用 `0600` 模式（仅所有者可读写）。
 
 `forkSession()` 会在不运行 CLI 的情况下生成一份离线副本。若你想从更早的时点*恢复*并继续对话，
 请改用截断式恢复。
@@ -574,7 +604,7 @@ if (sessions.isEmpty()) {
 ### 处理未设置的 CLAUDE_CONFIG_DIR
 
 默认情况下，会话存放在 `~/.claude/projects/` 下。如果设置了环境变量 `CLAUDE_CONFIG_DIR`，它会覆盖
-该位置。SDK 会自动遵循这个变量。
+该位置。SDK 会自动遵循这个变量，并像对待项目目录一样对它做 NFC 规范化。
 
 ### 用 limit 避免过大的结果集
 

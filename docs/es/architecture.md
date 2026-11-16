@@ -84,7 +84,7 @@ El SDK sigue una arquitectura por capas con una separación clara de responsabil
   - `sendMessage()` / `query()`: envía mensajes
   - `receiveMessages()` / `receiveResponse()`: recibe mensajes
   - Métodos de control: `interrupt()`, `setModel()`, `setPermissionMode()`, etc.
-- **Seguridad entre hilos**: parcialmente segura, con garantías documentadas
+- **Seguridad entre hilos**: parcialmente segura, con garantías documentadas. `connect()`, `disconnect()` y `close()` se serializan con un único cerrojo de ciclo de vida (desde la 0.2.6); un `close()` que llega durante `connect()` hace que la conexión lo libere todo y lance `IllegalStateException`
 - **Gestión de recursos**: implementa AutoCloseable para una limpieza correcta
 
 **Patrón de diseño**: Builder + gestión de recursos (try-with-resources)
@@ -138,9 +138,41 @@ El SDK sigue una arquitectura por capas con una separación clara de responsabil
 - **Características clave**:
   - Protocolo de control asíncrono con CompletableFuture
   - Generación y seguimiento de IDs de petición
-  - Cola de mensajes de tamaño configurable
+  - Cola de mensajes acotada (`maxMsgQSize`, 1000 por defecto) con **contrapresión**: cuando está
+    llena, el lector espera al consumidor en lugar de descartar el mensaje, igual que el envío con
+    await del SDK de Python. Antes de la 0.2.6, un mensaje que esperaba 5 segundos se descartaba. El
+    final del flujo y cualquier error se registran como estado terminal, así que una cola llena puede
+    retrasarlos pero nunca perderlos, y un iterador creado después los sigue viendo
+  - El límite es **flexible**: mientras una petición de control saliente espera su
+    `control_response`, el lector sigue leyendo más allá del límite, ya que la respuesta llega por el
+    mismo stdout. Por eso, una llamada de control hecha desde un hilo que no está consumiendo mensajes
+    no puede agotar su tiempo de espera detrás de una cola llena. La cola sigue siendo un único FIFO,
+    así que el orden no cambia. Los avisos `MirrorErrorMessage` también se encolan por encima del
+    límite
+  - **Interrupciones**: un consumidor interrumpido mientras espera en `hasNext()` recibe una
+    `ClaudeSDKException` causada por la `InterruptedException`, con el indicador restablecido, y no un
+    final normal del flujo. `close()` borra el indicador mientras dura y lo vuelve a activar al
+    terminar, así que quien llama estando interrumpido sigue cerrando de forma ordenada
+  - **Cerrar desde un callback**: un `close()` llamado desde un callback `canUseTool`, de hook o MCP
+    del SDK cancela la petición que atiende ese callback (nunca se responde), pero ni interrumpe ni
+    espera al hilo que cierra
   - Hilo lector en segundo plano (virtual en Java 21+)
   - Ejecutor de control para los callbacks asíncronos
+  - **Tiempos de espera**: una petición de control *saliente* (del SDK al CLI, como `interrupt`,
+    `setModel` o `setPermissionMode`) conserva su plazo de 60 segundos; `initialize` tiene el suyo
+    propio, fijado por `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT`. Las peticiones *entrantes* (`canUseTool`,
+    callbacks de hook, llamadas MCP del SDK) no tienen plazo en el lado del SDK desde la 0.2.6, igual
+    que en el SDK de Python; terminan cuando responde el callback, ante un `control_cancel_request` o
+    con `close()`. El CLI aplica el `timeout` propio de cada matcher de hook
+  - **Respuestas de control tolerantes**: se ignora una `control_response` sin un `request_id`
+    conocido, cualquier `subtype` distinto de `"error"` cuenta como éxito y un cuerpo de éxito que no
+    es un objeto se lee como vacío, de modo que un marco mal formado ya no puede matar al lector
+  - **Esperas del espejo de transcripciones**: el vaciado previo a cada `result`, al final del flujo y
+    al cerrar se espera sin límite externo (antes de la 0.2.6 se cortaba a los 5 s), así que el store
+    ya tiene el turno cuando el consumidor ve su resultado, y cualquier `MirrorErrorMessage` del turno
+    llega antes de su `ResultMessage`. El vaciado previo al resultado se ejecuta en el hilo lector, así
+    que un store lento también retrasa las respuestas de control hasta que termina. El propio
+    agrupador acota cada vaciado; consulta [TranscriptMirrorBatcher](#transcriptmirrorbatcher-interno)
 
 **Patrón de diseño**: petición/respuesta asíncrona + Observer (para los hooks)
 
@@ -151,6 +183,11 @@ El SDK sigue una arquitectura por capas con una separación clara de responsabil
   - Soporte de todos los tipos de mensaje (user, assistant, system, result, stream_event)
   - Análisis de bloques de contenido (text, thinking, tool_use, tool_result)
   - Manejo de errores y validación
+  - Campos opcionales tolerantes (desde la 0.2.6): un `null` explícito o un campo opcional de tipo
+    incorrecto, o un `type` que no es una cadena, ya no hacen fallar el marco. Los valores recibidos
+    que los campos tipados no pueden contener siguen siendo legibles
+    (`UserMessage.toolUseResultRaw()`, `AssistantMessage.errorRaw()`,
+    `TaskNotificationMessage.statusValue()`)
 
 **Patrón de diseño**: Parser + Factory
 
@@ -176,8 +213,18 @@ El SDK sigue una arquitectura por capas con una separación clara de responsabil
   - Gestiona el ciclo de vida del subproceso del CLI
   - Comunicación por stdin/stdout
   - Lectura con búfer y límites configurables
-  - Soporte de callback de stderr con aislamiento de excepciones por línea (un callback de usuario que
-    lanza ya no mata el bucle de lectura)
+  - Delimitación NDJSON del stdout solo por `\n`: una línea completa que empieza por `{` pero no es
+    exactamente un objeto JSON lanza `CLIJSONDecodeException`; las demás líneas que no son JSON se
+    omiten (consulta [Capa de transporte → Delimitación de líneas](./feature-transport-layer.md#delimitación-de-líneas-y-contrapresión-026))
+  - El stderr solo se canaliza cuando hay un `stderrCallback`; si no, lo hereda la JVM. Las líneas
+    canalizadas se delimitan igual que en el SDK de Python, con aislamiento de excepciones por línea
+    (un callback de usuario que lanza no mata el bucle de lectura)
+  - Fallos al lanzar el proceso: solo un ejecutable ausente es `CLINotFoundException`; cualquier otro
+    fallo es `CLIConnectionException` con la causa encadenada
+  - `close()` acotado: 5 s para el cerrojo de escritura, 5 s para que el CLI salga tras el EOF de
+    stdin, SIGTERM y luego 5 s, SIGKILL y luego 5 s. Una interrupción no acorta ningún paso: quien
+    llama estando interrumpido sigue enviando el EOF de stdin y espera todo el periodo de gracia, y el
+    indicador se vuelve a activar al terminar
   - Limpieza automática del proceso
   - **Shutdown hook de la JVM**: un `ConcurrentHashMap.newKeySet()` estático registra cada `Process`
     creado; un `Runtime.addShutdownHook` registrado al inicializar la clase llama a `destroy()` en cada
@@ -204,8 +251,13 @@ El SDK sigue una arquitectura por capas con una separación clara de responsabil
   - Registro y ejecución de herramientas
   - Generación automática de esquemas a partir de anotaciones @Tool
   - Ejecución asíncrona basada en CompletableFuture
-  - Información del servidor y negociación de versión en el `initialize` entre `2025-06-18` /
-    `2024-11-05`
+  - Información del servidor y negociación de versión en el `initialize` entre `2025-11-25` /
+    `2025-06-18` / `2024-11-05`
+  - Esquemas tipados de los parámetros de `@Tool` (`ToolSchemas`): una única correspondencia por tipo
+    Java determina tanto el esquema publicado como la conversión del argumento, así que un esquema
+    nunca admite argumentos que el método no pueda recibir
+  - Una sesión por conexión (`openSession()`): las herramientas y los esquemas se comparten, mientras
+    que las llamadas en curso, su cancelación y `close()` son propios de cada client
   - Mensajes del protocolo MCP (`initialize`, `ping`, `tools/list`, `tools/call`)
   - Validación de argumentos contra el `inputSchema` de cada herramienta, compilado una vez al
     construir el servidor
@@ -236,6 +288,11 @@ El SDK sigue una arquitectura por capas con una separación clara de responsabil
 - **Contrato**: `handleMessage` devuelve la respuesta JSON-RPC de una petición y `null` para todo lo
   que no espera respuesta. `close()` significa «la conexión que te usaba se va», no «apágate»: un
   handler puede servir a más de un cliente, así que debe ser idempotente y seguir siendo utilizable.
+- **Sesiones por client**: cada client llama a `openSession()` una vez por servidor al arrancar,
+  enruta los mensajes de ese servidor al handler devuelto y cierra ese handler al terminar. La
+  implementación por defecto devuelve `this`; `SdkMcpServer` devuelve una sesión nueva, de modo que
+  varios clients concurrentes que comparten un servidor no pueden chocar en los ids JSON-RPC,
+  cancelar las llamadas de los demás ni hacer fallar las llamadas de los demás al cerrar.
 
 #### ToolCallContext
 - **Propósito**: permite que una herramienta en ejecución vea que su llamada se canceló.
@@ -284,6 +341,11 @@ El SDK sigue una arquitectura por capas con una separación clara de responsabil
     volcado.
   - Reintentos acotados: `MIRROR_APPEND_MAX_ATTEMPTS=3` intentos con espera `[200ms, 800ms]`. Los
     tiempos de espera no se reintentan (la llamada en vuelo todavía puede llegar).
+  - Vaciados estrictamente FIFO: cada vaciado se encadena detrás de todos los anteriores, así que los
+    vaciados eager y los explícitos anexan en el orden en que se encolaron.
+  - Finalización acotada: `flush()` y `close()` siempre terminan dentro de `flushTimeoutMs()` (tiempo
+    de espera del anexado × intentos + esperas, 181 000 ms por defecto); pasado ese plazo, el future
+    se completa igualmente y el vaciado continúa en segundo plano.
   - Los marcos cuya ruta cae fuera del `projectsDir` configurado se descartan con un aviso.
   - Los fallos aparecen como `MirrorErrorMessage` en el flujo del consumidor: nunca bloquean la
     conversación.
@@ -298,7 +360,10 @@ El SDK sigue una arquitectura por capas con una separación clara de responsabil
      recientemente en el caso de `continueConversation`).
   2. Escribe el JSONL en un directorio temporal dispuesto como `~/.claude/`.
   3. Copia `.credentials.json` (con `refreshToken` eliminado para impedir el consumo de tokens desde el
-     directorio temporal) y `.claude.json`.
+     directorio temporal) y `.claude.json`. En macOS, cuando no está definido ningún
+     `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY` ni `CLAUDE_CODE_OAUTH_TOKEN`, el inicio de sesión se lee
+     del Llavero de macOS en su lugar (`security find-generic-password`), igual que en el SDK de
+     Python.
   4. Materializa las transcripciones de subagente y los adjuntos `.meta.json` cuando el store
      implementa `listSubkeys`.
   5. Lanza el CLI con `CLAUDE_CONFIG_DIR=<temp dir>`.
@@ -567,6 +632,9 @@ operación compare-and-set. Un handler que pierde la carrera descarta su respues
 que la pierde no hace nada, así que una cancelación nunca interrumpe una respuesta a medio escribir en
 el stdin. Esto coincide con el SDK de Python, que cancela la tarea del handler y omite la respuesta.
 
+`close()` hace lo mismo, de una vez, con todas las peticiones entrantes que siguen respondiéndose, sin
+responder a ninguna. Antes de la 0.2.6 primero las esperaba hasta 5 segundos.
+
 ### Ciclo de vida del stdin y el final de una ejecución
 
 > **El `controlExecutor` debe seguir siendo un hilo por tarea.** Una llamada a una herramienta MCP del
@@ -711,7 +779,7 @@ El SDK usa una arquitectura multihilo (hilos virtuales en Java 21+, hilos de pla
 - **AtomicBoolean**: se usa para el estado de conexión y de cierre
 - **volatile**: se usa para la visibilidad de QueryHandler y Transport
 - **Sincronización**: se usa en connect() para evitar condiciones de carrera
-- **BlockingQueue**: cola de mensajes segura entre hilos
+- **BlockingQueue**: cola de mensajes acotada y segura entre hilos; una cola llena bloquea al productor (contrapresión) en lugar de descartar
 - **ConcurrentHashMap**: seguimiento seguro de las peticiones de control
 
 ### Gestión de recursos
@@ -892,7 +960,7 @@ SDK de Python y TypeScript.
 
 1. **Hilos virtuales**: miles de operaciones concurrentes son posibles en Java 21+
 2. **E/S con búfer**: reduce las llamadas al sistema en la comunicación con el subproceso
-3. **Cola de mensajes**: tamaño configurable para equilibrar memoria y rendimiento
+3. **Cola de mensajes**: tamaño configurable para equilibrar memoria y rendimiento; una cola llena ralentiza al CLI en lugar de perder mensajes
 4. **Inicialización perezosa**: el QueryHandler se crea solo cuando hace falta
 5. **Reutilización de recursos**: el ExecutorService se reutiliza entre operaciones
 6. **Memoria directa**: Jackson hace un manejo eficiente de búferes

@@ -44,8 +44,14 @@ stdin 以流的方式发送，因此承载权限请求的控制协议在那里�
 })
 ```
 
+与 Python SDK 一样，SDK 不为该回调设置任何时间限制，因此它可以等待人工审批。在 0.2.6 之前，
+回调在 60 秒后会被切断，任何耗时更长的审批都会失败。（SDK 自己发出的出站控制请求，例如
+`setModel`，仍保留 60 秒的超时。）
+
 如果 CLI 在回调作答之前放弃了该权限请求（它会发送一条 `control_cancel_request`，例如在轮次被中断时），
-SDK 会取消回调返回的 future，中断正在等待它的线程，并且不发送任何答复。
+SDK 会取消回调返回的 future，中断正在等待它的线程，并且不发送任何答复。关闭客户端时，SDK 会对
+每个仍在运行的回调立即做同样的处理。回调本身也可以关闭客户端（自 0.2.6 起）：CLI 仍会收到 stdin
+EOF 并获得宽限期，执行关闭的线程不会被中断，而该回调自己的请求不会得到应答。
 
 > **`canUseTool` 仅在 `"ask"` 决策时触发。** 该回调是 SDK 对交互式权限提示的替代 —— 只有当 CLI 的
 > 权限规则求值为 `"ask"` 时它才会运行。对于已经被 `allowedTools`、`permissionMode`（例如
@@ -130,6 +136,10 @@ record ToolPermissionContext(
     @Nullable String description             // human-readable subtitle for the permission UI
 )
 ```
+
+`suggestions` 以宽松方式读取：若某条建议的 type、destination、behavior 或 mode 是当前 SDK 版本不认识的，会被跳过（以 `FINE` 级别记录日志），而不会使请求失败；不是列表的值会被读作空列表。在 0.2.6 之前，只要有一条这样的建议，回调就根本不会被调用。
+
+建议的 `destination` 是一个 `PermissionUpdateDestination`：`USER_SETTINGS`、`PROJECT_SETTINGS`、`LOCAL_SETTINGS`、`SESSION` 或 `CLI_ARG`（`"cliArg"`，即来自命令行的规则，例如 `--allowedTools`）。`CLI_ARG` 是 0.2.6 新增的，因此对该枚举进行穷尽式 `switch` 时需要为它添加一个 case。
 
 为在这些丰富字段出现之前编写的代码保留了向后兼容的构造函数：
 

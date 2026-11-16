@@ -9,7 +9,7 @@
 ```
 ClaudeSDKException (RuntimeException)
 ├── CLIConnectionException
-├── CLINotFoundException
+│   └── CLINotFoundException
 ├── ProcessException
 │   └── ResultException
 ├── CLIJSONDecodeException
@@ -28,6 +28,10 @@ public class ClaudeSDKException extends RuntimeException {
 }
 ```
 
+`hasNext()`에서 기다리던 스레드가 인터럽트되면 `ClaudeSDKClient.receiveMessages()`와 `receiveResponse()`의
+메시지 이터레이터가 이 예외를 그대로(원인 `InterruptedException`) 던집니다. 인터럽트 플래그는 복원됩니다.
+0.2.6부터이며, 이전에는 인터럽트가 완료된 것처럼 스트림을 끝냈습니다.
+
 ## CLIConnectionException
 
 Claude Code CLI 연결에 실패했습니다.
@@ -40,8 +44,11 @@ public class CLIConnectionException extends ClaudeSDKException {
 ```
 
 **원인**:
-- CLI를 찾을 수 없음
-- 프로세스 시작 실패
+- CLI를 찾을 수 없음(하위 클래스인 `CLINotFoundException`으로)
+- 실행 파일이 없는 경우 외의 이유로 프로세스 시작 실패. 예를 들어 `EACCES`(실행 불가)나 `ENOEXEC`(올바른 바이너리가 아님): `"Failed to start Claude Code: ..."`이며, 프로세스 생성 시의 `IOException`이 원인입니다. 0.2.6 이전에는 이런 경우가 `CLINotFoundException`으로 보고되었습니다
+- `cwd` 작업 디렉터리가 존재하지 않음
+- `user(...)`가 설정됨: Java SDK는 CLI를 다른 OS 사용자로 실행할 수 없습니다([user()](./feature-configuration-options.md#user) 참고)
+- 직렬화할 수 없는 `mcpServers` 맵이나 `outputFormat` JSON 스키마(`"Failed to serialize ..."`). 0.2.6 이전에는 경고와 함께 플래그가 빠졌습니다
 - 연결 시간 초과
 - 네트워크 문제(원격 전송)
 - `sandbox`와 병합하기 위해 불러올 수 없는 `settings`(`"Failed to load settings: ..."`): 파일이 없거나 읽을 수 없는 경우, JSON이 잘못된 경우, JSON이 객체가 아닌 경우. [settings()](./feature-configuration-options.md#settings)를 참고하세요
@@ -52,12 +59,22 @@ public class CLIConnectionException extends ClaudeSDKException {
 Claude Code CLI 실행 파일을 찾을 수 없습니다.
 
 ```java
-public class CLINotFoundException extends ClaudeSDKException {
+public class CLINotFoundException extends CLIConnectionException {
+    public CLINotFoundException();                                         // default install hint
     public CLINotFoundException(String message);
+    public CLINotFoundException(String message, String cliPath);
+    public CLINotFoundException(String message, String cliPath, Throwable cause);
+
+    @Nullable public String getCliPath();   // the path that was searched
 }
 ```
 
-CLI를 찾지 못하면, 아무것도 실행하기 전 전송 계층을 생성하는 시점에 던져집니다. Windows에서는 절대 경로인
+`CLIConnectionException`의 하위 클래스이므로, 둘 다 처리할 때는 이것을 먼저 잡으세요.
+
+CLI를 찾지 못하면 아무것도 실행하기 전 전송 계층을 생성하는 시점에 던져지고, 실행 파일이 존재하지 않아
+프로세스 생성이 실패하면(`ENOENT`, 생성 시의 예외가 원인) `connect()`에서 던져집니다. 0.2.6부터는 오직 이것만
+뜻합니다: 존재하지만 실행할 수 없는 CLI는 대신 일반 `CLIConnectionException`을 일으키므로, 권한 문제가 더는
+"설치되지 않음"으로 보고되지 않습니다. Windows에서는 절대 경로인
 `PATH` 항목에 있는 네이티브 `claude.exe`나 `~/.local/bin/claude.exe`만 찾습니다. npm의 `claude.cmd` 심은
 `allowUnsafeWindowsBatchCli(true)`일 때만 찾으며, 메시지에서 이를 알려 줍니다.
 
@@ -146,14 +163,18 @@ CLI에서 온 JSON 파싱에 실패했습니다.
 
 ```java
 public class CLIJSONDecodeException extends ClaudeSDKException {
-    public CLIJSONDecodeException(String message, Throwable cause);
+    public CLIJSONDecodeException(String line, Throwable cause);
+
+    public String getLine();   // the raw line that failed to parse
 }
 ```
 
 **원인**:
-- 잘못된 JSON
-- 예상치 못한 형식
+- `{`로 시작하지만 파싱되지 않거나 JSON 객체 뒤에 내용이 있는(`{"a":1} junk`) 완전한 stdout 줄. 0.2.6부터는 이 예외로 메시지 스트림이 끝납니다(메시지를 모으는 `ClaudeSDK.query(...)`는 이를 `QueryFailedException`으로 감쌉니다). 이전에는 그런 줄 하나가 그 뒤의 모든 메시지를 조용히 삼켰습니다. `{`로 시작하지 않는 줄은 보고되지 않고 건너뜁니다
+- `maxBufferSize`보다 긴 stdout 줄
 - CLI 버전 불일치
+
+[전송 계층 → 줄 구분과 백프레셔](./feature-transport-layer.md#줄-구분과-백프레셔-026)를 참고하세요.
 
 ## MessageParseException
 
@@ -166,13 +187,16 @@ public class MessageParseException extends ClaudeSDKException {
 ```
 
 **원인**:
-- 알 수 없는 메시지 타입
+- `type` 필드가 없는 메시지
 - 필수 필드 누락
-- 타입 변환 오류
+- 구조가 잘못된 알려진 메시지 타입(예: 리스트가 아닌 `assistant` 콘텐츠)
+
+알 수 없는 메시지 타입은 보고되지 않고 건너뜁니다. 0.2.6부터는 명시적인 `null`이나 타입이 잘못된 *선택* 필드도
+이 예외를 일으키지 않습니다. [메시지 타입](./feature-message-types.md)을 참고하세요.
 
 ## QueryFailedException
 
-메시지를 모으는 질의가 오류 결과로 끝났습니다. 그때까지 도착한 메시지를 담고 있습니다.
+메시지를 모으는 질의가 오류 결과로 끝났거나, 그 스레드가 인터럽트되었습니다. 그때까지 도착한 메시지를 담고 있습니다.
 
 ```java
 public class QueryFailedException extends ClaudeSDKException {
@@ -187,6 +211,9 @@ public class QueryFailedException extends ClaudeSDKException {
 - `error_max_turns` — `maxTurns`에 도달
 - `error_max_budget_usd` — `maxBudgetUsd`에 도달
 - `error_during_execution` — `resumeDropsTurn`으로 거부된 재개 포함
+- 메시지를 기다리는 동안 호출 스레드가 인터럽트됨(0.2.6부터).
+  원인은 `InterruptedException`으로 인한 `ClaudeSDKException`이고, `resultMessage()`는 보통 `null`이며, 인터럽트
+  플래그는 복원됩니다. 예외를 던지기 전에 CLI는 여전히 정상적으로 종료됩니다.
 
 **왜 존재하는가**: CLI는 이런 상황을 *완전한* 턴 — 어시스턴트 메시지와 하위 타입·비용·사용량을 담은
 마지막 `ResultMessage` — 을 내보낸 다음에야, 셸 사용자를 위해 일부러 0이 아닌 코드로 종료하는 방식으로

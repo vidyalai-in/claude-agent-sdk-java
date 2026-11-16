@@ -9,7 +9,7 @@ Manejo de errores y jerarquía de excepciones.
 ```
 ClaudeSDKException (RuntimeException)
 ├── CLIConnectionException
-├── CLINotFoundException
+│   └── CLINotFoundException
 ├── ProcessException
 │   └── ResultException
 ├── CLIJSONDecodeException
@@ -28,6 +28,11 @@ public class ClaudeSDKException extends RuntimeException {
 }
 ```
 
+Se lanza tal cual (con causa `InterruptedException`) desde los iteradores de mensajes de
+`ClaudeSDKClient.receiveMessages()` y `receiveResponse()` cuando se interrumpe el hilo que espera
+en `hasNext()`. El indicador de interrupción se restablece. Desde la 0.2.6; antes, una interrupción
+terminaba el flujo como si se hubiera completado.
+
 ## CLIConnectionException
 
 Falló la conexión con el CLI de Claude Code.
@@ -40,8 +45,11 @@ public class CLIConnectionException extends ClaudeSDKException {
 ```
 
 **Causas**:
-- No se encuentra el CLI
-- El proceso no arrancó
+- No se encuentra el CLI (como la subclase `CLINotFoundException`)
+- El proceso no arrancó por cualquier motivo distinto de un ejecutable ausente, por ejemplo `EACCES` (no es ejecutable) o `ENOEXEC` (no es un binario válido): `"Failed to start Claude Code: ..."`, con la `IOException` del lanzamiento como causa. Antes de la 0.2.6 se notificaban como `CLINotFoundException`
+- El directorio de trabajo `cwd` no existe
+- `user(...)` está definido: el SDK de Java no puede ejecutar el CLI como otro usuario del sistema operativo (consulta [user()](./feature-configuration-options.md#user))
+- Un mapa `mcpServers` o un JSON schema de `outputFormat` que no se puede serializar (`"Failed to serialize ..."`); antes de la 0.2.6 el flag se descartaba con un aviso
 - Tiempo de espera de conexión agotado
 - Problemas de red (transporte remoto)
 - `settings` que no se pueden cargar para fusionarlos con `sandbox` (`"Failed to load settings: ..."`): un archivo inexistente o ilegible, JSON no válido o JSON que no es un objeto. Consulta [settings()](./feature-configuration-options.md#settings)
@@ -52,13 +60,23 @@ public class CLIConnectionException extends ClaudeSDKException {
 No se encuentra el ejecutable del CLI de Claude Code.
 
 ```java
-public class CLINotFoundException extends ClaudeSDKException {
+public class CLINotFoundException extends CLIConnectionException {
+    public CLINotFoundException();                                         // default install hint
     public CLINotFoundException(String message);
+    public CLINotFoundException(String message, String cliPath);
+    public CLINotFoundException(String message, String cliPath, Throwable cause);
+
+    @Nullable public String getCliPath();   // the path that was searched
 }
 ```
 
-Se lanza al construir el transporte, antes de lanzar ningún proceso, si no se encuentra ningún CLI.
-En Windows solo se encuentra un `claude.exe` nativo en una entrada absoluta del `PATH`, o
+Es una subclase de `CLIConnectionException`, así que captúrala primero cuando manejes ambas.
+
+Se lanza al construir el transporte, antes de lanzar ningún proceso, si no se encuentra ningún CLI,
+y desde `connect()` cuando el lanzamiento falla porque el ejecutable no existe (`ENOENT`; la
+excepción del lanzamiento es la causa). Desde la 0.2.6 solo significa eso: un CLI que existe pero no
+se puede ejecutar lanza una `CLIConnectionException` normal, de modo que un problema de permisos ya
+no se notifica como "no instalado". En Windows solo se encuentra un `claude.exe` nativo en una entrada absoluta del `PATH`, o
 `~/.local/bin/claude.exe`; el shim `claude.cmd` de npm solo se encuentra con
 `allowUnsafeWindowsBatchCli(true)`, y el mensaje lo indica.
 
@@ -149,14 +167,18 @@ Falló el análisis del JSON procedente del CLI.
 
 ```java
 public class CLIJSONDecodeException extends ClaudeSDKException {
-    public CLIJSONDecodeException(String message, Throwable cause);
+    public CLIJSONDecodeException(String line, Throwable cause);
+
+    public String getLine();   // the raw line that failed to parse
 }
 ```
 
 **Causas**:
-- JSON mal formado
-- Formato inesperado
+- Una línea completa de stdout que empieza por `{` pero no se puede analizar, o que tiene contenido después del objeto JSON (`{"a":1} junk`). Desde la 0.2.6 esto termina el flujo de mensajes con esta excepción (el `ClaudeSDK.query(...)` que recopila la envuelve en una `QueryFailedException`); antes, una línea así se tragaba en silencio todos los mensajes que venían después. Las líneas que no empiezan por `{` se omiten, no se notifican
+- Una línea de stdout más larga que `maxBufferSize`
 - Desajuste de versión del CLI
+
+Consulta [Capa de transporte → Delimitación de líneas y contrapresión](./feature-transport-layer.md#delimitación-de-líneas-y-contrapresión-026).
 
 ## MessageParseException
 
@@ -169,14 +191,18 @@ public class MessageParseException extends ClaudeSDKException {
 ```
 
 **Causas**:
-- Tipo de mensaje desconocido
+- Un mensaje sin campo `type`
 - Faltan campos obligatorios
-- Error de conversión de tipos
+- Un tipo de mensaje conocido con una estructura no válida (por ejemplo, un contenido de `assistant` que no es una lista)
+
+Un tipo de mensaje desconocido se omite, no se notifica. Desde la 0.2.6, un `null` explícito o un
+campo *opcional* de tipo incorrecto tampoco la lanzan ya; consulta
+[Tipos de mensaje](./feature-message-types.md).
 
 ## QueryFailedException
 
-Una consulta que recopila mensajes terminó en un resultado de error. Lleva consigo los mensajes que
-ya habían llegado.
+Una consulta que recopila mensajes terminó en un resultado de error, o su hilo se interrumpió. Lleva
+consigo los mensajes que ya habían llegado.
 
 ```java
 public class QueryFailedException extends ClaudeSDKException {
@@ -191,6 +217,10 @@ public class QueryFailedException extends ClaudeSDKException {
 - `error_max_turns`: se alcanzó `maxTurns`
 - `error_max_budget_usd`: se alcanzó `maxBudgetUsd`
 - `error_during_execution`: incluida una reanudación rechazada por `resumeDropsTurn`
+- El hilo que llama se interrumpió mientras esperaba mensajes (desde la 0.2.6). La causa es una
+  `ClaudeSDKException` causada por la `InterruptedException`, `resultMessage()` suele ser `null` y
+  el indicador de interrupción se restablece. El CLI se sigue cerrando de forma ordenada antes de
+  lanzar la excepción.
 
 **Por qué existe**: el CLI informa de estas situaciones emitiendo un turno *completo* —mensajes del
 asistente más un `ResultMessage` final con el subtipo, el coste y el uso— y solo entonces sale con

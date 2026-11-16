@@ -46,9 +46,17 @@ que carrega os pedidos de permissão também está disponível ali. Não pode se
 })
 ```
 
+O SDK não impõe limite de tempo ao callback, como no SDK Python, então ele pode esperar a
+aprovação de uma pessoa. Antes da 0.2.6 ele era interrompido após 60 segundos, o que fazia falhar
+qualquer aprovação mais demorada. (As requisições de controle de saída do próprio SDK, como
+`setModel`, mantêm o tempo limite de 60 segundos.)
+
 Se o CLI abandonar a requisição de permissão antes que o callback responda (ele envia um
 `control_cancel_request`, por exemplo quando o turno é interrompido), o SDK cancela o future que o
-callback devolveu, interrompe a thread que o aguarda e não envia resposta.
+callback devolveu, interrompe a thread que o aguarda e não envia resposta. Fechar o cliente faz o
+mesmo, de imediato, para todo callback ainda em execução. O próprio callback pode fechar o cliente
+(desde a 0.2.6): o CLI ainda recebe o EOF no stdin e seu período de tolerância, a thread que fecha
+não é interrompida e a requisição desse callback fica sem resposta.
 
 > **`canUseTool` só dispara em decisões `"ask"`.** Esse callback é o substituto, no SDK, do prompt
 > interativo de permissão — ele roda apenas quando as regras de permissão do CLI resultam em
@@ -145,6 +153,10 @@ record ToolPermissionContext(
     @Nullable String description             // human-readable subtitle for the permission UI
 )
 ```
+
+`suggestions` é lido de forma tolerante: uma sugestão cujo tipo, destino, comportamento ou modo esta versão do SDK não conhece é ignorada (registrada no nível `FINE`) em vez de fazer a requisição falhar, e um valor que não é uma lista é lido como vazio. Antes da 0.2.6, uma única sugestão desse tipo impedia que o callback fosse chamado.
+
+O `destination` de uma sugestão é um `PermissionUpdateDestination`: `USER_SETTINGS`, `PROJECT_SETTINGS`, `LOCAL_SETTINGS`, `SESSION` ou `CLI_ARG` (`"cliArg"`, regras vindas da linha de comando, como `--allowedTools`). `CLI_ARG` é novo na 0.2.6, então um `switch` exaustivo sobre o enum precisa de um case para ele.
 
 Construtores compatíveis com versões anteriores são preservados para código escrito antes de os
 campos enriquecidos existirem:

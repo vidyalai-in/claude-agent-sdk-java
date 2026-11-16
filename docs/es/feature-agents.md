@@ -80,8 +80,36 @@ AgentDefinition compat = new AgentDefinition(
 | `initialPrompt` | `String` (admite null) | Prompt inicial que se envía cuando el agente arranca |
 | `maxTurns` | `Integer` (admite null) | Máximo de turnos del agente; null significa sin límite |
 | `background` | `Boolean` (admite null) | Ejecuta el agente en segundo plano |
-| `effort` | `String` (admite null) | Nivel de esfuerzo: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. `"xhigh"` es propio de Opus 4.7 y recae en `"high"` en los demás modelos. Consulta también el enum [`EffortLevel`](feature-configuration-options.md#enum-effortlevel). |
+| `effort` | `String` (admite null) | Nivel de esfuerzo: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. `"xhigh"` es propio de Opus 4.7 y recae en `"high"` en los demás modelos. Consulta también el enum [`EffortLevel`](feature-configuration-options.md#enum-effortlevel). Es null cuando el esfuerzo es numérico. |
 | `permissionMode` | `String` (admite null) | Modo de permisos del agente |
+| `numericEffort` | `Integer` (admite null) | Esfuerzo como número en lugar de nombre de nivel (desde la 0.2.6). Como mucho puede definirse uno de `effort` y `numericEffort`; el constructor lanza `IllegalArgumentException` si se definen ambos |
+
+**Esfuerzo.** Defínelo en una copia con `withEffort(...)`, que acepta un nombre de nivel, un
+`EffortLevel` o un número (todo ello desde la 0.2.6). Ambas formas llegan al CLI bajo la misma clave
+`"effort"`, igual que el `effort: EffortLevel | int` del SDK de Python: un nivel como cadena y un
+número como número JSON. Cada llamada sustituye a la otra forma, así que `withEffort(32000)` borra
+`effort()` y `withEffort("high")` borra `numericEffort()`.
+
+```java
+import in.vidyalai.claude.sdk.types.config.EffortLevel;
+
+AgentDefinition tester = new AgentDefinition(
+        "Creates and runs tests",
+        "You are a testing expert.",
+        List.of("Read", "Write", "Bash"),
+        "sonnet")
+    .withEffort(32000);                  // "effort": 32000
+
+AgentDefinition reviewer = tester.withEffort(EffortLevel.HIGH);   // "effort": "high"
+AgentDefinition quick = tester.withEffort("low");                 // "effort": "low"
+```
+
+`AgentsExample` define un esfuerzo numérico en su agente que ejecuta las pruebas.
+
+El record ganó el componente final `numericEffort` en la 0.2.6. Se conservan todos los constructores
+anteriores, pero un patrón de deconstrucción de records (JDK 21+) tiene que añadirlo. Un record de
+configuración MCP en `mcpServers` conserva su `"type"` cuando el agente se envía al CLI (antes de la
+0.2.6 se perdía).
 
 **Campo model:** el campo `model` acepta alias cortos (`"sonnet"`, `"opus"`, `"haiku"`,
 `"inherit"`) o IDs completos de modelo (por ejemplo, `"claude-sonnet-4-5"`).

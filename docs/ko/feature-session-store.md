@@ -146,8 +146,10 @@ public record SessionStoreListEntry(String sessionId, long mtime);
 public record SessionSummaryEntry(String sessionId, long mtime, Map<String, Object> data);
 ```
 
-`SessionStoreEntry`는 `Map<String, Object>`를 감싼 얇은 래퍼로 `type` 필드를 요구하며, 나머지는 불투명한
-그대로 전달됩니다:
+`SessionStoreEntry`는 `Map<String, Object>`를 감싼 얇은 래퍼이며, 맵 전체가 불투명하게 그대로 전달됩니다. CLI가 쓰는
+모든 항목에는 문자열 `type`이 있지만 필수는 아닙니다: Python SDK와 마찬가지로 `type`이 없는 항목도 미러링, 가져오기,
+나열을 거치며 바뀌지 않고 전달되고, 그런 항목에서 `type()`은 `null`을 반환합니다. (0.2.5까지는 그런 항목에 대해
+생성자가 `IllegalArgumentException`을 던졌습니다.) `SessionStoreEntry.of(map)`은 맵을 복사하고 키 순서를 유지합니다:
 
 ```java
 SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
@@ -158,7 +160,7 @@ SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
     "timestamp", "2026-04-27T00:00:00Z"
 ));
 
-entry.type();      // "user"
+entry.type();      // "user" (null when the entry has no string type)
 entry.uuid();      // "u1"
 entry.timestamp(); // "2026-04-27T00:00:00Z"
 entry.<String>get("custom_field"); // typed convenience accessor
@@ -351,7 +353,16 @@ String spawnedBy = subAgent.get(0).parentToolUseId();
 
 `listSessions`와 `listSessionSummaries`가 둘 다 구현되지 않았다면 이 호출은
 `IllegalStateException`을 던집니다. 어댑터의 `loadAsync` 실패는 목록 전체를 실패시키는 대신 해당 행만 빈
-요약 항목으로 낮춥니다.
+요약 항목(목록의 mtime, `cwd`를 포함한 그 밖의 모든 필드는 `null`)으로 낮춥니다.
+
+`load()`에서 유도한 행(대체 경로와 `getSessionInfoFromStore`)은 로컬 트랜스크립트와 같은 파서를 거칩니다: 항목이
+JSONL로 직렬화되고, `fileSize`는 그 JSONL의 바이트 크기이며, `firstPrompt`와 `createdAt`은 처음 64 KB에서 가져옵니다.
+`getSessionInfoFromStore`는 `lastModified`를 마지막 항목의 `timestamp`에서 가져오며, 어댑터의 `load()`가 던진 예외를
+세션을 찾을 수 없다고 보고하는 대신 그대로 전파합니다. 요약 사이드카로 만든 행의 `fileSize`는 `null`입니다. UTC
+오프셋이 없는 타임스탬프는 UTC로 읽습니다.
+
+`directory` 인자는 프로젝트 키를 유도하기 전에 로컬 디스크 조회와 똑같이 정규화되므로(심볼릭 링크 해석, NFC
+정규화), 저장소 키는 언제나 디스크의 프로젝트 디렉터리 이름과 일치합니다.
 
 ## SessionStore 기반 변경 작업
 
@@ -372,11 +383,12 @@ ForkSessionResult fork = ClaudeSDK.forkSessionViaStore(
 내부 동작:
 
 - `renameSessionViaStore`는 `custom-title` 항목을 덧붙입니다.
-- `tagSessionViaStore`는 `tag` 항목을 덧붙이며, `null`은 빈 문자열로 지웁니다.
+- `tagSessionViaStore`는 `tag` 항목을 덧붙이며, `null`은 빈 문자열로 지웁니다. 태그는 `tagSession`과 똑같이 정제됩니다(NFKC 정규화, 서식 문자와 사용자 영역 문자 제거).
 - 저장소가 `delete()`를 구현하지 않으면 `deleteSessionViaStore`는 아무 일도 하지 않습니다(원시 S3 같은
   WORM/추가 전용 백엔드에 적절합니다).
 - `forkSessionViaStore`는 디스크 포크와 같은 UUID 재매핑 변환을 수행합니다(공통
-  `SessionMutations.buildForkLines`) — 저장 계층의 복사만으로는 **충분하지 않습니다**.
+  `SessionMutations.buildForkLines`) — 저장 계층의 복사만으로는 **충분하지 않습니다**. 제목이 없으면 원본의 사용자 지정 제목,
+  AI 제목, 첫 프롬프트 순으로 대체하고 `" (fork)"`를 덧붙입니다.
 
 `listSubagentsFromStore`는 `listSubkeys()`를 필요로 하며, 없으면 `IllegalStateException`을 던집니다.
 
@@ -417,10 +429,19 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 | 파일 | 왜 중요한가 |
 |------|----------------|
-| `.credentials.json` | OAuth 자격 증명, `claudeAiOauth.refreshToken`은 제거됨 |
+| `.credentials.json` | OAuth 자격 증명, `claudeAiOauth.refreshToken`은 제거됨(가능하면 macOS 키체인에서 읽음, 아래 참고) |
 | `.claude.json` | 사용자 수준 CLI 상태 |
 | `settings.json` | `apiKeyHelper`, 그리고 여러분의 `env`, `hooks`, `permissions` |
 | `cowork_settings.json` | cowork-plugins 모드에서 읽는 대체 설정 파일 이름 |
+
+**macOS 키체인.** macOS에서 CLI의 기본 설정은 OAuth 로그인을 `.credentials.json`이 아니라 키체인에 보관하며,
+`CLAUDE_CONFIG_DIR`를 다른 곳으로 지정하면 서브프로세스가 조회하는 키체인 서비스 이름이 바뀝니다. 그래서
+`CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`이 모두(`options.env`에도 프로세스 환경에도)
+설정되어 있지 않으면, SDK는 Python SDK와 마찬가지로
+`security find-generic-password -a $USER -w -s "Claude Code-credentials"`(5초 타임아웃)로 로그인 정보를 읽고,
+리프레시 토큰을 가린 채 임시 `.credentials.json`에 씁니다. 키체인에서 찾은 값이 자격 증명 파일보다 우선합니다. 이
+조회는 최선 노력 방식입니다: macOS가 아니거나, 명령이 실패하거나, 시간이 초과되거나, 아무것도 출력하지 않으면
+이전처럼 자격 증명 파일을 사용합니다.
 
 `settings.json`을 뿌리는 것은 보기보다 중요합니다. `apiKeyHelper`는 자격 증명 파일, macOS 키체인, 환경
 변수와 나란히 놓인 네 번째 인증 수단입니다. v0.1.23 이전에는 복사되지 않아, `apiKeyHelper`만으로 인증하던
@@ -481,6 +502,10 @@ for (Message msg : ClaudeSDK.query("Hello", options)) {
 타임아웃은 재시도하지 **않습니다**(진행 중인 호출이 나중에 도착할 수 있어, 재시도하면 동시에 중복이
 생깁니다). 어댑터는 `entry.uuid()`로 중복을 제거해, 부분 성공 후의 재시도가 중복에 안전하도록 하세요.
 
+`MirrorErrorMessage`는 두 플러시 모드 모두에서 배치가 실패한 턴의 `ResultMessage`보다 항상 먼저 도착하고, 실패한
+스트림을 끝내는 오류보다도 먼저 도착합니다(0.2.6부터. 이전에는 eager 모드에서 결과 뒤에 도착할 수 있었고, 리더가
+실패하면 사라질 수 있었습니다). 따라서 어떤 턴의 결과를 보았다면, 그 턴의 미러 실패는 이미 모두 보고된 것입니다.
+
 ## 플러시 모드 (BATCHED 대 EAGER)
 
 기본적으로 `TranscriptMirrorBatcher`는 모든 `transcript_mirror` 프레임을 버퍼링했다가 턴마다 한 번씩
@@ -508,8 +533,15 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 `EAGER`는 배처의 대기 임계값을 0으로 만듭니다 — 큐에 넣는 모든 프레임이 SDK 자체의 배출 실행기(작업마다
 `session-store-mirror-drain-<n>` 스레드 하나, Java 21+에서는 가상 스레드)에서 백그라운드 배출을 예약하고,
 그 배출이 설정된 `SessionStoreExecutor` 위에서 어댑터의 `appendAsync`를 호출합니다. 추가는
-여전히 큐 순서대로 직렬화됩니다. 느린 어댑터가 읽기 루프를 막지는 않지만, 바쁜 동안에는 프레임이 합쳐져
+여전히 큐 순서대로 직렬화됩니다. 느린 어댑터가 결과 사이에 읽기 루프를 막지는 않지만, 바쁜 동안에는 프레임이 합쳐져
 보입니다. `sessionStore`가 설정되지 않으면 이 옵션은 무시됩니다.
+
+> **주의: 느린 저장소는 결과마다 스트림을 붙잡습니다.** 두 모드 모두에서 리더는 각 `ResultMessage`를 넘기기 전에 대기
+> 중인 항목이 추가되기를 기다립니다. 그동안에는 제어 응답을 포함해 CLI에서 아무것도 읽지 않으므로, 그 플러시 도중에
+> 한 `interrupt()`, `setModel()`, `getMcpStatus()` 같은 제어 호출도 함께 기다립니다. `close()`도 마찬가지로 마지막
+> 플러시를 기다립니다. 각 대기는 `TranscriptMirrorBatcher.flushTimeoutMs()`(기본 181초)로 제한됩니다
+> ([`TranscriptMirrorBatcher`](#transcriptmirrorbatcher) 참고). Python SDK도 같은 방식으로 동작합니다. `append`를 빠르게
+> 유지하거나, 느린 작업은 어댑터 안의 큐로 넘기세요.
 
 ## 로컬 세션을 저장소로 가져오기
 
@@ -526,7 +558,8 @@ ClaudeSDK.importSessionToStore(
 
 이 헬퍼는:
 
-- 로컬 JSONL을 한 줄씩 흘려 읽습니다(빈 줄은 건너뜀).
+- 로컬 JSONL을 한 줄씩 흘려 읽습니다(빈 줄은 건너뜀). `type`이 없는 줄도 다른 줄처럼 가져오며, 더는 가져오기를
+  멈추지 않습니다. 올바른 JSON이지만 객체가 아닌 줄은 경고와 함께 건너뜁니다.
 - `batchSize`개 항목마다(기본 500) 또는 줄 바이트가 1 MiB에 이를 때마다, 먼저 오는 쪽으로
   `store.append(key, batch)`를 호출합니다.
 - `includeSubagents=true`이면 `<sessionDir>/subagents/**/*.jsonl`과 `.meta.json` 사이드카를 재귀적으로
@@ -566,6 +599,10 @@ SessionStoreConformance.run(WormStore::new,
 하네스는 평범한 `AssertionError`를 쓰므로(테스트 프레임워크 의존성 없음) JUnit, TestNG, Spock, 심지어
 단순한 `main()` 스모크 테스트에서도 동작합니다.
 
+0.2.6부터 하네스는 더 엄격합니다: 빈 리스트가 필요한 곳에서 `null`을 거부하고(예: 나열할 것이 없는 `listSessions`나
+`listSubkeys`), 요약은 있지만 `listSessions`에 없는 세션을 거부합니다. `null` 리스트를 반환하는 어댑터는 이전에는
+통과했지만 이제는 실패합니다.
+
 14가지 계약이 다루는 내용:
 
 | # | 계약 |
@@ -598,7 +635,12 @@ CLI가 stdout에 내보내는 `transcript_mirror` 프레임을 버퍼링했다�
 - 즉시 플러시 임계값: `MAX_PENDING_ENTRIES=500`, `MAX_PENDING_BYTES=1 MiB`.
   `sessionStoreFlush(EAGER)`에서는 두 임계값이 0이 되어, 큐에 넣는 모든 프레임이 백그라운드 배출을
   예약합니다([플러시 모드](#플러시-모드-batched-대-eager) 참고).
-- 각 `result` 메시지 전에 명시적으로 플러시하고, 스트림 끝/닫기에서 한 번 더 합니다.
+- 각 `result` 메시지 전에 명시적으로 플러시하고, 스트림 끝/닫기에서 한 번 더 합니다. 메시지 스트림은 이 플러시를
+  각각 기다리며, 0.2.6 이전과 달리 5초 차단이 없으므로 `result`를 볼 때쯤 저장소에는 그 턴이 들어 있습니다. 대기에는
+  여전히 한도가 있습니다: 모든 플러시는 `flushTimeoutMs()` 안에 완료되며, 이는 추가 타임아웃 × 시도 횟수 + 백오프입니다
+  (기본 `3 × 60 000 + 200 + 800 = 181 000 ms`). 그 한도에 도달하면 플러시는 어쨌든 반환하고 경고를 기록하며, 배출은
+  백그라운드에서 계속됩니다.
+- 배출은 엄격한 FIFO입니다: eager 배출과 명시적 플러시는 큐에 넣은 순서대로 추가되며 서로 끼어들지 않습니다.
 - `filePath`별로 프레임을 합쳐, 플러시마다 고유 파일당 `append` 호출이 한 번이 되게 합니다.
 - 경로가 `projectsDir` 밖인 프레임은 경고와 함께 버려집니다(부모와 서브프로세스의 `CLAUDE_CONFIG_DIR`가
   다를 때 일어납니다).

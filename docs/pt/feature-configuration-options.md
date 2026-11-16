@@ -225,7 +225,10 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
 
 Um map é serializado como `{"mcpServers": {...}}` antes de chegar a `--mcp-config`; um caminho
 ou uma string JSON é repassado sem alterações, então uma string JSON precisa usar essa mesma
-chave `mcpServers` de nível superior.
+chave `mcpServers` de nível superior. Um map que não pode ser serializado faz `connect()` falhar com
+`CLIConnectionException` (desde a 0.2.6; antes, a flag era descartada com um aviso). Campos não
+definidos de uma configuração de servidor ficam de fora do JSON em vez de serem enviados como `null`,
+então `new McpStdioServerConfig("node")` ou `new McpHttpServerConfig(url)` carrega como esperado.
 
 ## Configurações de permissão
 
@@ -307,9 +310,11 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` exige `store.implementsListSessions()`.
 - `sessionStore + enableFileCheckpointing` é rejeitado — checkpoints existem apenas em disco local.
 
+**Um store lento segura o fluxo.** Antes de cada `ResultMessage`, o leitor espera as entradas pendentes serem gravadas e, nesse meio-tempo, não lê mais nada do CLI, então uma chamada de controle como `interrupt()` também espera. O `close()` da mesma forma espera a gravação final. Cada espera é limitada pelo tempo limite de gravação do batcher, 181 s por padrão. O SDK Python se comporta da mesma forma; veja a [ressalva no guia do Session Store](./feature-session-store.md#modo-de-gravação-batched-vs-eager).
+
 ### sessionStoreFlush()
 
-Controla quando as entradas espelhadas da transcrição são gravadas no `sessionStore` configurado. O padrão é `SessionStoreFlushMode.BATCHED` (uma gravação por turno ou quando o buffer transborda). Use `SessionStoreFlushMode.EAGER` para agendar uma gravação em segundo plano após cada quadro, com entrega quase em tempo real — os appends continuam serializados na ordem de enfileiramento, mas um adaptador lento não trava o laço de leitura. Ignorado quando `sessionStore` não está definido.
+Controla quando as entradas espelhadas da transcrição são gravadas no `sessionStore` configurado. O padrão é `SessionStoreFlushMode.BATCHED` (uma gravação por turno ou quando o buffer transborda). Use `SessionStoreFlushMode.EAGER` para agendar uma gravação em segundo plano após cada quadro, com entrega quase em tempo real — os appends continuam serializados na ordem de enfileiramento, mas um adaptador lento não trava o laço de leitura entre resultados (a gravação antes de cada `ResultMessage` ainda espera por ele, nos dois modos). Ignorado quando `sessionStore` não está definido.
 
 ```java
 import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
@@ -339,6 +344,11 @@ Número máximo de turnos da conversa.
 ```java
 .maxTurns(10)  // Limit to 10 turns
 ```
+
+`0` conta como não definido: como o SDK Python, o SDK omite `--max-turns` nesse caso, então vale o padrão do CLI.
+O mesmo vale para uma string vazia em `model`, `fallbackModel`,
+`permissionPromptToolName`, `resume`, `sessionId` e `settings`, e para um
+`mcpServersJson` vazio: desde a 0.2.6, a flag é omitida em vez de ser enviada vazia.
 
 **Casos de uso**:
 - Controle de orçamento
@@ -390,7 +400,7 @@ Padrão: 100MB. Aumente para saídas grandes.
 
 **Tipos**:
 - `ThinkingConfigAdaptive` — raciocínio adaptativo, com 32.000 tokens por padrão
-- `ThinkingConfigEnabled(int budgetTokens)` — orçamento fixo de tokens (deve ser > 0)
+- `ThinkingConfigEnabled(int budgetTokens)` — orçamento fixo de tokens (zero ou mais; `0` é enviado como `--max-thinking-tokens 0`)
 - `ThinkingConfigDisabled` — sem tokens de raciocínio
 
 **Nota**: esta opção tem precedência sobre o obsoleto `maxThinkingTokens()`.
@@ -467,7 +477,18 @@ Tamanho máximo da fila de mensagens.
 .maxMsgQSize(1000)
 ```
 
-Aumente em cenários de alta vazão.
+Padrão: 1000. Quando a fila está cheia, o leitor espera até o seu código retirar uma mensagem
+(contrapressão, como o envio com await do SDK Python), então um consumidor lento desacelera o CLI
+em vez de perder saída. Antes da 0.2.6, uma mensagem que encontrasse a fila cheia por 5 segundos era
+descartada. O fim do fluxo e qualquer erro são sempre entregues, mesmo a um iterador criado depois.
+Aumente o tamanho em cenários de alta vazão.
+
+É um limite flexível (desde a 0.2.6). Enquanto uma requisição de controle que o SDK enviou
+(`interrupt()`, `setModel()`, `getMcpStatus()`, ...) espera sua resposta, o leitor continua lendo
+além do limite, porque essa resposta chega pelo mesmo stdout que as mensagens. Uma chamada de
+controle feita antes de alguém drenar a fila, portanto, não expira mais atrás de uma fila cheia.
+Nada é descartado e a ordem é mantida. O valor precisa ser pelo menos 1: um menor faz `connect()`
+(ou `ClaudeSDK.query`) falhar com `IllegalArgumentException`.
 
 ## Configuração do modelo
 
@@ -655,6 +676,17 @@ ou em branco gera uma flag sem valor. Um valor que começa com `-` é enviado na
 `--flag=value`, para que não seja interpretado como uma flag separada; qualquer outro valor é
 enviado como dois tokens.
 
+Desde a 0.2.6, o mapa pode conter valores `null` (a forma do SDK Python de escrever uma flag sem
+valor), e as flags são passadas na ordem de iteração do mapa. `Map.of` não aceita nulos e não tem
+ordem definida, então use um `LinkedHashMap` quando qualquer um dos dois importar:
+
+```java
+Map<String, String> flags = new LinkedHashMap<>();
+flags.put("replay-user-messages", null);   // --replay-user-messages
+flags.put("debug", "api");                  // --debug api, always after it
+.extraArgs(flags)
+```
+
 ## Callbacks
 
 ### canUseTool()
@@ -684,8 +716,16 @@ BiFunction<String, Object, ToolPermissionContext, CompletableFuture<PermissionRe
 
 ### stderrCallback()
 
-Recebe a saída de erro do CLI. Invocado uma vez por linha de stderr conforme o CLI a emite
-(só é redirecionado quando esse callback está definido).
+Recebe a saída de erro do CLI. Invocado uma vez por linha de stderr conforme o CLI a emite.
+O stderr só é redirecionado quando esse callback está definido. Sem ele, o CLI herda o stderr da
+JVM desde a 0.2.6, como no SDK Python, então a saída aparece no stderr do seu processo. (Antes ele
+era redirecionado e nunca lido, o que podia bloquear o CLI depois que ele escrevesse mais que um
+buffer de pipe.)
+
+As linhas são delimitadas como o SDK Python as delimita: divididas apenas em `\n` (um `\r` isolado,
+como o de uma linha de progresso, permanece na linha), com os espaços em branco finais removidos e as
+linhas em branco ignoradas. Uma linha mais longa que `maxBufferSize` é repassada em pedaços, e uma
+última linha sem quebra de linha ainda é entregue.
 
 ```java
 .stderrCallback(line -> {
@@ -744,11 +784,12 @@ Veja [Hooks → Política de falha](./feature-hooks.md#política-de-falha-onfail
 
 ### user()
 
-Define a identidade do usuário para rastreamento.
-
-```java
-.user("user-12345")
-```
+**Obsoleto e sem suporte no SDK Java.** O SDK Python executa o subprocesso do CLI como esse usuário
+do sistema operacional; o `ProcessBuilder` do Java não consegue trocar de usuário. Até a 0.2.5, a
+opção era aceita e ignorada em silêncio, então o CLI rodava como o usuário da JVM. Desde a 0.2.6,
+`connect()` (e `ClaudeSDK.query(...)`) falha com `CLIConnectionException` quando ela está definida.
+Remova-a das suas opções. Para executar o CLI como outro usuário, aponte [`cliPath()`](#clipath) para
+um script wrapper que troque de usuário (por exemplo, um que execute `sudo -u <user> claude "$@"`).
 
 ### includePartialMessages()
 
@@ -954,7 +995,7 @@ Carrega plugins do Claude Code a partir de diretórios locais.
 ))
 ```
 
-Cada plugin `local` vira `--plugin-dir <path>`. Veja [Sistema de plugins](./feature-plugin-system.md).
+Cada plugin `local` vira `--plugin-dir <path>`. Qualquer outro `type` faz `connect()` lançar `IllegalArgumentException` (desde a 0.2.6; antes, era ignorado). Veja [Sistema de plugins](./feature-plugin-system.md).
 
 ### outputFormat()
 
@@ -973,6 +1014,9 @@ Formato de saída estruturada (estilo Messages API).
     )
 ))
 ```
+
+O schema é enviado como `--json-schema`. Um que não pode ser serializado faz `connect()` falhar com
+`CLIConnectionException` em vez de ser descartado.
 
 ### enableFileCheckpointing()
 

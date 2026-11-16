@@ -80,10 +80,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```
 
 **매개변수**:
-- `budgetTokens`(int) — 최대 사고 토큰 수(양수여야 합니다)
+- `budgetTokens`(int) — 최대 사고 토큰 수(0 이상). 0.2.6부터는 `0`도 받으며, Python SDK와 마찬가지로 `--max-thinking-tokens 0`으로 전송합니다
 - `display`(선택, `null` 가능) — 아래 [사고 표시](#사고-표시)를 참고하세요
 
-**던짐**: `budgetTokens ≤ 0`이면 `IllegalArgumentException`
+**던짐**: `budgetTokens < 0`이면 `IllegalArgumentException`
 
 **적합한 경우**:
 - 예산을 신경 쓰는 애플리케이션
@@ -445,10 +445,10 @@ public record ThinkingConfigEnabled(
 ```
 
 **매개변수**:
-- `budgetTokens` — 최대 사고 토큰 수(> 0이어야 합니다)
+- `budgetTokens` — 최대 사고 토큰 수(0 이상)
 - `display`(선택, `null` 가능) — 아래 `ThinkingDisplay` 참고
 
-**던짐**: `budgetTokens ≤ 0`이면 `IllegalArgumentException`
+**던짐**: `budgetTokens < 0`이면 `IllegalArgumentException`
 
 CLI 플래그: `--max-thinking-tokens <budgetTokens>`(항상), `--thinking-display <value>`
 (`display != null`일 때).

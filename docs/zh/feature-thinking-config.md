@@ -78,10 +78,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```
 
 **参数**：
-- `budgetTokens`（int）—— 最大思考 token 数（必须为正）
+- `budgetTokens`（int）—— 最大思考 token 数（零或更大）。自 0.2.6 起接受 `0`，并以 `--max-thinking-tokens 0` 发送，与 Python SDK 的发送方式一致
 - `display`（可选，可以为 `null`）—— 参见下文的[思考展示](#思考展示)
 
-**抛出**：若 `budgetTokens ≤ 0`，抛出 `IllegalArgumentException`
+**抛出**：若 `budgetTokens < 0`，抛出 `IllegalArgumentException`
 
 **最适合**：
 - 关注预算的应用
@@ -440,10 +440,10 @@ public record ThinkingConfigEnabled(
 ```
 
 **参数**：
-- `budgetTokens` —— 最大思考 token 数（必须 > 0）
+- `budgetTokens` —— 最大思考 token 数（零或更大）
 - `display`（可选，可以为 `null`）—— 参见下文的 `ThinkingDisplay`
 
-**抛出**：若 `budgetTokens ≤ 0`，抛出 `IllegalArgumentException`
+**抛出**：若 `budgetTokens < 0`，抛出 `IllegalArgumentException`
 
 CLI 标志：`--max-thinking-tokens <budgetTokens>`（始终）；`--thinking-display <value>`
 （当 `display != null` 时）。

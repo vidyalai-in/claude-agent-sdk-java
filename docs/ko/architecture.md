@@ -83,7 +83,7 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
   - `sendMessage()` / `query()` — 메시지 보내기
   - `receiveMessages()` / `receiveResponse()` — 메시지 받기
   - 제어 메서드: `interrupt()`, `setModel()`, `setPermissionMode()` 등
-- **스레드 안전성**: 문서화된 보장 아래 부분적으로 스레드 안전
+- **스레드 안전성**: 문서화된 보장 아래 부분적으로 스레드 안전. `connect()`, `disconnect()`, `close()`는 하나의 수명 주기 잠금으로 직렬화됩니다(0.2.6부터). `connect()` 도중에 `close()`가 오면 연결 작업은 모든 것을 해제하고 `IllegalStateException`을 던집니다
 - **자원 관리**: 올바른 정리를 위해 AutoCloseable 구현
 
 **설계 패턴**: Builder + 자원 관리(try-with-resources)
@@ -140,9 +140,34 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
 - **주요 기능**:
   - CompletableFuture를 쓰는 비동기 제어 프로토콜
   - 요청 ID 생성과 추적
-  - 크기를 설정할 수 있는 메시지 큐
+  - **백프레셔**를 갖춘 제한된 메시지 큐(`maxMsgQSize`, 기본 1000): 큐가 가득 차면 리더는 메시지를 버리지 않고
+    소비자를 기다립니다. Python SDK의 await되는 send와 같습니다. 0.2.6 이전에는 5초를 기다린 메시지가 버려졌습니다.
+    스트림의 끝과 모든 오류는 종료 상태로 기록되므로, 큐가 가득 차 있으면 늦어질 수는 있어도 사라지지는 않으며,
+    나중에 만든 이터레이터도 이를 봅니다
+  - 이 한도는 **소프트** 한도입니다: 나가는 제어 요청이 `control_response`를 기다리는 동안에는 응답이 같은 stdout으로
+    오기 때문에 리더가 한도를 넘어 계속 읽습니다. 따라서 메시지를 소비하지 않는 스레드가 한 제어 호출도 가득 찬 큐
+    뒤에서 타임아웃될 수 없습니다. 큐는 하나의 FIFO로 유지되므로 순서는 바뀌지 않습니다. `MirrorErrorMessage` 보고도
+    한도를 넘어 큐에 들어갑니다
+  - **인터럽트**: `hasNext()`에서 기다리다 인터럽트된 소비자는 정상적인 스트림 끝이 아니라 `InterruptedException`으로
+    인한 `ClaudeSDKException`을 받고, 플래그는 복원됩니다. `close()`는 실행되는 동안 플래그를 지웠다가 반환할 때 다시
+    설정하므로, 인터럽트된 호출자도 정상적으로 닫힙니다
+  - **콜백 안에서 닫기**: `canUseTool`, 훅, SDK MCP 콜백 안에서 호출한 `close()`는 그 콜백이 처리하는 요청을
+    취소하지만(응답은 결코 보내지 않음), 닫는 스레드를 인터럽트하거나 기다리지는 않습니다
   - 백그라운드 읽기 스레드(Java 21+에서는 가상 스레드)
   - 비동기 콜백을 위한 제어 실행기
+  - **타임아웃**: *나가는* 제어 요청(SDK에서 CLI로 가는 `interrupt`, `setModel`, `setPermissionMode` 등)은 60초
+    기한을 유지합니다. `initialize`에는 `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT`으로 정하는 별도 기한이 있습니다.
+    *들어오는* 요청(`canUseTool`, 훅 콜백, SDK MCP 호출)에는 0.2.6부터 Python SDK와 마찬가지로 SDK 쪽 기한이 없으며,
+    콜백이 응답하거나 `control_cancel_request`가 오거나 `close()`가 호출되면 끝납니다. 훅 매처 자체의 `timeout`은
+    CLI가 강제합니다
+  - **관대한 제어 응답**: 알려진 `request_id`가 없는 `control_response`는 무시되고, `"error"`가 아닌 `subtype`은 모두
+    성공으로 간주되며, 객체가 아닌 성공 본문은 빈 것으로 읽힙니다. 따라서 잘못된 형식의 프레임이 더는 리더를 죽일 수
+    없습니다
+  - **트랜스크립트 미러 대기**: 각 `result` 전, 스트림 끝, 닫기 시의 플러시는 바깥 상한 없이 기다립니다(0.2.6 이전에는
+    5초에서 끊겼습니다). 따라서 소비자가 결과를 볼 때쯤 저장소에는 그 턴이 들어 있고, 그 턴의 `MirrorErrorMessage`는
+    `ResultMessage`보다 먼저 도착합니다. 결과 전 플러시는 리더 스레드에서 실행되므로, 저장소가 느리면 플러시가 끝날
+    때까지 제어 응답도 늦어집니다. 플러시마다의 한도는 배처 자신이 정합니다.
+    [TranscriptMirrorBatcher](#transcriptmirrorbatcher-내부)를 참고하세요
 
 **설계 패턴**: 비동기 요청/응답 + Observer(훅용)
 
@@ -153,6 +178,9 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
   - 모든 메시지 타입 지원(user, assistant, system, result, stream_event)
   - 콘텐츠 블록 파싱(text, thinking, tool_use, tool_result)
   - 오류 처리와 검증
+  - 관대한 선택 필드(0.2.6부터): 명시적인 `null`, 타입이 잘못된 선택 필드, 문자열이 아닌 `type` 때문에 프레임이 더는
+    실패하지 않습니다. 타입 지정 필드에 담을 수 없는 와이어 값도 읽을 수 있게 남습니다(`UserMessage.toolUseResultRaw()`,
+    `AssistantMessage.errorRaw()`, `TaskNotificationMessage.statusValue()`)
 
 **설계 패턴**: Parser + Factory
 
@@ -178,7 +206,16 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
   - CLI 서브프로세스 수명 주기 관리
   - stdin/stdout 통신
   - 한도를 설정할 수 있는 버퍼링 읽기
-  - 줄 단위 예외 격리를 갖춘 stderr 콜백 지원(예외를 던지는 사용자 콜백이 더는 읽기 루프를 죽이지 않음)
+  - `\n`에서만 나누는 NDJSON stdout 구분: `{`로 시작하지만 정확히 하나의 JSON 객체가 아닌 완전한 줄은
+    `CLIJSONDecodeException`을 일으키고, 그 밖의 JSON이 아닌 줄은 건너뜁니다
+    ([전송 계층 → 줄 구분](./feature-transport-layer.md#줄-구분과-백프레셔-026) 참고)
+  - stderr는 `stderrCallback`이 있을 때만 파이프되고, 그렇지 않으면 JVM에서 물려받습니다. 파이프된 줄은 Python SDK와
+    같은 방식으로 구분되며, 줄 단위 예외 격리를 갖춥니다(예외를 던지는 사용자 콜백이 읽기 루프를 죽이지 않음)
+  - 생성 실패: 실행 파일이 없는 경우만 `CLINotFoundException`이고, 그 밖의 실패는 원인이 연결된
+    `CLIConnectionException`입니다
+  - 제한된 `close()`: 쓰기 잠금에 5초, stdin EOF 후 CLI 종료에 5초, SIGTERM 후 5초, SIGKILL 후 5초. 인터럽트가 단계를
+    줄이지 않습니다: 인터럽트된 호출자도 stdin EOF를 보내고 유예 시간을 모두 기다리며, 반환할 때 플래그가 다시
+    설정됩니다
   - 프로세스 자동 정리
   - **JVM 종료 훅**: 정적 `ConcurrentHashMap.newKeySet()`이 생성된 모든 `Process`를 추적하고, 클래스
     초기화 시 등록된 `Runtime.addShutdownHook`이 살아 있는 각 자식에 `destroy()`를 호출합니다. 덕분에
@@ -205,7 +242,11 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
   - 도구 등록과 실행
   - @Tool 어노테이션에서 스키마 자동 생성
   - CompletableFuture 기반 비동기 실행
-  - 서버 정보, 그리고 `2025-06-18` / `2024-11-05` 사이의 `initialize` 버전 협상
+  - 서버 정보, 그리고 `2025-11-25` / `2025-06-18` / `2024-11-05` 사이의 `initialize` 버전 협상
+  - 타입 지정 `@Tool` 매개변수 스키마(`ToolSchemas`): Java 타입마다 하나의 바인딩이 게시되는 스키마와 인자 변환을
+    모두 결정하므로, 스키마가 메서드가 받을 수 없는 인자를 허용하는 일이 없습니다
+  - 연결마다 세션 하나(`openSession()`): 도구와 스키마는 공유되고, 진행 중인 호출, 그 취소, `close()`는
+    클라이언트별입니다
   - MCP 프로토콜 메시지(`initialize`, `ping`, `tools/list`, `tools/call`)
   - 각 도구의 `inputSchema`에 대한 인자 검증(서버 생성 시 한 번 컴파일)
   - 취소: `notifications/cancelled`가 보류 중인 호출을 마무리하고 핸들러에 알림
@@ -230,6 +271,10 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
 - **계약**: `handleMessage`는 요청에 대해 JSON-RPC 응답을 반환하고, 답을 기대하지 않는 것에는 `null`을
   반환합니다. `close()`는 "너를 쓰던 연결이 사라진다"는 뜻이지 "멈춰라"가 아닙니다. 하나의 핸들러가 여러
   클라이언트를 섬길 수 있으므로 멱등해야 하고 계속 쓸 수 있어야 합니다.
+- **클라이언트별 세션**: 각 클라이언트는 시작할 때 서버마다 `openSession()`을 한 번 호출하고, 그 서버의 메시지를
+  반환된 핸들러로 보내며, 종료할 때 그 핸들러를 닫습니다. 기본 구현은 `this`를 반환합니다. `SdkMcpServer`는 새
+  세션을 반환하므로, 한 서버를 공유하는 동시 클라이언트들이 JSON-RPC id에서 충돌하거나, 서로의 호출을 취소하거나,
+  닫을 때 서로의 호출을 실패시키는 일이 없습니다.
 
 #### ToolCallContext
 - **목적**: 실행 중인 도구가 자신의 호출이 취소되었음을 알 수 있게 합니다.
@@ -274,6 +319,10 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
   - `filePath`별로 프레임을 합쳐 플러시마다 고유 파일당 `append` 호출을 한 번으로 만듭니다.
   - 제한된 재시도: `MIRROR_APPEND_MAX_ATTEMPTS=3`회, `[200ms, 800ms]` 백오프. 타임아웃은 재시도하지
     않습니다(진행 중인 호출이 나중에 도착할 수 있음).
+  - 엄격한 FIFO 비우기: 각 비우기는 앞선 모든 비우기 뒤에 연결되므로, eager 비우기와 명시적 플러시가 큐에 넣은
+    순서대로 추가됩니다.
+  - 제한된 완료: `flush()`와 `close()`는 언제나 `flushTimeoutMs()`(추가 타임아웃 × 시도 횟수 + 백오프, 기본
+    181 000 ms) 안에 완료됩니다. 그 시간이 지나면 future는 어쨌든 완료되고 비우기는 백그라운드에서 계속됩니다.
   - 경로가 설정된 `projectsDir` 밖에 있는 프레임은 경고와 함께 버려집니다.
   - 실패는 소비자의 스트림에 `MirrorErrorMessage`로 드러납니다 — 대화를 막지 않습니다.
 
@@ -287,7 +336,9 @@ SDK는 관심사를 뚜렷하게 나눈 계층형 아키텍처를 따릅니다:
      세션을 고릅니다).
   2. `~/.claude/`처럼 배치된 임시 디렉터리에 JSONL을 씁니다.
   3. `.credentials.json`(임시 디렉터리에서 토큰이 소모되지 않도록 `refreshToken` 제거)과
-     `.claude.json`을 복사합니다.
+     `.claude.json`을 복사합니다. macOS에서 `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`이
+     모두 설정되어 있지 않으면, Python SDK와 마찬가지로 로그인 정보를 대신 키체인에서 읽습니다
+     (`security find-generic-password`).
   4. 저장소가 `listSubkeys`를 구현하면 서브에이전트 트랜스크립트와 `.meta.json` 사이드카를 구체화합니다.
   5. `CLAUDE_CONFIG_DIR=<temp dir>`로 CLI를 띄웁니다.
   6. 연결이 끊길 때 정리하며, Windows 백신/색인기의 일시적 잠금에는 재시도합니다.
@@ -548,6 +599,9 @@ CLI는 자신이 보낸 제어 요청을 포기할 수 있습니다. 예를 들�
 stdin에 쓰이는 도중인 응답을 중간에 끊는 일은 결코 없습니다. 이는 핸들러의 태스크를 취소하고 응답을
 건너뛰는 Python SDK의 동작과 같습니다.
 
+`close()`도 아직 응답 중인 모든 들어오는 요청에 대해 즉시 같은 일을 하며, 그중 어느 것에도 응답하지 않습니다.
+0.2.6 이전에는 먼저 최대 5초 동안 그 요청들을 기다렸습니다.
+
 ### stdin 수명 주기와 실행의 끝
 
 > **`controlExecutor`는 작업마다 스레드여야 합니다.** SDK MCP 도구 호출은 도구가 답할 때까지 제어
@@ -674,7 +728,7 @@ SDK는 다중 스레드 구조를 씁니다(Java 21+에서는 가상 스레드, 
 - **AtomicBoolean**: 연결 상태와 닫힘 상태에 사용
 - **volatile**: QueryHandler와 Transport의 가시성에 사용
 - **동기화**: 경쟁 상태를 막기 위해 connect()에 사용
-- **BlockingQueue**: 스레드 안전한 메시지 큐
+- **BlockingQueue**: 스레드 안전한 제한된 메시지 큐. 큐가 가득 차면 메시지를 버리지 않고 생산자를 블로킹합니다(백프레셔)
 - **ConcurrentHashMap**: 스레드 안전한 제어 요청 추적
 
 ### 자원 관리
@@ -850,7 +904,7 @@ HookOutput (class, builder)
 
 1. **가상 스레드**: Java 21+에서 수천 개의 동시 작업 가능
 2. **버퍼링 I/O**: 서브프로세스 통신의 시스템 호출을 줄임
-3. **메시지 큐**: 메모리와 처리량의 균형을 위해 크기 설정 가능
+3. **메시지 큐**: 메모리와 처리량의 균형을 위해 크기 설정 가능. 큐가 가득 차면 메시지를 잃지 않고 CLI의 속도를 늦춥니다
 4. **지연 초기화**: QueryHandler는 필요할 때만 생성
 5. **자원 재사용**: 여러 작업에 걸쳐 ExecutorService 재사용
 6. **다이렉트 메모리**: Jackson이 효율적인 버퍼 처리를 함

@@ -37,9 +37,13 @@ public void connect() throws CLIConnectionException
 
 Establece la conexión con el CLI de Claude Code.
 
-**Seguridad entre hilos**: seguro entre hilos, idempotente
+**Seguridad entre hilos**: seguro entre hilos, idempotente. `connect()`, `disconnect()` y
+`close()` se serializan (desde la 0.2.6): cada uno espera a que termine el que ya se esté ejecutando
+en otro hilo.
 
-**Lanza**: `IllegalStateException` si se llama después de close()
+**Lanza**: `IllegalStateException` si se llama después de close(), o si se llama a `close()` desde
+otro hilo mientras la conexión está en curso (la conexión libera primero todo lo que había
+preparado)
 
 ### connect(String initialMessage)
 
@@ -47,7 +51,13 @@ Establece la conexión con el CLI de Claude Code.
 public void connect(String initialMessage) throws CLIConnectionException
 ```
 
-Conecta y envía un mensaje inicial.
+Conecta y envía un mensaje inicial. Se envía cualquier mensaje no nulo, incluida la cadena vacía
+(desde la 0.2.6, igual que en el SDK de Python); pasa `null`, o llama a `connect()`, para conectar
+sin mensaje.
+
+**Lanza**: `CLIConnectionException` si el CLI no puede arrancar (un ejecutable ausente es la
+subclase `CLINotFoundException`) o si `user(...)` está definido. Una conexión fallida limpia el
+proceso, sus hilos y cualquier `CLAUDE_CONFIG_DIR` temporal antes de relanzar la excepción.
 
 ### isConnected()
 
@@ -68,7 +78,13 @@ public void close()
 
 Cierra la conexión y libera los recursos.
 
-**Seguridad entre hilos**: seguro entre hilos, idempotente
+**Seguridad entre hilos**: seguro entre hilos, idempotente. Se serializa con `connect()`: una
+llamada hecha mientras otro hilo conecta o desconecta espera a que termine.
+
+Desde la 0.2.6 es seguro llamarlo desde dentro de un callback `canUseTool`, de un hook o de una
+herramienta MCP del SDK, y con el indicador de interrupción del hilo que llama activado. El CLI sigue
+recibiendo el EOF de stdin y su periodo de gracia para salir, y el indicador de interrupción se
+conserva. La petición que está atendiendo el callback que llama queda sin respuesta.
 
 ## Enviar mensajes
 
@@ -166,6 +182,10 @@ Obtiene un iterador sobre todos los mensajes (continuo).
 
 **Devuelve**: `Iterator<Message>`
 
+**Lanza** (desde `hasNext()`): `ClaudeSDKException` causada por `InterruptedException` si se
+interrumpe el hilo que espera, con el indicador de interrupción restablecido (desde la 0.2.6; antes,
+una interrupción terminaba el flujo como si se hubiera completado)
+
 ### receiveResponse()
 
 ```java
@@ -177,6 +197,9 @@ Obtiene los mensajes hasta el siguiente ResultMessage (se cierra automáticament
 **Seguridad entre hilos**: seguro entre hilos
 
 **Devuelve**: `Iterable<Message>`
+
+**Lanza**: igual que `receiveMessages()`, `ClaudeSDKException` causada por `InterruptedException`
+si se interrumpe el hilo que espera, con el indicador de interrupción restablecido
 
 ## Métodos de control
 
@@ -297,12 +320,12 @@ public Map<String, Object> getServerInfo()
 Obtiene la información de inicialización del servidor: comandos disponibles, estilos de salida y
 capacidades del servidor.
 
-**Devuelve**: `Map<String, Object>`, la información de la respuesta a `initialize` (`null` solo si el
-CLI no devolvió ninguna)
+**Devuelve**: `Map<String, Object>`, la información de la respuesta a `initialize`. Un mapa vacío
+cuando la respuesta no tiene cuerpo (desde la 0.2.6; antes era `null`)
 
 ## Seguridad entre hilos
 
-- **connect()**: seguro entre hilos, sincronizado
+- **connect()**: seguro entre hilos, serializado con `disconnect()` y `close()`
 - **métodos de envío**: seguros entre hilos
 - **métodos de recepción**: seguros entre hilos, pero comparten la cola
 - **métodos de control**: seguros entre hilos

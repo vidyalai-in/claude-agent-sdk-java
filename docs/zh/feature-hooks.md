@@ -83,13 +83,19 @@ record HookContext(
 
 SDK 会等待返回的 future 完成后再答复 CLI。对于同步的工作，返回 `CompletableFuture.completedFuture(...)` 即可。
 
+与 Python SDK 一样，SDK 自身不为这次等待设置任何时间限制。matcher 的 `timeoutSeconds`（默认 60 秒）由 CLI
+强制执行，到期时 CLI 会发送一条 `control_cancel_request`。在 0.2.6 之前，SDK 还会在 60 秒后切断每个回调，
+这会让自身 `timeout` 更长的钩子失败。
+
 如果回调抛出异常、返回的 future 以异常完成、以 `null` 完成，或者返回的是 `null` future，SDK 都会以错误作答。
 没有意见的回调应返回 `HookOutput.empty()`，而不是 `null`。错误是否会让该操作继续执行，取决于 matcher 的
 [失败策略](#失败策略onfailure)。
 
 如果 CLI 放弃了这次钩子调用（它会发送一条 `control_cancel_request`，例如在轮次被中断时），SDK 会取消回调
 返回的 future，中断正在等待它的线程，并且不发送任何答复。阻塞自身线程的回调会收到 `InterruptedException`；
-把工作交给其他线程的回调则可以对被取消的 future 作出响应。
+把工作交给其他线程的回调则可以对被取消的 future 作出响应。关闭客户端时，会以同样的方式立即取消进行中的回调。
+钩子本身也可以关闭客户端（自 0.2.6 起）：CLI 仍会收到 stdin EOF 并获得宽限期，执行关闭的线程不会被中断，
+而该钩子自己的请求不会得到应答。
 
 > **派发顺序：** 当同一事件上注册了多个 matcher 时，CLI 会**并发地**（并行）派发所有匹配的钩子
 > 回调，而不是顺序执行。请把每个钩子设计成彼此独立的 —— 不要依赖某一个先完成再开始另一个
@@ -135,6 +141,7 @@ HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), nu
 | `permissionMode()` | `@Nullable String` | 当前权限模式 |
 | `promptId()` | `@Nullable String` | 正在处理的用户提示词的 UUID。与 OpenTelemetry 事件上的 `prompt.id` 属性一致。在首次用户输入之前为 null |
 | `effort()` | `@Nullable HookEffort` | 当前轮次生效的努力级别，形式为 `HookEffort(String level)`（例如 `"low"`、`"high"`、`"max"`，已计入针对所选模型的降级）。在支持努力级别的模型上、于工具使用上下文中触发的钩子会带有该字段 |
+| `raw()` | `Map<String, Object>` | CLI 发送的原样输入，包含每一个键，也包括 record 未建模的键。不可修改；对于用构造函数构建的输入为空（自 0.2.6 起） |
 
 事件专属字段：
 
@@ -148,12 +155,31 @@ HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), nu
 | `StopHookInput` | `stopHookActive`、`lastAssistantMessage`、`backgroundTasks`、`sessionCrons` |
 | `SubagentStartHookInput` | `agentId`、`agentType` |
 | `SubagentStopHookInput` | `stopHookActive`、`agentId`、`agentTranscriptPath`、`agentType`、`lastAssistantMessage`、`backgroundTasks`、`sessionCrons` |
-| `PreCompactHookInput` | `trigger`（`CompactTriggerType`）、`customInstructions` |
+| `PreCompactHookInput` | `trigger`（`CompactTriggerType`，对于当前 SDK 不认识的值为 `null`）、`customInstructions` |
 | `NotificationHookInput` | `message`、`title`、`notificationType` |
 
 CLI 可能省略的字段在缺失时为 `null`：`permissionMode`、`promptId`、`effort`、工具输入上的
 `agentId`/`agentType`、`isInterrupt`、`durationMs`、`lastAssistantMessage`、`backgroundTasks`、
-`sessionCrons`、`permissionSuggestions`、`title` 和 `customInstructions`。
+`sessionCrons`、`permissionSuggestions`、`title` 和 `customInstructions`。当 CLI 发送了当前 SDK 版本不认识的
+trigger 时，`PreCompactHookInput.trigger()` 同样为 `null`；在 0.2.6 之前，这样的值会使钩子失败。
+
+### 读取比 SDK 更新的字段
+
+`raw()` 把 CLI 发送的原样输入交给每个钩子，就像 Python SDK 把原始 dict 交给它的钩子一样。对于较新的 CLI
+发送、而类型化 record 尚未建模的键，或者 `null` 枚举背后的线上值，都可以使用它：
+
+```java
+HookMatcher.HookCallback onCompact = (input, context) -> {
+    if (input instanceof PreCompactHookInput compact && compact.trigger() == null) {
+        System.out.println("Unknown compact trigger: " + compact.raw().get("trigger"));
+    }
+    Object extra = input.raw().get("some_new_field");  // null when absent
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+```
+
+每个钩子输入 record 都在 0.2.6 中新增了末尾的 `raw` 组件。之前的每个构造函数都得以保留，并让 `raw()` 为空，
+但 record 解构模式（JDK 21+）必须加上这个新组件。
 
 ### 子 agent 上下文
 
@@ -225,7 +251,19 @@ HookOutput.builder()
     .build();
 ```
 
-只有你设置过的字段才会被发送。设置了 `async` 时，只发送 `async` 和 `asyncTimeout`。
+只有你设置过的字段才会被发送。设置了 `async` 时，只发送 `async` 和 `asyncTimeout`（以及下文所述的任何额外字段）。
+
+对于类型化 builder 未建模的顶层键（例如比当前 SDK 更新的键），请使用 `extraField(key, value)` 或
+`extraFields(map)`（自 0.2.6 起）。值按原样发送，`null` 以 JSON `null` 发送；若同时设置了同名的类型化字段，
+则类型化字段优先于额外字段：
+
+```java
+HookOutput.builder()
+    .systemMessage("Checked")
+    .extraField("someNewKey", true)
+    .extraFields(Map.of("anotherKey", "value"))
+    .build();
+```
 
 ## 钩子专属输出
 

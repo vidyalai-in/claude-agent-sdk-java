@@ -9,7 +9,7 @@
 ```
 ClaudeSDKException (RuntimeException)
 ├── CLIConnectionException
-├── CLINotFoundException
+│   └── CLINotFoundException
 ├── ProcessException
 │   └── ResultException
 ├── CLIJSONDecodeException
@@ -28,6 +28,10 @@ public class ClaudeSDKException extends RuntimeException {
 }
 ```
 
+当阻塞在 `hasNext()` 中的线程被中断时，`ClaudeSDKClient.receiveMessages()` 和 `receiveResponse()`
+的消息迭代器会直接抛出它（cause 为 `InterruptedException`），并恢复中断标志。自 0.2.6 起；此前中断会
+像流已完成一样结束流。
+
 ## CLIConnectionException
 
 连接 Claude Code CLI 失败。
@@ -40,8 +44,11 @@ public class CLIConnectionException extends ClaudeSDKException {
 ```
 
 **原因**：
-- 找不到 CLI
-- 进程启动失败
+- 找不到 CLI（以子类 `CLINotFoundException` 的形式）
+- 进程因可执行文件缺失以外的任何原因启动失败，例如 `EACCES`（不可执行）或 `ENOEXEC`（不是有效的二进制文件）：`"Failed to start Claude Code: ..."`，以派生时的 `IOException` 作为 cause。在 0.2.6 之前，这些情况会被报告为 `CLINotFoundException`
+- 工作目录 `cwd` 不存在
+- 设置了 `user(...)`：Java SDK 无法以另一个操作系统用户的身份运行 CLI（参见 [user()](./feature-configuration-options.md#user)）
+- 无法序列化的 `mcpServers` map 或 `outputFormat` JSON schema（`"Failed to serialize ..."`）；在 0.2.6 之前，该标志会被丢弃并给出警告
 - 连接超时
 - 网络问题（远程传输）
 - 为与 `sandbox` 合并而加载的 `settings` 无法加载（`"Failed to load settings: ..."`）：文件不存在或无法读取、JSON 无效，或 JSON 不是对象。参见 [settings()](./feature-configuration-options.md#settings)
@@ -52,12 +59,22 @@ public class CLIConnectionException extends ClaudeSDKException {
 找不到 Claude Code CLI 可执行文件。
 
 ```java
-public class CLINotFoundException extends ClaudeSDKException {
+public class CLINotFoundException extends CLIConnectionException {
+    public CLINotFoundException();                                         // default install hint
     public CLINotFoundException(String message);
+    public CLINotFoundException(String message, String cliPath);
+    public CLINotFoundException(String message, String cliPath, Throwable cause);
+
+    @Nullable public String getCliPath();   // the path that was searched
 }
 ```
 
-如果找不到 CLI，会在构建传输时（派生任何进程之前）抛出。在 Windows 上只会找到位于绝对路径 `PATH` 条目中的
+它是 `CLIConnectionException` 的子类，因此同时处理两者时请先捕获它。
+
+如果找不到 CLI，会在构建传输时（派生任何进程之前）抛出；当派生因可执行文件不存在而失败时
+（`ENOENT`；派生时的异常作为 cause），也会由 `connect()` 抛出。自 0.2.6 起它只表示这一种情况：
+CLI 存在但无法运行时，改为抛出普通的 `CLIConnectionException`，因此权限问题不会再被报告为
+“未安装”。在 Windows 上只会找到位于绝对路径 `PATH` 条目中的
 原生 `claude.exe`，或 `~/.local/bin/claude.exe`；npm 的 `claude.cmd` 垫片只有在设置了
 `allowUnsafeWindowsBatchCli(true)` 时才会被找到，异常消息中也会说明这一点。
 
@@ -142,14 +159,18 @@ result 文本、非 `success` 的 `subtype`，最后是 `"API error (HTTP <statu
 
 ```java
 public class CLIJSONDecodeException extends ClaudeSDKException {
-    public CLIJSONDecodeException(String message, Throwable cause);
+    public CLIJSONDecodeException(String line, Throwable cause);
+
+    public String getLine();   // the raw line that failed to parse
 }
 ```
 
 **原因**：
-- JSON 格式错误
-- 格式不符合预期
+- stdout 中某个以 `{` 开头的完整行无法解析，或在 JSON 对象之后还有内容（`{"a":1} junk`）。自 0.2.6 起，这会以本异常结束消息流（进行收集的 `ClaudeSDK.query(...)` 会把它包装进 `QueryFailedException`）；此前，一行这样的数据会悄无声息地吞掉其后的每一条消息。不以 `{` 开头的行会被跳过，不会报告
+- stdout 中某行超过 `maxBufferSize`
 - CLI 版本不匹配
+
+参见[传输层 → 行分帧与背压](./feature-transport-layer.md#行分帧与背压026)。
 
 ## MessageParseException
 
@@ -162,13 +183,16 @@ public class MessageParseException extends ClaudeSDKException {
 ```
 
 **原因**：
-- 未知的消息类型
+- 消息缺少 `type` 字段
 - 缺少必需字段
-- 类型转换错误
+- 已知消息类型的结构无效（例如 `assistant` 的 content 不是列表）
+
+未知的消息类型会被跳过，不会报告。自 0.2.6 起，显式的 `null` 或类型错误的*可选*字段也不再引发
+本异常；参见[消息类型](./feature-message-types.md)。
 
 ## QueryFailedException
 
-一次进行收集的查询以错误结果结束。它携带着此前已经到达的消息。
+一次进行收集的查询以错误结果结束，或其线程被中断。它携带着此前已经到达的消息。
 
 ```java
 public class QueryFailedException extends ClaudeSDKException {
@@ -183,6 +207,9 @@ public class QueryFailedException extends ClaudeSDKException {
 - `error_max_turns` —— 达到 `maxTurns`
 - `error_max_budget_usd` —— 达到 `maxBudgetUsd`
 - `error_during_execution` —— 包括被 `resumeDropsTurn` 拒绝的恢复
+- 调用线程在等待消息时被中断（自 0.2.6 起）。cause 是一个由 `InterruptedException` 引起的
+  `ClaudeSDKException`，`resultMessage()` 通常为 `null`，中断标志会被恢复。在抛出异常之前，CLI
+  仍会被优雅地关闭。
 
 **它为什么存在**：CLI 报告这些情况的方式，是发出一个*完整*的轮次 —— 助手消息，加上携带 subtype、
 费用与用量的最终 `ResultMessage` —— 然后才有意以非零状态码退出，这是为了照顾 shell 使用者。流式

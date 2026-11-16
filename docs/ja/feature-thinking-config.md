@@ -80,10 +80,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```
 
 **引数**：
-- `budgetTokens`（int）—— 思考トークンの上限（正の値である必要があります）
+- `budgetTokens`（int）—— 思考トークンの上限（0 以上）。0.2.6 以降、Python SDK と同様に `0` も受け付け、`--max-thinking-tokens 0` として送ります
 - `display`（省略可能、`null` でも可）—— 下の[思考の表示](#思考の表示)を参照
 
-**送出**：`budgetTokens ≤ 0` の場合は `IllegalArgumentException`
+**送出**：`budgetTokens < 0` の場合は `IllegalArgumentException`
 
 **向いている用途**：
 - 予算を意識するアプリケーション
@@ -446,10 +446,10 @@ public record ThinkingConfigEnabled(
 ```
 
 **引数**：
-- `budgetTokens` —— 思考トークンの上限（> 0 である必要があります）
+- `budgetTokens` —— 思考トークンの上限（0 以上）
 - `display`（省略可能、`null` でも可）—— 下の `ThinkingDisplay` を参照
 
-**送出**：`budgetTokens ≤ 0` の場合は `IllegalArgumentException`
+**送出**：`budgetTokens < 0` の場合は `IllegalArgumentException`
 
 CLI フラグ：`--max-thinking-tokens <budgetTokens>`（常に）、`--thinking-display <value>`
 （`display != null` のとき）。

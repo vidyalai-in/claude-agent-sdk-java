@@ -47,7 +47,7 @@ record SDKSessionInfo(
     String sessionId,              // UUID identifying the session
     String summary,                // display title (custom title, AI title, lastPrompt, summary, or first prompt)
     long lastModified,             // last-modified time in milliseconds since epoch
-    @Nullable Long fileSize,       // session file size in bytes (null for remote storage backends)
+    @Nullable Long fileSize,       // transcript size in bytes (null when read from a store's summary sidecar)
     @Nullable String customTitle,  // user-set custom title or AI-generated title (may be null)
     @Nullable String firstPrompt,  // first meaningful user prompt (may be null)
     @Nullable String gitBranch,    // git branch at end of session (may be null)
@@ -58,7 +58,24 @@ record SDKSessionInfo(
 ```
 
 O campo `summary` é resolvido em ordem de prioridade: título personalizado > título de IA >
-lastPrompt > resumo gerado automaticamente > primeiro prompt.
+lastPrompt > resumo gerado automaticamente > primeiro prompt. Um `customTitle`, `gitBranch` ou `cwd`
+vazio conta como ausente e passa para a próxima fonte, como no SDK Python.
+
+### Como o primeiro prompt é encontrado
+
+`firstPrompt`, o fallback do resumo, o título padrão do fork e a dobra do `SessionSummary` usam
+uma única extração, que segue as regras do SDK Python desde a 0.2.6. Ela lê as entradas de usuário
+do início da transcrição e ignora:
+
+- resultados de ferramenta, entradas `isMeta` e resumos de compactação (`isCompactSummary`);
+- texto gerado automaticamente: `<local-command-stdout>`, `<session-start-hook>`,
+  `<tick>`, `<goal>`, `[Request interrupted by user…]` e texto que seja apenas uma tag
+  `<ide_opened_file>` ou `<ide_selection>`.
+
+Cada bloco de texto de uma mensagem é tentado, em ordem, com as quebras de linha convertidas em
+espaços. Um texto que traz uma tag `<command-name>` também é ignorado, mas o primeiro nome de
+comando visto vira o fallback quando nenhum outro prompt é encontrado. O resultado é cortado em 200
+caracteres mais reticências.
 
 Também há um construtor compatível com versões anteriores, sem `tag` e `createdAt`.
 
@@ -154,7 +171,13 @@ Path projectDir = Path.of("/my/project");
 List<SDKSessionInfo> sessions = ClaudeSDK.listSessions(projectDir);
 ```
 
-Filtra as sessões cujo diretório de trabalho corresponde a `projectDir`.
+Filtra as sessões cujo diretório de trabalho corresponde a `projectDir`. O diretório é canonicalizado antes (caminhos relativos tornados absolutos, links simbólicos resolvidos, normalização Unicode NFC), então um caminho com link simbólico, relativo ou escrito em NFD encontra as mesmas sessões que o caminho real.
+
+Quando `projectDir` está dentro de um repositório git com mais de um worktree, as sessões de todos os worktrees são incluídas, como em `listSessions(projectDir, null, true)`. Antes da 0.2.6, esta sobrecarga lia apenas o próprio `projectDir`. Para manter esse comportamento, passe `false` em `includeWorktrees`:
+
+```java
+List<SDKSessionInfo> thisDirOnly = ClaudeSDK.listSessions(projectDir, null, false);
+```
 
 ### Com limite e worktrees
 
@@ -167,7 +190,9 @@ List<SDKSessionInfo> recent = ClaudeSDK.listSessions(
 ```
 
 `includeWorktrees = true` executa `git worktree list` e inclui as sessões de todos os worktrees do
-repositório.
+repositório. Um diretório de projeto é associado a um worktree pelo nome exato, então `/root/project`
+não pega as sessões de `/root/project-foo`. A correspondência por prefixo só é usada em caminhos
+longos o bastante para que o CLI trunque o nome do diretório e acrescente um hash.
 
 ### Com paginação por offset
 
@@ -215,6 +240,11 @@ SDKSessionInfo info = ClaudeSDK.getSessionInfo(
 
 Devolve `null` se a sessão não for encontrada, for uma sessão lateral, ou não tiver resumo
 extraível.
+
+Com um diretório, a busca tenta primeiro o projeto desse diretório e depois cada um dos seus worktrees
+do git. Uma transcrição ausente ou um stub de 0 bytes conta como "não está aqui", então um stub
+deixado em um worktree não esconde a sessão real em outro. `getSessionMessages`, `renameSession` e
+`tagSession` buscam da mesma forma.
 
 ## Lendo as mensagens de uma sessão
 
@@ -270,10 +300,17 @@ ClaudeSDK.renameSession(
 ```
 
 **Restrições:**
-- `sessionId` precisa ser um UUID válido (hexadecimal minúsculo com hifens).
+- `sessionId` precisa ser um UUID válido (hexadecimal com hifens, em maiúsculas ou minúsculas).
 - `title` não pode ficar vazio depois de remover os espaços das pontas.
 - Lança `FileNotFoundException` se o arquivo JSONL da sessão não for encontrado.
 - Lança `IOException` se a escrita falhar.
+
+**Onde a entrada é gravada.** Com um diretório, o SDK tenta primeiro o projeto desse diretório e
+depois o projeto de cada um dos seus worktrees do git, como fazem `listSessions` e
+`getSessionMessages`. Um arquivo ausente ou um stub de 0 bytes significa "não está aqui, continue
+procurando". O arquivo é aberto em modo append e nunca é criado, então a entrada sempre cai no fim
+atual do arquivo, mesmo enquanto um CLI em execução acrescenta à mesma transcrição. Qualquer outro
+erro de E/S (permissão negada, disco cheio) é lançado em vez de ser tratado como "não encontrado".
 
 Depois de renomear, `listSessions()` devolve o novo título nos campos `summary` e `customTitle` de
 `SDKSessionInfo`.
@@ -307,6 +344,8 @@ ClaudeSDK.tagSession(
   automaticamente.
 - Lança `FileNotFoundException` se o arquivo JSONL da sessão não for encontrado.
 - Lança `IOException` se a escrita falhar.
+- A entrada é gravada da mesma forma que numa renomeação: fallback para os worktrees e depois um
+  append atômico que nunca cria o arquivo.
 
 **Segurança em concorrência:** se a sessão estiver aberta no processo do CLI, o CLI absorve as
 entradas escritas pelo SDK no seu cache no próximo reanexo de metadados. A escrita mais recente
@@ -402,10 +441,16 @@ ForkSessionResult result = ClaudeSDK.forkSession(
 - `sessionId` — o UUID da sessão bifurcada recém-criada
 
 **Restrições:**
-- `sessionId` e o opcional `upToMessageId` precisam ser UUIDs válidos.
+- `sessionId` e o opcional `upToMessageId` precisam ser UUIDs válidos. Um `upToMessageId` vazio
+  equivale a `null`: a transcrição inteira é copiada.
 - Lança `FileNotFoundException` se a sessão de origem não for encontrada.
 - Lança `IllegalArgumentException` se a sessão não tiver mensagens ou se `upToMessageId` não for
   encontrado.
+
+Sem `title`, o fork recebe o nome do título personalizado da origem, depois do título gerado por IA,
+depois do seu [primeiro prompt](#como-o-primeiro-prompt-é-encontrado), com `" (fork)"` acrescentado
+(`"Forked session (fork)"` quando nenhum existe). A nova transcrição é criada de forma exclusiva, e
+com modo `0600` (leitura/escrita apenas para o dono) em sistemas de arquivos com permissões POSIX.
 
 `forkSession()` produz uma cópia offline sem executar o CLI. Para *retomar* de um ponto anterior e
 continuar conversando, use a retomada com truncamento.
@@ -611,7 +656,7 @@ if (sessions.isEmpty()) {
 
 Por padrão, as sessões ficam em `~/.claude/projects/`. Se a variável de ambiente
 `CLAUDE_CONFIG_DIR` estiver definida, ela substitui esse local. O SDK respeita essa variável
-automaticamente.
+automaticamente e a normaliza em NFC, como faz com os diretórios de projeto.
 
 ### Use limit para evitar conjuntos de resultados enormes
 

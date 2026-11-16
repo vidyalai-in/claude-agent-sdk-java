@@ -155,10 +155,10 @@ client.connect();  // No initial message
 client.connect("Initial prompt");  // With initial message
 ```
 
-**Seguridad entre hilos**: seguro entre hilos e idempotente. Las llamadas concurrentes están protegidas.
+**Seguridad entre hilos**: seguro entre hilos e idempotente. `connect()`, `disconnect()` y `close()` se serializan: cada uno espera a que termine el que ya se esté ejecutando en otro hilo.
 
 **Lanza**:
-- `IllegalStateException` — si se llama después de `close()`
+- `IllegalStateException` — si se llama después de `close()`, o si otro hilo llama a `close()` mientras la conexión está en curso (la conexión libera primero todo lo que había preparado)
 - `CLIConnectionException` — si falla la conexión
 
 ### isConnected()
@@ -187,6 +187,8 @@ try (var client = ClaudeSDK.createClient()) {
 ```
 
 **Seguridad entre hilos**: seguro entre hilos e idempotente. Se puede llamar varias veces sin problema.
+
+También es seguro desde dentro de un callback `canUseTool`, de un hook o de una herramienta MCP del SDK, y desde un hilo con el indicador de interrupción activado: el CLI sigue recibiendo el EOF de stdin y su periodo de gracia, y el indicador se conserva. La petición que atiende el callback que llama queda sin respuesta.
 
 ## Enviar mensajes
 
@@ -269,6 +271,7 @@ while (messages.hasNext()) {
 - El iterador bloquea hasta que haya mensajes disponibles
 - Sigue devolviendo mensajes hasta que termina el flujo
 - Varios iteradores comparten la misma cola (los mensajes se reparten)
+- Interrumpir el hilo bloqueado en `hasNext()` lanza `ClaudeSDKException` (con causa `InterruptedException`) y restablece el indicador de interrupción; nunca se notifica como el final del flujo
 
 ### receiveResponse()
 
@@ -292,6 +295,7 @@ for (Message msg : response) {
 - Bloquea hasta que haya mensajes disponibles
 - Se detiene en el ResultMessage y se cierra automáticamente
 - Devuelve todos los mensajes de una respuesta
+- Una interrupción durante la espera lanza `ClaudeSDKException`, igual que con `receiveMessages()`
 
 ### Procesar mensajes
 
@@ -502,7 +506,7 @@ client.interrupt();
 client.setModel("claude-sonnet-4-5");
 client.setPermissionMode(PermissionMode.ACCEPT_ALL);
 
-// ✅ Safe: connect() is synchronized
+// ✅ Safe: connect(), disconnect() and close() are serialized
 client.connect();  // Only one connection established
 ```
 

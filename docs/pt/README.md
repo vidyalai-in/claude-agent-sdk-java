@@ -432,6 +432,34 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+### Parâmetros tipados
+
+Métodos `@Tool` podem receber parâmetros tipados em vez de um `Map`: o SDK publica um JSON
+Schema correspondente (listas e arrays, enums, `Optional`, records, `UUID`, tipos de `java.time`
+e mais) e converte cada argumento para o tipo do parâmetro. `@ToolParam` adiciona uma descrição,
+dá nome a um parâmetro em código compilado sem `-parameters` ou o torna opcional:
+
+```java
+import in.vidyalai.claude.sdk.mcp.ToolParam;
+
+public class PaintTools {
+
+    public enum Color { WHITE, CREAM, SAGE, NAVY }
+
+    @Tool(name = "paint_walls", description = "Order paint for some walls of a room")
+    public ToolResult paintWalls(
+            @ToolParam(description = "Names of the walls to paint") List<String> walls,
+            @ToolParam(description = "Paint color") Color color,
+            @ToolParam(description = "Coats of paint (default 2)") Optional<Integer> coats) {
+        return ToolResult.text("Ordered paint for " + walls + " in " + color
+                + ", " + coats.orElse(2) + " coats.");
+    }
+}
+```
+
+Veja [docs/feature-mcp-servers.md](../feature-mcp-servers.md#1-typed-parameters-recommended)
+para o mapeamento completo de tipos.
+
 ### Usando SdkMcpTool diretamente
 
 ```java
@@ -519,6 +547,10 @@ trabalhos que não podem fazer polling, como uma leitura bloqueante.
 do MCP que o servidor embutido não atende — recursos, prompts, completions — pode implementar
 a interface por conta própria e registrá-la da mesma forma.
 Veja [docs/feature-mcp-servers.md](../feature-mcp-servers.md#custom-mcp-handlers).
+
+Um mesmo `SdkMcpServer` pode ser compartilhado por vários clientes ao mesmo tempo: cada cliente
+abre sua própria sessão dele (`openSession()`), então suas chamadas, cancelamentos e
+encerramentos nunca se misturam.
 
 ### Vantagens sobre servidores MCP externos
 
@@ -1055,7 +1087,9 @@ precisa ou retornar uma lista ou lançar, então ela lança esta exceção e dev
 coletadas via `partialMessages()` e o acessor de conveniência `resultMessage()`; o
 `getCause()` dela é a `ResultException` descrita acima. Capture-a sempre que definir `maxTurns`
 ou `maxBudgetUsd`: atingir um limite que você mesmo configurou é um desfecho esperado, não uma
-falha.
+falha. Desde a 0.2.6, ela também é lançada, com as mensagens recebidas até então e a flag de
+interrupção restaurada, quando a thread que executa `ClaudeSDK.query(...)` é interrompida; um
+iterador de streaming lança `ClaudeSDKException` nesse caso.
 
 ## Eventos de streaming
 

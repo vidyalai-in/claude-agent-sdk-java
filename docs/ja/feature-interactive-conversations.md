@@ -155,10 +155,10 @@ client.connect();  // No initial message
 client.connect("Initial prompt");  // With initial message
 ```
 
-**スレッド安全性**：スレッドセーフかつ冪等です。並行呼び出しから保護されています。
+**スレッド安全性**：スレッドセーフかつ冪等です。`connect()`、`disconnect()`、`close()` は直列化されます：別のスレッドですでに実行中の呼び出しがあれば、それを待ちます。
 
 **スロー**：
-- `IllegalStateException` — `close()` 後に呼び出した場合
+- `IllegalStateException` — `close()` 後に呼び出した場合、または接続の実行中に別のスレッドが `close()` を呼んだ場合（接続処理はまず自分が用意したものをすべて解放します）
 - `CLIConnectionException` — 接続に失敗した場合
 
 ### isConnected()
@@ -187,6 +187,8 @@ try (var client = ClaudeSDK.createClient()) {
 ```
 
 **スレッド安全性**：スレッドセーフかつ冪等です。複数回呼び出しても安全です。
+
+`canUseTool`、フック、SDK MCP ツールのコールバックの内部からでも、割り込みフラグが立っているスレッドからでも安全です：CLI にはそれでも stdin の EOF と猶予期間が与えられ、フラグは保持されます。呼び出し元のコールバックが処理しているリクエストには応答が返されないままになります。
 
 ## メッセージの送信
 
@@ -269,6 +271,7 @@ while (messages.hasNext()) {
 - イテレーターはメッセージが届くまでブロックする
 - ストリームが終わるまでメッセージを返し続ける
 - 複数のイテレーターは同じキューを共有する（メッセージが分散する）
+- `hasNext()` でブロックしているスレッドに割り込むと、割り込みフラグを復元したうえで `ClaudeSDKException`（原因は `InterruptedException`）が投げられる。ストリームの終端として報告されることはない
 
 ### receiveResponse()
 
@@ -292,6 +295,7 @@ for (Message msg : response) {
 - メッセージが届くまでブロックする
 - ResultMessage で停止し、自動的にクローズする
 - 1 回の応答分のメッセージをすべて返す
+- 待機中に割り込まれると、`receiveMessages()` と同様に `ClaudeSDKException` が投げられる
 
 ### メッセージの処理
 
@@ -502,7 +506,7 @@ client.interrupt();
 client.setModel("claude-sonnet-4-5");
 client.setPermissionMode(PermissionMode.ACCEPT_ALL);
 
-// ✅ Safe: connect() is synchronized
+// ✅ Safe: connect(), disconnect() and close() are serialized
 client.connect();  // Only one connection established
 ```
 

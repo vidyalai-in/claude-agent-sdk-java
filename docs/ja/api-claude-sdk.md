@@ -45,7 +45,7 @@ public static List<Message> query(
 - `IllegalArgumentException` —— canUseTool と permissionPromptToolName の両方が設定されている場合
 - `CLIConnectionException` —— 接続に失敗した場合
 - `ProcessException` —— CLI プロセスが失敗した場合
-- `QueryFailedException` —— 実行がエラー結果で終わった場合（`error_max_turns`、`error_max_budget_usd`、`resumeDropsTurn` に拒否されたレジューム）。その前に収集されたメッセージを保持します —— 下記参照。
+- `QueryFailedException` —— 実行がエラー結果で終わった場合（`error_max_turns`、`error_max_budget_usd`、`resumeDropsTurn` に拒否されたレジューム）、または 0.2.6 以降、メッセージを待っている間に呼び出し元スレッドが割り込まれた場合。その前に収集されたメッセージを保持します —— 下記参照。割り込みの場合、原因は `InterruptedException` を原因とする `ClaudeSDKException` で、CLI はそれでも正常にシャットダウンされ、割り込みフラグは復元されます（0.2.6 より前は、割り込みがあると途中で切れたリストが返されていました）。
 
 ### query(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options)
 
@@ -254,12 +254,14 @@ JSONL ファイルを完全には解析しません —— ファイルごとに
 public static List<SDKSessionInfo> listSessions(Path directory)
 ```
 
-特定のプロジェクトディレクトリのセッションを一覧します。
+特定のプロジェクトディレクトリとその git worktree のセッションを一覧します。
+
+ディレクトリは、プロジェクトディレクトリと照合される前に正規化されます（シンボリックリンクを解決し、NFC 正規化）。2 つ以上の worktree を持つ git リポジトリの中にある場合は、すべての worktree のセッションが含まれます。これは `listSessions(directory, null, true)` と同じです。0.2.6 より前、このオーバーロードはディレクトリ自体だけを読み取っていました。その動作を維持するには、3 引数または 4 引数のオーバーロードに `includeWorktrees = false` を渡してください。
 
 **引数**：
 - `directory` —— 絞り込みに使うプロジェクトの作業ディレクトリ
 
-**戻り値**：`List<SDKSessionInfo>`
+**戻り値**：更新時刻の降順に並んだ `List<SDKSessionInfo>`
 
 ### listSessions(Path directory, Integer limit, boolean includeWorktrees)
 
@@ -489,7 +491,7 @@ public static void renameSession(
 ) throws IOException
 ```
 
-特定のプロジェクトディレクトリに限定してセッションをリネームします。
+特定のプロジェクトディレクトリに限定してセッションをリネームします。セッションがそのディレクトリのプロジェクトにない場合は、次にそのディレクトリの git worktree を試します。エントリはファイルを決して作成しないアトミックな追記で書き込まれるため、実行中の CLI が追記したばかりの行を上書きすることはありません。
 
 **引数**：
 - `sessionId` —— リネームするセッションの UUID
@@ -528,7 +530,7 @@ public static void tagSession(
 ) throws IOException
 ```
 
-特定のプロジェクトディレクトリに限定してセッションにタグを付けます。
+特定のプロジェクトディレクトリに限定してセッションにタグを付けます。`renameSession` と同様に、ディレクトリの git worktree にフォールバックし、アトミックな追記で書き込みます。
 
 **引数**：
 - `sessionId` —— タグを付けるセッションの UUID
@@ -607,9 +609,12 @@ public static ForkSessionResult forkSession(
 **引数**：
 - `sessionId` —— 元となるセッションの UUID
 - `directory` —— プロジェクトディレクトリ（null は全プロジェクトを検索）
-- `upToMessageId` —— このメッセージ UUID でトランスクリプトを切ります（この項目を含む）。null なら
-  すべてコピー
-- `title` —— フォークのカスタムタイトル。null なら元のタイトル + " (fork)" から導出
+- `upToMessageId` —— このメッセージ UUID でトランスクリプトを切ります（この項目を含む）。null または
+  空文字列ならすべてコピー
+- `title` —— フォークのカスタムタイトル。null なら元のセッションのカスタムタイトル、AI タイトル、または
+  最初のプロンプト + " (fork)" から導出
+
+POSIX パーミッションを持つファイルシステムでは、フォークしたトランスクリプトはモード `0600` で作成されます。
 
 ### listSessions(Path directory, Integer limit, int offset, boolean includeWorktrees)
 
@@ -674,6 +679,8 @@ public static @Nullable SDKSessionInfo getSessionInfoFromStore(
 
 ストアから単一セッションのメタデータを読み取ります。不正な UUID、存在しないセッション、サイドチェーンの
 セッション、要約を取り出せないセッションでは `null` を返します。
+
+読み込んだエントリは JSONL にシリアライズされ、ローカルのトランスクリプトとまったく同じようにパースされます：`fileSize` は JSONL のバイトサイズ、`firstPrompt` と `createdAt` はその先頭 64 KB から取得され、`lastModified` は最後のエントリの `timestamp` です。アダプタの `load()` が投げた例外はそのまま伝播し、セッションが存在しないとは報告されません。
 
 ### getSessionMessagesFromStore(SessionStore, String, Path, Integer, int)
 
@@ -755,7 +762,9 @@ public static ForkSessionResult forkSessionViaStore(
 ```
 
 ストアを通じて、セッションを新しい UUID とともに新しいブランチへフォークします。ディスク上のフォークと
-同じ UUID 振り直しの変換を行います —— ストレージ層のコピーだけでは**不十分**です。
+同じ UUID 振り直しの変換を行います —— ストレージ層のコピーだけでは**不十分**です。`title` を指定しない
+場合、フォークのタイトルはディスク上と同様に、元のセッションのカスタムタイトル、AI タイトル、または最初の
+プロンプトにフォールバックします。
 
 **送出**：不正な UUID には `IllegalArgumentException`。元のセッションがストアに見つからない場合は
 `FileNotFoundException`。

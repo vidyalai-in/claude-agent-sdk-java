@@ -431,6 +431,34 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+### 型付きパラメータ
+
+`@Tool` メソッドは `Map` の代わりに型付きのパラメータを受け取れます。SDK は対応する
+JSON Schema（リストと配列、enum、`Optional`、レコード、`UUID`、`java.time` の型など）を公開し、
+各引数をパラメータの型に変換します。`@ToolParam` は説明を付けたり、`-parameters` なしで
+コンパイルしたコードでパラメータに名前を付けたり、パラメータを省略可能にしたりします：
+
+```java
+import in.vidyalai.claude.sdk.mcp.ToolParam;
+
+public class PaintTools {
+
+    public enum Color { WHITE, CREAM, SAGE, NAVY }
+
+    @Tool(name = "paint_walls", description = "Order paint for some walls of a room")
+    public ToolResult paintWalls(
+            @ToolParam(description = "Names of the walls to paint") List<String> walls,
+            @ToolParam(description = "Paint color") Color color,
+            @ToolParam(description = "Coats of paint (default 2)") Optional<Integer> coats) {
+        return ToolResult.text("Ordered paint for " + walls + " in " + color
+                + ", " + coats.orElse(2) + " coats.");
+    }
+}
+```
+
+型の対応表の全体は [docs/feature-mcp-servers.md](../feature-mcp-servers.md#1-typed-parameters-recommended)
+を参照してください。
+
 ### SdkMcpTool を直接使う
 
 ```java
@@ -518,6 +546,10 @@ SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
 提供していない MCP の機能（リソース、プロンプト、補完）が必要なアプリケーションは、この
 インターフェースを自前で実装し、同じ方法で登録できます。
 [docs/feature-mcp-servers.md](../feature-mcp-servers.md#custom-mcp-handlers) を参照してください。
+
+1 つの `SdkMcpServer` は複数のクライアントで同時に共有できます。各クライアントはそのサーバーの
+独自のセッション（`openSession()`）を開くため、呼び出し、キャンセル、シャットダウンが
+混ざることはありません。
 
 ### 外部 MCP サーバーに対する利点
 
@@ -1055,7 +1087,10 @@ subtype とコストを持つ最終的な `ResultMessage` を含む——を発�
 この例外を投げ、収集済みメッセージを `partialMessages()` と便利アクセサ `resultMessage()`
 経由で返します。その `getCause()` は、上で説明した `ResultException` です。`maxTurns` や
 `maxBudgetUsd` を設定したときは必ずこれを捕捉してください。自分で設定した上限に達することは
-クラッシュではなく、想定内の結果です。
+クラッシュではなく、想定内の結果です。0.2.6 以降、`ClaudeSDK.query(...)` を実行している
+スレッドが割り込まれた場合にも、それまでに受信したメッセージを持ち、割り込みフラグを復元した
+うえでこの例外が投げられます。その場合、ストリーミングのイテレータは `ClaudeSDKException` を
+投げます。
 
 ## ストリーミングイベント
 

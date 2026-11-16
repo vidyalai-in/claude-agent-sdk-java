@@ -55,9 +55,14 @@ Transport transport = new SubprocessCLITransport(options);
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display` 只在 `Adaptive` 与 `Enabled` 配置下转发（且仅当 `display != null` 时）；`Disabled` 从不发出它。 |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | 设置了 `display` 时两个标志会一起发出。 |
 | `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | 与普通字符串相同；`snapshot` 则改为随 `initialize` 请求发送。 |
-| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | 每个 `local` 插件一个；其他类型会被跳过。 |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | 每个 `local` 插件一个；其他任何类型都会抛出 `IllegalArgumentException`（0.2.6 之前会被跳过）。 |
+| `thinking(ThinkingConfigEnabled(0))` | `--max-thinking-tokens 0` | 零预算会被接受并发送，与 Python SDK 一致。 |
+| `maxTurns(0)`、`model("")`、`fallbackModel("")`、`permissionPromptToolName("")`、`resume("")`、`sessionId("")`、`settings("")`、`mcpServersJson("")` | *（无）* | 空字符串和 `0` 会被省略，就像 Python 省略假值一样（自 0.2.6 起）。 |
+| `mcpServers(Map)`、`outputFormat(json_schema)` | `--mcp-config`、`--json-schema` | 无法序列化的值会使 `connect()` 以 `CLIConnectionException` 失败，而不是丢弃该标志。 |
 
-**stderr 管道**：只有当 `options.stderrCallback() != null` 时才会为 stderr 建立管道。旧有的
+**stderr 管道**：只有当 `options.stderrCallback() != null` 时才会为 stderr 建立管道。否则 CLI 会
+继承 JVM 的 stderr（自 0.2.6 起，与 Python SDK 的 `stderr=None` 一致）；此前 stderr 会被接入管道却
+从不读取，CLI 写入的 stderr 一旦超过管道缓冲区（约 64 KB），下一次写入就会阻塞。旧有的
 `--debug-to-stderr` 额外参数检测已在 0.1.13 中移除（为该 CLI 标志的废弃做准备）。若要捕获 CLI 的
 详细调试输出，请传入 `extraArgs(Map.of("debug-file", "/path/to/log"))` 并改为读取那个文件。
 
@@ -65,6 +70,21 @@ Transport transport = new SubprocessCLITransport(options);
 `try/catch(Throwable)` 中。抛出异常的回调会被捕获、以 `FINE` 级别记录，读取循环则继续处理下一行。
 此前一次抛出会退出循环，并在会话剩余时间内悄无声息地丢弃之后的每一行 stderr。外层循环的失败
 （流意外关闭、I/O 错误）现在也会以 `FINE` 级别记录，而不再被默默吞掉。
+
+**有时限的 `close()`**（0.2.6）：与 Python SDK 一样，`close()` 的每一步都有时间限制，因此一个保持
+沉默的 CLI，或一次阻塞在已满 stdin 管道上的写入，都不会再让它挂起：
+
+1. 获取写锁以关闭 stdin，最多等待 5 秒。如果仍有写入持有该锁，则在不关闭 stdin 的情况下停止 CLI，
+   并在写入释放锁后，于另一个线程上关闭 stdin。
+2. 在 stdin EOF 之后最多等待 5 秒让 CLI 退出，使其能够刷写会话文件。
+3. 发送 SIGTERM，然后最多等待 5 秒。
+4. 发送 SIGKILL，然后最多等待 5 秒。
+5. 关闭 stderr 与 stdout 的读取执行器（先 2 秒，再强制 1 秒），然后关闭其下方的管道。
+
+中断不会缩短这些等待。`close()` 在执行期间会清除中断标志，并在返回时重新设置它，因此中断标志已被
+设置的调用者，或在此期间被中断的调用者，仍会关闭 stdin 并给予 CLI 宽限期。在 `canUseTool`、钩子或
+SDK MCP 回调内部调用 `disconnect()`/`close()` 时同样如此；该回调正在服务的请求不会得到应答。在 0.2.6
+之前，这样的关闭会在不关闭 stdin 的情况下杀死 CLI。
 
 **孤儿子进程清理**（0.1.18）：每个被派生的 CLI 进程都会登记到静态的 `ACTIVE_CHILDREN` 集合中，
 并由一个 JVM 关闭钩子在进程先于 `close()` 退出时尽力终止仍然存活的进程。`close()` 会逐级升级终止
@@ -82,6 +102,24 @@ Transport transport = new SubprocessCLITransport(options);
 总是把取值绑定到标志上，CLI 随后会把以短横线开头的取值判为无效会话 ID 而拒绝。这发生在 argv 层面
 （每个选项一个参数，**完全不涉及 shell**），因此属于标志注入而非命令执行，并且只影响那些把不可信
 输入转发进这些选项的应用。这与 `buildCommand()` 中别处已经采用的 `--setting-sources=` 风格一致。
+
+### 行分帧与背压（0.2.6）
+
+**Stderr**：stderr 按照 Python SDK 的 `_handle_stderr` 的方式拆分成行：只按 `\n` 拆分，因此单独的 `\r`（进度行）会保留在行内；去掉行尾空白，并跳过空行。超过 `maxBufferSize` 的行会被分段传递，而不是无限制地缓冲；没有换行符的最后一行，或在流失败之前已读到的部分行，仍然会被交付。
+
+**Stdout**：stdout 是 NDJSON，只按 `\n` 拆分。对每一个完整的行：
+
+| 行 | 结果 |
+|---|---|
+| 空行 | 跳过 |
+| 不以 `{` 开头（例如 `[SandboxDebug] …`） | 跳过，以 `FINE` 级别记录 |
+| 一个 JSON 对象 | 交付 |
+| 以 `{` 开头但无法解析，或在对象之后还有内容（`{"a":1} junk`） | `CLIJSONDecodeException` |
+| 超过 `maxBufferSize` | `CLIJSONDecodeException` |
+
+完整的行不可能被后续数据补全，因此损坏的行是错误，而不是需要继续缓冲的内容：该异常会结束消息流，与 Python SDK 一致，消费者的迭代器会重新抛出它。在 0.2.6 之前，一行格式错误的数据会悄无声息地吞掉其后的每一条消息。被流的结束截断的最后一行，若能解析则交付，否则丢弃。当 stdout 正常结束时，非零的 CLI 退出码会以 `ProcessException` 报告。
+
+**背压**：读取线程会等待其队列腾出空间，而不是丢弃消息，因此慢速的消费者会让 CLI 变慢，而不会丢失输出。上一层 `QueryHandler` 的消息队列也是如此（参见[架构 → QueryHandler](./architecture.md#queryhandler)）。该队列的 `maxMsgQSize` 是一个软上限：当一个出站控制请求在等待应答时，`QueryHandler` 会越过上限继续读取，从而让排在已入队消息后面的 `control_response` 仍能到达。
 
 ### Windows：拒绝批处理脚本 CLI（0.1.21）
 
@@ -191,6 +229,9 @@ ClaudeAgentOptions.builder().resume("Refactor the parser (part 2)").build();
 | `Map.of("some-flag", "value")` | `--some-flag`、`value` |
 | `Map.of("some-flag", "--evil")` | `--some-flag=--evil` |
 | `Map.of("verbose-thing", "")` | `--verbose-thing`（裸的布尔标志） |
+| `verbose-thing` → `null`（位于 `HashMap` / `LinkedHashMap` 中） | `--verbose-thing`（裸的布尔标志，自 0.2.6 起） |
+
+条目按 map 的迭代顺序发出（自 0.2.6 起），因此当标志的顺序重要时，请传入 `LinkedHashMap`。
 
 ### Windows：批处理 CLI 选择开关（0.1.22）
 

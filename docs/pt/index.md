@@ -75,13 +75,13 @@ complexas de múltiplos turnos.
 - **[Servidores MCP](./feature-mcp-servers.md)** — criando ferramentas personalizadas com o Model Context Protocol
   - Servidores MCP do SDK (in-process)
   - Servidores MCP externos (stdio/SSE/HTTP)
-  - Uso da anotação @Tool
-  - Criação programática de ferramentas
+  - Uso da anotação @Tool, parâmetros tipados (listas, enums, `Optional`, records, `java.time`) e `@ToolParam`
+  - Criação programática de ferramentas, incluindo o atalho de schema `Map.of("text", String.class)`
   - Schemas de ferramenta e validação de argumentos contra o `inputSchema` da ferramenta
   - Semântica de falhas (resultados `isError` para tudo o que uma chamada de ferramenta encontra)
   - Cancelando uma ferramenta em execução com `ToolCallContext`
   - Detalhes do protocolo (negociação de versão, notificações, métodos)
-  - Handlers MCP personalizados via `McpMessageHandler`
+  - Handlers MCP personalizados via `McpMessageHandler` e uma sessão por cliente (`openSession()`)
   - Padrões de execução assíncrona
   - Exemplos completos (calculadora, banco de dados, integração com API)
 
@@ -89,11 +89,11 @@ complexas de múltiplos turnos.
   - Definições de agente inline
   - Agentes baseados no sistema de arquivos
   - Suporte a agentes grandes (260KB+ via stdin)
-  - API AgentDefinition (com campos de skills, escopo de memória e servidores MCP)
+  - API AgentDefinition (com campos de skills, escopo de memória, servidores MCP e esforço numérico via `withEffort(int)`)
   - Observando a saída de um subagente e `forwardSubagentText`
 
 - **[Histórico de sessões](./feature-session-history.md)** — leia e gerencie sessões antigas de conversa do Claude Code a partir do disco
-  - Listagem de sessões de todos os projetos ou filtradas por diretório
+  - Listagem de sessões de todos os projetos ou filtradas por diretório (incluindo worktrees do git)
   - Consulta de uma sessão específica pelo ID (`getSessionInfo`)
   - Leitura de transcrições completas de conversa
   - Leitura de transcrições de subagentes (`listSubagents`, `getSubagentMessages`),
@@ -138,7 +138,8 @@ complexas de múltiplos turnos.
 - **[Sistema de hooks](./feature-hooks.md)** — interceptando e respondendo a eventos do ciclo de vida
   - 10 eventos de hook
   - HookMatcher, HookCallback e HookOutput
-  - Entradas de hook tipadas, incluindo `promptId`, `effort`, `durationMs` da ferramenta e, no Stop, tarefas em segundo plano e despertares agendados
+  - Entradas de hook tipadas, incluindo `promptId`, `effort`, `durationMs` da ferramenta e, no Stop, tarefas em segundo plano e despertares agendados; `raw()` para campos mais novos que o SDK
+  - `HookOutput.Builder.extraField(...)` para chaves de saída que o builder não modela
   - Todos os 21 tipos de saída específica de hook (por exemplo, o `additionalContext` de um hook Stop mantém o modelo trabalhando)
   - `updatedToolOutput` do PostToolUse (substitui a saída de qualquer ferramenta) e `updatedMCPToolOutput`
   - `PermissionDecision.DEFER` + `DeferredToolUse` em ResultMessage

@@ -32,9 +32,11 @@ public void connect() throws CLIConnectionException
 
 建立与 Claude Code CLI 的连接。
 
-**线程安全性**：线程安全，幂等
+**线程安全性**：线程安全，幂等。`connect()`、`disconnect()` 和 `close()` 是串行执行的
+（自 0.2.6 起）：每个调用都会等待另一个线程上正在运行的同类调用完成。
 
-**抛出**：如果在 close() 之后调用，抛出 `IllegalStateException`
+**抛出**：如果在 close() 之后调用，或在连接进行期间另一个线程调用了 `close()`（连接操作会先
+释放它已建立的一切），抛出 `IllegalStateException`
 
 ### connect(String initialMessage)
 
@@ -42,7 +44,12 @@ public void connect() throws CLIConnectionException
 public void connect(String initialMessage) throws CLIConnectionException
 ```
 
-连接并发送初始消息。
+连接并发送初始消息。任何非 null 的消息都会被发送，包括空字符串（自 0.2.6 起，与 Python SDK
+一致）；传入 `null` 或调用 `connect()` 可在不发送消息的情况下连接。
+
+**抛出**：如果 CLI 无法启动（可执行文件缺失时为其子类 `CLINotFoundException`），或设置了
+`user(...)`，抛出 `CLIConnectionException`。连接失败时，会先清理进程、其线程以及任何临时的
+`CLAUDE_CONFIG_DIR`，然后再重新抛出。
 
 ### isConnected()
 
@@ -63,7 +70,12 @@ public void close()
 
 关闭连接并清理资源。
 
-**线程安全性**：线程安全，幂等
+**线程安全性**：线程安全，幂等。与 `connect()` 串行执行：在另一个线程连接或断开期间发起的调用
+会等待其完成。
+
+自 0.2.6 起，可以在 `canUseTool`、钩子或 SDK MCP 工具回调内部安全调用，也可以在调用线程的中断
+标志已设置时调用。CLI 仍会收到 stdin EOF 并获得退出的宽限期，中断标志也会被保留。正在发起调用的
+那个回调所服务的请求不会得到应答。
 
 ## 发送消息
 
@@ -153,6 +165,9 @@ public Iterator<Message> receiveMessages()
 
 **返回**：`Iterator<Message>`
 
+**抛出**（来自 `hasNext()`）：如果等待中的线程被中断，抛出由 `InterruptedException` 引起的
+`ClaudeSDKException`，并恢复中断标志（自 0.2.6 起；此前中断会像流已完成一样结束流）
+
 ### receiveResponse()
 
 ```java
@@ -164,6 +179,9 @@ public Iterable<Message> receiveResponse()
 **线程安全性**：线程安全
 
 **返回**：`Iterable<Message>`
+
+**抛出**：与 `receiveMessages()` 相同，如果等待中的线程被中断，抛出由 `InterruptedException`
+引起的 `ClaudeSDKException`，并恢复中断标志
 
 ## 控制方法
 
@@ -276,11 +294,12 @@ public Map<String, Object> getServerInfo()
 
 获取服务端初始化信息：可用命令、输出样式以及服务端能力。
 
-**返回**：`Map<String, Object>` —— 来自 `initialize` 响应的信息（仅当 CLI 未返回任何信息时为 `null`）
+**返回**：`Map<String, Object>` —— 来自 `initialize` 响应的信息。响应没有正文时为空 map
+（自 0.2.6 起；以前为 `null`）
 
 ## 线程安全
 
-- **connect()**：线程安全，已同步
+- **connect()**：线程安全，与 `disconnect()` 和 `close()` 串行执行
 - **发送类方法**：线程安全
 - **接收类方法**：线程安全，但共享同一个队列
 - **控制类方法**：线程安全

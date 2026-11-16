@@ -72,13 +72,13 @@ Claude Agent SDK for Java 是一个将 Claude AI 能力集成到 Java 应用中�
 - **[MCP 服务器](./feature-mcp-servers.md)** —— 使用 Model Context Protocol 创建自定义工具
   - SDK MCP 服务器（进程内）
   - 外部 MCP 服务器（stdio/SSE/HTTP）
-  - @Tool 注解用法
-  - 以编程方式创建工具
+  - @Tool 注解用法、类型化参数（列表、枚举、`Optional`、record、`java.time`）与 `@ToolParam`
+  - 以编程方式创建工具，包括 `Map.of("text", String.class)` schema 简写
   - 工具 schema，以及针对工具 `inputSchema` 的参数校验
   - 失败语义（工具调用遇到的一切情况都以 `isError` 结果返回）
   - 使用 `ToolCallContext` 取消正在运行的工具
   - 协议细节（版本协商、通知、方法）
-  - 通过 `McpMessageHandler` 实现自定义 MCP 处理器
+  - 通过 `McpMessageHandler` 实现自定义 MCP 处理器，以及每个客户端一个会话（`openSession()`）
   - 异步执行模式
   - 完整示例（计算器、数据库、API 集成）
 
@@ -86,11 +86,11 @@ Claude Agent SDK for Java 是一个将 Claude AI 能力集成到 Java 应用中�
   - 内联 agent 定义
   - 基于文件系统的 agent
   - 大型 agent 支持（通过 stdin 传递 260KB+）
-  - AgentDefinition API（含 skills、内存作用域与 MCP 服务器字段）
+  - AgentDefinition API（含 skills、内存作用域、MCP 服务器字段，以及通过 `withEffort(int)` 设置的数值 effort）
   - 观察子 agent 的输出，以及 `forwardSubagentText`
 
 - **[会话历史](./feature-session-history.md)** —— 从磁盘读取并管理历史 Claude Code 会话
-  - 列出所有项目的会话，或按目录筛选
+  - 列出所有项目的会话，或按目录筛选（包括 git worktree）
   - 按 ID 查找单个会话（`getSessionInfo`）
   - 读取完整的会话记录
   - 读取子 agent 记录（`listSubagents`、`getSubagentMessages`），
@@ -135,7 +135,8 @@ Claude Agent SDK for Java 是一个将 Claude AI 能力集成到 Java 应用中�
 - **[钩子系统](./feature-hooks.md)** —— 拦截并响应生命周期事件
   - 10 个钩子事件
   - HookMatcher、HookCallback 与 HookOutput
-  - 类型化的钩子输入，包括 `promptId`、`effort`、工具的 `durationMs`，以及 Stop 时的后台任务和定时唤醒
+  - 类型化的钩子输入，包括 `promptId`、`effort`、工具的 `durationMs`，以及 Stop 时的后台任务和定时唤醒；`raw()` 用于读取比 SDK 更新的字段
+  - `HookOutput.Builder.extraField(...)` 用于设置 builder 未建模的输出键
   - 全部 21 种钩子专属输出类型（例如 Stop 钩子的 `additionalContext` 会让模型继续工作）
   - PostToolUse 的 `updatedToolOutput`（替换任意工具的输出）与 `updatedMCPToolOutput`
   - `PermissionDecision.DEFER` 与 ResultMessage 上的 `DeferredToolUse`

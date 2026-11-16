@@ -61,22 +61,22 @@ options.toBuilder()
 - `forkSession(boolean)` —— 分叉所恢复的会话
 - `resumeSessionAt(String)` —— 截断式恢复：所恢复的会话只加载到该会话记录条目 UUID（含）为止，从更早的时点分叉。需与 `resume` 配合使用，通常还要配合 `forkSession`。接受任意会话记录条目 UUID —— 通常是实时观察到的 `AssistantMessage.uuid()`，或来自 `ClaudeSDK.getSessionMessages(...)` 的 `SessionMessage.uuid()`。以 `--resume-session-at=<value>` 形式传出。参见[截断式恢复](./feature-session-history.md#截断式恢复)。
 - `resumeDropsTurn(String)` —— 与 `resumeSessionAt` 一起使用：本次截断打算丢弃的那一轮用户提示词的 UUID。CLI 随后会在加载时校验分叉点之后的*每一个*条目都属于该轮次，否则拒绝 —— 这样一来，会话在轮次中途吸收的排队用户消息或任务通知就绝不会被悄悄丢掉。被拒绝时会抛出异常，其消息中含有 `Resume rejected by --resume-drops-turn:`；应把它视为确定性的结果，直接改为普通恢复，而不是重试。只要非 null 就会转发，因此空字符串也会抵达 CLI，并在那里作为格式错误被拒绝，而不是悄悄使该保护失效。以 `--resume-drops-turn=<value>` 形式传出。
-- `sessionStore(SessionStore)` —— 将会话记录镜像到外部存储，并可从中恢复（参见 [Session Store](./feature-session-store.md)）。设置后，SDK 会向 CLI 传递 `--session-mirror`，并把 `transcript_mirror` 帧路由到 `store.appendAsync(...)`。预检校验会拒绝在不支持 `listSessions()` 的情况下使用 `continueConversation + sessionStore`，以及 `sessionStore + enableFileCheckpointing`。
+- `sessionStore(SessionStore)` —— 将会话记录镜像到外部存储，并可从中恢复（参见 [Session Store](./feature-session-store.md)）。设置后，SDK 会向 CLI 传递 `--session-mirror`，并把 `transcript_mirror` 帧路由到 `store.appendAsync(...)`。预检校验会拒绝在不支持 `listSessions()` 的情况下使用 `continueConversation + sessionStore`，以及 `sessionStore + enableFileCheckpointing`。慢速存储会在每个 `ResultMessage` 之前的刷新期间阻住读取线程（控制调用也随之等待），`close()` 会等待最后一次刷新，二者默认各最多等待 181 秒。
 - `sessionStoreFlush(SessionStoreFlushMode)` —— 会话记录镜像条目何时刷写到 `sessionStore`。`BATCHED`（默认）会合并条目，并在每轮结束时、或缓冲区超过 500 条 / 1 MiB 时刷写一次；`EAGER` 会在每一帧之后调度一次后台刷写，以实现接近实时的投递。未设置 `sessionStore` 时该项被忽略。参见[刷写模式](./feature-session-store.md#刷写模式batched-与-eager)。
 - `loadTimeoutMs(long)` —— 在恢复物化期间，`store.loadAsync()` / `listSubkeysAsync()` 每次调用的超时（毫秒，默认 `60_000`）。取值 `0` 表示立即超时；取很大的值相当于禁用超时。
 
 ### 限制
-- `maxTurns(Integer)` —— 最大会话轮数
+- `maxTurns(Integer)` —— 最大会话轮数；`0` 视为未设置，不发送 `--max-turns`
 - `maxBudgetUsd(Double)` —— 最大花费（美元）
 - `maxBufferSize(Integer)` —— stdout 缓冲区最大字节数
 - `thinking(ThinkingConfig)` —— 扩展思考配置
 - `effort(String)` —— 思考深度级别（`"low"`、`"medium"`、`"high"`、`"xhigh"`、`"max"`）。`"xhigh"` 是 Opus 4.7 专有的，在其他模型上会回退为 `"high"`。
 - `effort(EffortLevel)` —— 同上，但使用 [`EffortLevel`](feature-configuration-options.md#effortlevel-枚举) 枚举（`LOW`、`MEDIUM`、`HIGH`、`XHIGH`、`MAX`）以获得类型安全。传入 `null` 可清除。
 - `maxThinkingTokens(Integer)` —— **已废弃**，请改用 `thinking()`。在较新的模型上，该值只被视为开/关（0 = 禁用，其他任何值 = 自适应）
-- `maxMsgQSize(Integer)` —— 消息队列最大长度
+- `maxMsgQSize(Integer)` —— 消息队列最大长度（默认 1000，至少为 1）。队列满时，读取线程会暂停，直到你消费一条消息（背压）；不会丢弃任何消息。这是一个软上限：当一个出站控制请求（`interrupt()`、`setModel()` 等）在等待应答时，读取线程会越过上限继续读取，以便应答能够到达
 
 ### 模型
-- `model(String)` —— AI 模型名称
+- `model(String)` —— AI 模型名称；空字符串不发送 `--model`（`fallbackModel`、`permissionPromptToolName`、`resume`、`sessionId` 和 `settings` 同理）
 - `fallbackModel(String)` —— 回退模型
 - `betas(List<SdkBeta>)` —— Beta 功能
 
@@ -88,17 +88,17 @@ options.toBuilder()
 - `addDirs(List<Path>)` —— 额外的上下文目录
 - `env(Map<String, String>)` —— 环境变量，合并到继承的环境之上。SDK 还会设置 `CLAUDE_CODE_ENTRYPOINT`（可覆盖）、`CLAUDE_AGENT_SDK_VERSION`，以及 `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`（除非已经出现该变量），并去掉继承来的 `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP`；参见 [env()](./feature-configuration-options.md#env)
 - `clientApp(String)` —— 你的应用／库标识符（例如 `"my-app/1.0.0"`），以 `CLAUDE_AGENT_SDK_CLIENT_APP` 的形式随 API 请求发送；优先于 `env` 和继承来的值，`""` 表示不发送。参见 [clientApp()](./feature-configuration-options.md#clientapp)
-- `extraArgs(Map<String, String>)` —— 额外的 CLI 标志；键不带前导 `--`，值为空白时表示不带值的标志
+- `extraArgs(Map<String, ? extends @Nullable String>)` —— 额外的 CLI 标志；键不带前导 `--`，值为 `null` 或空白时表示不带值的标志。按 map 的迭代顺序传递（顺序重要时请使用 `LinkedHashMap`）；参见 [extraArgs()](./feature-configuration-options.md#extraargs)
 
 ### 回调
-- `stderrCallback(Consumer<String>)` —— stderr 回调
+- `stderrCallback(Consumer<String>)` —— 每读到一行 CLI stderr 调用一次（按 `\n` 拆分，去掉行尾空白，跳过空行）。未设置时，CLI 继承 JVM 的 stderr；参见 [stderrCallback()](./feature-configuration-options.md#stderrcallback)
 
 ### 钩子
 - `hooks(Map<HookEvent, List<HookMatcher>>)` —— 钩子回调。`HookMatcher` 可以设置 `timeoutSeconds` 和 `onFailure` 策略（`HookOnFailure.CONTINUE` 或 `BLOCK`）；参见[钩子 → 失败策略](./feature-hooks.md#失败策略onfailure)
 - `includeHookEvents(boolean)` —— 为 `true` 时，CLI 会把钩子的生命周期事件（`PreToolUse`、`PostToolUse`、`Stop` 等）作为 `HookEventMessage` 对象推送到消息流中。`SessionStart` 和 `Setup` 钩子事件无论如何都会发出。对应 `--include-hook-events`。参见[钩子 → 消息流上的钩子生命周期事件](./feature-hooks.md#消息流上的钩子生命周期事件)。
 
 ### 高级
-- `user(String)` —— 用户身份
+- `user(String)` —— **已弃用，不受支持。** 设置后 `connect()` 会抛出 `CLIConnectionException`，因为 Java 无法以另一个操作系统用户的身份运行 CLI；参见 [user()](./feature-configuration-options.md#user)
 - `includePartialMessages(boolean)` —— 每个 API 流事件输出一条 `StreamEvent`（`--include-partial-messages`）
 - `verbatimPrompts(boolean)` —— 把 SDK 发送的每条用户消息都标记为 `client_composed`，让 Claude Code 原样投递：不做 `@path` 展开，也不分派斜杠命令。开启期间会覆盖单条消息上的取值。需要 Claude Code 2.1.248+（在更旧的 CLI 上 SDK 会发出警告）。参见 [verbatimPrompts()](./feature-configuration-options.md#verbatimprompts)
 - `forwardSubagentText(boolean)` —— 为 `true` 时，子 agent 的文本块与思考块会与始终转发的 `tool_use` / `tool_result` 块一起被转发到消息流中。通过 `initialize` 控制请求发送（没有对应的 CLI 标志）。参见 [Agent → 观察子 agent 的输出](./feature-agents.md#观察子-agent-的输出)。
@@ -107,7 +107,7 @@ options.toBuilder()
 - `skills(List<String>)` —— Skills 白名单（会自动向 `allowedTools` 注入 `Skill(name)`，并把 `settingSources` 默认设为 user/project）。名称必须完全精确 —— 通配符、规则分隔符以及首尾空白都会在 `connect()` 时抛出 `IllegalArgumentException`
 - `skillsAll()` —— 启用所有被发现的 skill（自动注入裸的 `Skill` 工具）
 - `sandbox(SandboxSettings)` —— bash 命令的沙箱配置；其中的 `network` 键配置沙箱自身的网络隔离（工具层面的限制仍放在权限规则中）
-- `plugins(List<SdkPluginConfig>)` —— 本地插件目录，`SdkPluginConfig.local(path)` → `--plugin-dir`
+- `plugins(List<SdkPluginConfig>)` —— 本地插件目录，`SdkPluginConfig.local(path)` → `--plugin-dir`；其他任何类型都会在 `connect()` 时抛出 `IllegalArgumentException`
 - `outputFormat(Map<String, Object>)` —— 输出格式
 - `enableFileCheckpointing(boolean)` —— 为 `rewindFiles()` 启用文件检查点；不能与 `sessionStore` 同时使用
 

@@ -45,7 +45,7 @@ public static List<Message> query(
 - `IllegalArgumentException` — canUseTool과 permissionPromptToolName이 둘 다 설정된 경우
 - `CLIConnectionException` — 연결 실패
 - `ProcessException` — CLI 프로세스 실패
-- `QueryFailedException` — 실행이 오류 결과로 끝난 경우(`error_max_turns`, `error_max_budget_usd`, `resumeDropsTurn`으로 거부된 재개). 그 전에 모은 메시지를 담고 있습니다 — 아래를 보세요.
+- `QueryFailedException` — 실행이 오류 결과로 끝난 경우(`error_max_turns`, `error_max_budget_usd`, `resumeDropsTurn`으로 거부된 재개), 또는 0.2.6부터는 메시지를 기다리는 동안 호출 스레드가 인터럽트된 경우. 그 전에 모은 메시지를 담고 있습니다 — 아래를 보세요. 인터럽트의 경우 원인은 `InterruptedException`으로 인한 `ClaudeSDKException`이며, CLI는 여전히 정상적으로 종료되고 인터럽트 플래그는 복원됩니다(0.2.6 이전에는 인터럽트되면 잘린 목록을 반환했습니다).
 
 ### query(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options)
 
@@ -249,12 +249,14 @@ public static List<SDKSessionInfo> listSessions()
 public static List<SDKSessionInfo> listSessions(Path directory)
 ```
 
-특정 프로젝트 디렉터리의 세션을 나열합니다.
+특정 프로젝트 디렉터리와 그 git worktree의 세션을 나열합니다.
+
+디렉터리는 프로젝트 디렉터리와 비교하기 전에 정규화됩니다(심볼릭 링크 해석, NFC 정규화). 디렉터리가 worktree가 둘 이상인 git 저장소 안에 있으면 모든 worktree의 세션이 포함되며, `listSessions(directory, null, true)`와 같습니다. 0.2.6 이전에는 이 오버로드가 디렉터리 자체만 읽었습니다. 그 동작을 유지하려면 인자 3개 또는 4개짜리 오버로드에 `includeWorktrees = false`를 넘기세요.
 
 **매개변수**:
 - `directory` — 걸러낼 기준이 되는 프로젝트 작업 디렉터리
 
-**반환**: `List<SDKSessionInfo>`
+**반환**: 마지막 수정 시각 내림차순으로 정렬된 `List<SDKSessionInfo>`
 
 ### listSessions(Path directory, Integer limit, boolean includeWorktrees)
 
@@ -480,7 +482,7 @@ public static void renameSession(
 ) throws IOException
 ```
 
-특정 프로젝트 디렉터리로 한정해 세션 이름을 바꿉니다.
+특정 프로젝트 디렉터리로 한정해 세션 이름을 바꿉니다. 세션이 그 디렉터리의 프로젝트에 없으면 이어서 디렉터리의 git worktree를 시도합니다. 항목은 파일을 새로 만들지 않는 원자적 추가로 기록되므로, 실행 중인 CLI가 방금 덧붙인 줄을 덮어쓸 수 없습니다.
 
 **매개변수**:
 - `sessionId` — 이름을 바꿀 세션의 UUID
@@ -518,7 +520,7 @@ public static void tagSession(
 ) throws IOException
 ```
 
-특정 프로젝트 디렉터리로 한정해 세션에 태그를 답니다.
+특정 프로젝트 디렉터리로 한정해 세션에 태그를 답니다. `renameSession`과 마찬가지로 디렉터리의 git worktree로 대체 탐색하고, 원자적 추가로 기록합니다.
 
 **매개변수**:
 - `sessionId` — 태그를 달 세션의 UUID
@@ -597,8 +599,10 @@ public static ForkSessionResult forkSession(
 **매개변수**:
 - `sessionId` — 원본 세션의 UUID
 - `directory` — 프로젝트 디렉터리(null이면 모든 프로젝트 검색)
-- `upToMessageId` — 이 메시지 UUID에서 트랜스크립트를 자릅니다(해당 항목 포함). null이면 전부 복사
-- `title` — 포크의 사용자 지정 제목. null이면 원래 제목에 " (fork)"를 붙여 만듭니다
+- `upToMessageId` — 이 메시지 UUID에서 트랜스크립트를 자릅니다(해당 항목 포함). null이거나 비어 있으면 전부 복사
+- `title` — 포크의 사용자 지정 제목. null이면 원본의 사용자 지정 제목, AI 제목 또는 첫 프롬프트에 " (fork)"를 붙여 만듭니다
+
+포크된 트랜스크립트는 POSIX 권한을 지원하는 파일 시스템에서 모드 `0600`으로 생성됩니다.
 
 ### listSessions(Path directory, Integer limit, int offset, boolean includeWorktrees)
 
@@ -660,6 +664,10 @@ public static @Nullable SDKSessionInfo getSessionInfoFromStore(
 
 저장소에서 세션 하나의 메타데이터를 읽습니다. 잘못된 UUID, 없는 세션, 곁가지 세션, 요약을 뽑아낼 수
 없는 세션에는 `null`을 반환합니다.
+
+불러온 항목은 JSONL로 직렬화되어 로컬 트랜스크립트와 똑같이 파싱됩니다: `fileSize`는 JSONL의 바이트 크기이고,
+`firstPrompt`와 `createdAt`은 처음 64 KB에서 가져오며, `lastModified`는 마지막 항목의 `timestamp`입니다.
+어댑터의 `load()`가 던진 예외는 그대로 전파되며, 없는 세션으로 보고되지 않습니다.
 
 ### getSessionMessagesFromStore(SessionStore, String, Path, Integer, int)
 
@@ -739,7 +747,8 @@ public static ForkSessionResult forkSessionViaStore(
 ```
 
 저장소를 통해 세션을 새 UUID를 가진 새 분기로 포크합니다. 디스크 포크와 같은 UUID 재매핑 변환을
-수행합니다 — 저장 계층의 복사만으로는 **충분하지 않습니다**.
+수행합니다 — 저장 계층의 복사만으로는 **충분하지 않습니다**. `title`이 없으면 디스크에서와 마찬가지로 포크 제목은
+원본의 사용자 지정 제목, AI 제목 또는 첫 프롬프트를 바탕으로 정해집니다.
 
 **던짐**: 잘못된 UUID에는 `IllegalArgumentException`. 저장소에서 원본 세션을 찾지 못하면
 `FileNotFoundException`.

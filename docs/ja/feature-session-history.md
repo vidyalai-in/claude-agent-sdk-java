@@ -47,7 +47,7 @@ record SDKSessionInfo(
     String sessionId,              // UUID identifying the session
     String summary,                // display title (custom title, AI title, lastPrompt, summary, or first prompt)
     long lastModified,             // last-modified time in milliseconds since epoch
-    @Nullable Long fileSize,       // session file size in bytes (null for remote storage backends)
+    @Nullable Long fileSize,       // transcript size in bytes (null when read from a store's summary sidecar)
     @Nullable String customTitle,  // user-set custom title or AI-generated title (may be null)
     @Nullable String firstPrompt,  // first meaningful user prompt (may be null)
     @Nullable String gitBranch,    // git branch at end of session (may be null)
@@ -58,7 +58,22 @@ record SDKSessionInfo(
 ```
 
 `summary` フィールドは優先順に解決されます：カスタムタイトル > AI タイトル > lastPrompt >
-自動生成の要約 > 最初のプロンプト。
+自動生成の要約 > 最初のプロンプト。Python SDK と同様に、空の `customTitle`、`gitBranch`、`cwd` は存在しない
+ものとして扱われ、次の情報源へと進みます。
+
+### 最初のプロンプトの見つけ方
+
+`firstPrompt`、要約のフォールバック、フォークの既定のタイトル、`SessionSummary` の畳み込みは、いずれも
+同じ 1 つの抽出処理を使います。これは 0.2.6 以降 Python SDK のルールに従います。トランスクリプトの先頭から
+ユーザーエントリを読み、次のものをスキップします：
+
+- ツールの結果、`isMeta` エントリ、圧縮の要約（`isCompactSummary`）
+- 自動生成されたテキスト：`<local-command-stdout>`、`<session-start-hook>`、`<tick>`、`<goal>`、
+  `[Request interrupted by user…]`、および `<ide_opened_file>` または `<ide_selection>` タグだけのテキスト
+
+メッセージのテキストブロックはすべて順に試され、改行はスペースにまとめられます。`<command-name>` タグを
+含むテキストもスキップされますが、他にプロンプトが見つからない場合は、最初に見つかったコマンド名が
+フォールバックになります。結果は 200 文字で切られ、省略記号が付けられます。
 
 `tag` と `createdAt` を持たない後方互換のコンストラクタも用意されています。
 
@@ -151,7 +166,18 @@ Path projectDir = Path.of("/my/project");
 List<SDKSessionInfo> sessions = ClaudeSDK.listSessions(projectDir);
 ```
 
-作業ディレクトリが `projectDir` と一致するセッションに絞り込みます。
+作業ディレクトリが `projectDir` と一致するセッションに絞り込みます。ディレクトリはまず正規化される
+（相対パスは絶対パスにし、シンボリックリンクを解決し、Unicode の NFC 正規化を行う）ため、シンボリック
+リンク、相対パス、NFD で綴られたパスでも、実際のパスと同じセッションが見つかります。
+
+`projectDir` が 2 つ以上の worktree を持つ git リポジトリの中にある場合は、すべての worktree のセッションが
+含まれます。これは `listSessions(projectDir, null, true)` と同じです。0.2.6 より前、このオーバーロードは
+`projectDir` 自体だけを読み取っていました。その動作を維持するには、`includeWorktrees` に `false` を渡して
+ください：
+
+```java
+List<SDKSessionInfo> thisDirOnly = ClaudeSDK.listSessions(projectDir, null, false);
+```
 
 ### 上限と worktree を指定する
 
@@ -164,7 +190,9 @@ List<SDKSessionInfo> recent = ClaudeSDK.listSessions(
 ```
 
 `includeWorktrees = true` にすると `git worktree list` を実行し、リポジトリのすべての worktree の
-セッションを含めます。
+セッションを含めます。プロジェクトディレクトリは正確な名前で worktree と照合されるため、`/root/project` が
+`/root/project-foo` のセッションを拾うことはありません。前方一致が使われるのは、CLI がディレクトリ名を
+切り詰めてハッシュを付け加えるほど長いパスの場合だけです。
 
 ### オフセットによるページネーション
 
@@ -212,6 +240,11 @@ SDKSessionInfo info = ClaudeSDK.getSessionInfo(
 
 セッションが見つからない場合、サイドチェーンのセッションである場合、要約を取り出せない場合は `null`
 を返します。
+
+ディレクトリを指定した場合、まずそのディレクトリのプロジェクトを探し、次にその git worktree を 1 つずつ
+探します。トランスクリプトが存在しない場合や 0 バイトのスタブは「ここにはない」とみなされるため、ある
+worktree に残ったスタブが別の worktree にある本物のセッションを隠すことはありません。`getSessionMessages`、
+`renameSession`、`tagSession` も同じ方法で探します。
 
 ## セッションのメッセージを読む
 
@@ -267,10 +300,17 @@ ClaudeSDK.renameSession(
 ```
 
 **制約：**
-- `sessionId` は妥当な UUID（小文字の 16 進数とハイフン）でなければなりません。
+- `sessionId` は妥当な UUID（16 進数とハイフン。大文字・小文字は問いません）でなければなりません。
 - `title` は前後の空白を除いたうえで空であってはいけません。
 - セッションの JSONL ファイルが見つからない場合は `FileNotFoundException` を送出します。
 - ファイルの書き込みに失敗した場合は `IOException` を送出します。
+
+**エントリが書き込まれる場所。** ディレクトリを指定した場合、SDK は `listSessions` や `getSessionMessages`
+と同様に、まずそのディレクトリのプロジェクトを試し、次にその git worktree それぞれのプロジェクトを試します。
+ファイルが存在しない場合や 0 バイトのスタブは「ここにはないので探し続ける」という意味です。ファイルは追記
+モードで開かれ、決して新規作成されないため、実行中の CLI が同じトランスクリプトに追記している間でも、
+エントリは常にファイルの現在の末尾に書き込まれます。それ以外の I/O エラー（パーミッションの拒否、ディスクの
+空き不足）は「見つからない」として扱われず、送出されます。
 
 リネーム後、`listSessions()` は `SDKSessionInfo` の `summary` と `customTitle` フィールドに新しい
 タイトルを返します。
@@ -302,6 +342,8 @@ ClaudeSDK.tagSession(
   されます。
 - セッションの JSONL ファイルが見つからない場合は `FileNotFoundException` を送出します。
 - ファイルの書き込みに失敗した場合は `IOException` を送出します。
+- エントリはリネームと同じ方法で書き込まれます：worktree へのフォールバックのあと、ファイルを決して作成
+  しないアトミックな追記を行います。
 
 **同時実行時の安全性：** そのセッションが CLI プロセスで開かれている場合、CLI は次にメタデータを
 再追記する際に SDK が書いたエントリをキャッシュへ取り込みます。最後の書き込みが勝ちます。
@@ -396,10 +438,16 @@ ForkSessionResult result = ClaudeSDK.forkSession(
 - `sessionId` —— 新しく作られたフォーク先セッションの UUID
 
 **制約：**
-- `sessionId` と、省略可能な `upToMessageId` は妥当な UUID でなければなりません。
+- `sessionId` と、省略可能な `upToMessageId` は妥当な UUID でなければなりません。空の `upToMessageId` は
+  `null` と同じで、トランスクリプト全体がコピーされます。
 - 元のセッションが見つからない場合は `FileNotFoundException` を送出します。
 - セッションにメッセージがない場合や `upToMessageId` が見つからない場合は
   `IllegalArgumentException` を送出します。
+
+`title` を指定しない場合、フォークは元のセッションのカスタムタイトル、次に AI タイトル、次に
+[最初のプロンプト](#最初のプロンプトの見つけ方)にちなんで名付けられ、`" (fork)"` が付け加えられます（どれも
+ない場合は `"Forked session (fork)"`）。新しいトランスクリプトは排他的に作成され、POSIX パーミッションを
+持つファイルシステムではモード `0600`（所有者の読み書きのみ）になります。
 
 `forkSession()` は CLI を実行せずにオフラインのコピーを作ります。過去の地点から*再開*して会話を
 続けたい場合は、代わりに切り詰めレジュームを使ってください。
@@ -603,7 +651,8 @@ if (sessions.isEmpty()) {
 ### CLAUDE_CONFIG_DIR が未設定の場合の扱い
 
 既定ではセッションは `~/.claude/projects/` 以下に保存されます。環境変数 `CLAUDE_CONFIG_DIR` が設定
-されていれば、その場所が優先されます。SDK はこの変数を自動的に尊重します。
+されていれば、その場所が優先されます。SDK はこの変数を自動的に尊重し、プロジェクトディレクトリと同様に
+NFC 正規化します。
 
 ### limit を使って巨大な結果を避ける
 

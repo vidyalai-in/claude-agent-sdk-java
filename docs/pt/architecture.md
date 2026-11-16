@@ -84,7 +84,7 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
   - `sendMessage()` / `query()` — envia mensagens
   - `receiveMessages()` / `receiveResponse()` — recebe mensagens
   - Métodos de controle: `interrupt()`, `setModel()`, `setPermissionMode()` etc.
-- **Segurança entre threads**: parcialmente thread-safe, com garantias documentadas
+- **Segurança entre threads**: parcialmente thread-safe, com garantias documentadas. `connect()`, `disconnect()` e `close()` são serializados por um único lock de ciclo de vida (desde a 0.2.6); um `close()` que chega durante `connect()` faz a conexão liberar tudo e lançar `IllegalStateException`
 - **Gerenciamento de recursos**: implementa AutoCloseable para a limpeza correta
 
 **Padrão de design**: Builder + gerenciamento de recursos (try-with-resources)
@@ -137,9 +137,15 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
 - **Principais recursos**:
   - Protocolo de controle assíncrono com CompletableFuture
   - Geração e acompanhamento de IDs de requisição
-  - Fila de mensagens com tamanho configurável
+  - Fila de mensagens limitada (`maxMsgQSize`, padrão 1000) com **contrapressão**: quando está cheia, o leitor espera o consumidor em vez de descartar a mensagem, como faz o envio com await do SDK Python. Antes da 0.2.6, uma mensagem que esperasse 5 segundos era descartada. O fim do fluxo e qualquer erro são registrados como estado terminal, então uma fila cheia pode atrasá-los, mas nunca perdê-los, e um iterador criado depois ainda os vê
+  - O limite é **flexível**: enquanto uma requisição de controle de saída espera seu `control_response`, o leitor continua lendo além dele, já que a resposta vem pelo mesmo stdout. Uma chamada de controle feita por uma thread que não está drenando mensagens, portanto, não pode expirar atrás de uma fila cheia. A fila continua sendo uma única FIFO, então a ordem não muda. Relatórios `MirrorErrorMessage` também entram na fila além do limite
+  - **Interrupções**: um consumidor interrompido enquanto espera em `hasNext()` recebe uma `ClaudeSDKException` causada pela `InterruptedException`, com a flag restaurada, e não um fim normal de fluxo. O `close()` limpa a flag enquanto roda e a define de novo ao retornar, então quem chama interrompido ainda fecha de forma ordenada
+  - **Fechando a partir de um callback**: `close()` chamado de um callback `canUseTool`, de hook ou MCP do SDK cancela a requisição que esse callback atende (ela nunca é respondida), mas não interrompe nem espera pela thread que fecha
   - Thread leitora em segundo plano (virtual no Java 21+)
   - Executor de controle para callbacks assíncronos
+  - **Tempos limite**: uma requisição de controle *de saída* (do SDK para o CLI, como `interrupt`, `setModel` ou `setPermissionMode`) mantém seu prazo de 60 segundos; `initialize` tem o próprio, definido por `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT`. Requisições *de entrada* (`canUseTool`, callbacks de hook, chamadas MCP do SDK) não têm prazo do lado do SDK desde a 0.2.6, como no SDK Python; elas terminam quando o callback responde, em um `control_cancel_request` ou em `close()`. O CLI aplica o `timeout` do próprio matcher de hook
+  - **Respostas de controle tolerantes**: um `control_response` sem um `request_id` conhecido é ignorado, qualquer `subtype` diferente de `"error"` conta como sucesso, e um corpo de sucesso que não é um objeto é lido como vazio, de modo que um quadro malformado não consegue mais matar o leitor
+  - **Esperas do espelho de transcrição**: a gravação antes de cada `result`, no fim do fluxo e ao fechar é aguardada sem teto externo (antes da 0.2.6 era cortada em 5 s), de modo que o store já guarda o turno quando o consumidor vê seu resultado, e qualquer `MirrorErrorMessage` do turno chega antes do seu `ResultMessage`. A gravação anterior ao resultado roda na thread leitora, então um store lento também atrasa as respostas de controle até terminar. O próprio batcher limita cada gravação; veja [TranscriptMirrorBatcher](#transcriptmirrorbatcher-interno)
 
 **Padrão de design**: requisição/resposta assíncrona + Observer (para hooks)
 
@@ -150,6 +156,7 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
   - Suporte a todos os tipos de mensagem (user, assistant, system, result, stream_event)
   - Análise de blocos de conteúdo (text, thinking, tool_use, tool_result)
   - Tratamento de erros e validação
+  - Campos opcionais tolerantes (desde a 0.2.6): um `null` explícito ou um campo opcional com tipo errado, ou um `type` que não é string, não faz mais o quadro falhar. Valores recebidos que os campos tipados não comportam continuam legíveis (`UserMessage.toolUseResultRaw()`, `AssistantMessage.errorRaw()`, `TaskNotificationMessage.statusValue()`)
 
 **Padrão de design**: Parser + Factory
 
@@ -175,8 +182,10 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
   - Gerencia o ciclo de vida do subprocesso do CLI
   - Comunicação por stdin/stdout
   - Leitura com buffer e limites configuráveis
-  - Suporte a callback de stderr com isolamento de exceções por linha (um callback que lança já não
-    mata o laço de leitura)
+  - Delimitação do stdout NDJSON apenas em `\n`: uma linha completa que começa com `{` mas não é exatamente um objeto JSON lança `CLIJSONDecodeException`; as demais linhas que não são JSON são ignoradas (veja [Camada de transporte → Delimitação de linhas](./feature-transport-layer.md#delimitação-de-linhas-e-contrapressão-026))
+  - O stderr só é redirecionado quando há um `stderrCallback`; caso contrário, é herdado da JVM. As linhas redirecionadas são delimitadas como o SDK Python as delimita, com isolamento de exceções por linha (um callback que lança não mata o laço de leitura)
+  - Falhas ao iniciar o processo: apenas um executável ausente é `CLINotFoundException`; qualquer outra falha é `CLIConnectionException` com a causa encadeada
+  - `close()` com tempo limitado: 5 s para o lock de escrita, 5 s para o CLI sair após o EOF no stdin, SIGTERM e depois 5 s, SIGKILL e depois 5 s. Uma interrupção não encurta nenhuma etapa: quem chama interrompido ainda envia o EOF no stdin e aguarda o período de tolerância, e a flag é definida de novo ao retornar
   - Limpeza automática do processo
   - **Shutdown hook da JVM**: um `ConcurrentHashMap.newKeySet()` estático acompanha cada `Process`
     criado; um `Runtime.addShutdownHook` registrado na inicialização da classe chama `destroy()` em
@@ -203,7 +212,13 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
   - Registro e execução de ferramentas
   - Geração automática de schema a partir de anotações @Tool
   - Execução assíncrona baseada em CompletableFuture
-  - Informações do servidor e negociação de versão no `initialize` entre `2025-06-18` / `2024-11-05`
+  - Informações do servidor e negociação de versão no `initialize` entre
+    `2025-11-25` / `2025-06-18` / `2024-11-05`
+  - Schemas tipados de parâmetros `@Tool` (`ToolSchemas`): um único vínculo por tipo Java define tanto
+    o schema publicado quanto a conversão do argumento, então um schema nunca admite argumentos que o
+    método não possa receber
+  - Uma sessão por conexão (`openSession()`): ferramentas e schemas são compartilhados, enquanto as
+    chamadas em andamento, seu cancelamento e o `close()` são por cliente
   - Mensagens do protocolo MCP (`initialize`, `ping`, `tools/list`, `tools/call`)
   - Validação de argumentos contra o `inputSchema` de cada ferramenta, compilado uma vez quando o
     servidor é construído
@@ -234,6 +249,11 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
 - **Contrato**: `handleMessage` devolve a resposta JSON-RPC de uma requisição e `null` para tudo que
   não espera resposta. `close()` significa "a conexão que usava você vai embora", não "desligue": um
   handler pode servir mais de um cliente, então precisa ser idempotente e continuar utilizável.
+- **Sessões por cliente**: cada cliente chama `openSession()` uma vez por servidor quando inicia,
+  roteia as mensagens desse servidor para o handler devolvido e fecha esse handler quando encerra. O
+  padrão devolve `this`; o `SdkMcpServer` devolve uma sessão nova, então clientes concorrentes que
+  compartilham um servidor não colidem em ids de JSON-RPC, não cancelam as chamadas uns dos outros nem
+  fazem as chamadas uns dos outros falharem ao fechar.
 
 #### ToolCallContext
 - **Propósito**: deixa uma ferramenta em execução perceber que sua chamada foi cancelada.
@@ -282,6 +302,11 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
     gravação.
   - Retentativa limitada: `MIRROR_APPEND_MAX_ATTEMPTS=3` tentativas com recuo `[200ms, 800ms]`. Tempos
     limite não são repetidos (a chamada em voo ainda pode chegar).
+  - Esvaziamentos estritamente FIFO: cada esvaziamento é encadeado atrás de todos os anteriores, então
+    esvaziamentos eager e gravações explícitas fazem append na ordem de enfileiramento.
+  - Conclusão limitada: `flush()` e `close()` sempre concluem dentro de `flushTimeoutMs()` (tempo limite
+    do append × tentativas + recuo, 181 000 ms por padrão); passado esse tempo, o future conclui de
+    qualquer forma e o esvaziamento continua em segundo plano.
   - Quadros cujo caminho cai fora do `projectsDir` configurado são descartados com um aviso.
   - Falhas aparecem como `MirrorErrorMessage` no fluxo do consumidor — nunca bloqueiam a conversa.
 
@@ -295,7 +320,9 @@ O SDK segue uma arquitetura em camadas com separação clara de responsabilidade
      recentemente, no caso de `continueConversation`).
   2. Escreve o JSONL num diretório temporário organizado como `~/.claude/`.
   3. Copia `.credentials.json` (com `refreshToken` removido para impedir consumo de token a partir do
-     diretório temporário) e `.claude.json`.
+     diretório temporário) e `.claude.json`. No macOS, quando nenhum `CLAUDE_CONFIG_DIR`,
+     `ANTHROPIC_API_KEY` ou `CLAUDE_CODE_OAUTH_TOKEN` está definido, o login é lido do Keychain
+     (`security find-generic-password`), como no SDK Python.
   4. Materializa transcrições de subagente e arquivos laterais `.meta.json` quando o store implementa
      `listSubkeys`.
   5. Cria o CLI com `CLAUDE_CONFIG_DIR=<temp dir>`.
@@ -565,6 +592,9 @@ compare-and-set. Um handler que perde a corrida descarta sua resposta, e um canc
 não faz nada, então um cancelamento nunca interrompe uma resposta no meio da escrita no stdin. Isso
 corresponde ao SDK Python, que cancela a task do handler e pula a resposta.
 
+O `close()` faz o mesmo para toda requisição de entrada ainda sendo respondida, de imediato, sem
+responder a nenhuma delas. Antes da 0.2.6, ele esperava até 5 segundos por elas primeiro.
+
 ### Ciclo de vida do stdin e o fim de uma execução
 
 > **O `controlExecutor` precisa continuar sendo uma thread por tarefa.** Uma chamada de ferramenta MCP
@@ -708,7 +738,7 @@ O SDK usa uma arquitetura multithread (threads virtuais no Java 21+, threads de 
 - **AtomicBoolean**: usado para o estado de conexão e de fechamento
 - **volatile**: usado para a visibilidade de QueryHandler e Transport
 - **Sincronização**: usada em connect() para evitar condições de corrida
-- **BlockingQueue**: fila de mensagens thread-safe
+- **BlockingQueue**: fila de mensagens thread-safe e limitada; uma fila cheia bloqueia o produtor (contrapressão) em vez de descartar
 - **ConcurrentHashMap**: acompanhamento thread-safe das requisições de controle
 
 ### Gerenciamento de recursos
@@ -888,7 +918,7 @@ com os SDKs de Python e TypeScript.
 
 1. **Threads virtuais**: milhares de operações concorrentes são possíveis no Java 21+
 2. **E/S com buffer**: reduz chamadas de sistema na comunicação com o subprocesso
-3. **Fila de mensagens**: tamanho configurável para equilibrar memória e vazão
+3. **Fila de mensagens**: tamanho configurável para equilibrar memória e vazão; uma fila cheia desacelera o CLI em vez de perder mensagens
 4. **Inicialização preguiçosa**: o QueryHandler é criado só quando necessário
 5. **Reaproveitamento de recursos**: o ExecutorService é reutilizado entre operações
 6. **Memória direta**: o Jackson faz um manejo eficiente de buffers

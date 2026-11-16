@@ -57,9 +57,15 @@ destacadas relacionadas con las opciones recientes:
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display` solo se reenvía para configuraciones `Adaptive` y `Enabled` (y únicamente cuando `display != null`); `Disabled` nunca la emite. |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | Ambas flags salen juntas cuando `display` está definido. |
 | `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | Igual que una cadena simple; `snapshot` viaja en la petición `initialize`. |
-| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | Una por cada plugin `local`; los demás tipos se omiten. |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | Una por cada plugin `local`; cualquier otro tipo lanza `IllegalArgumentException` (antes de la 0.2.6 se omitían). |
+| `thinking(ThinkingConfigEnabled(0))` | `--max-thinking-tokens 0` | Un presupuesto cero se acepta y se envía, igual que en el SDK de Python. |
+| `maxTurns(0)`, `model("")`, `fallbackModel("")`, `permissionPromptToolName("")`, `resume("")`, `sessionId("")`, `settings("")`, `mcpServersJson("")` | *(ninguna)* | Las cadenas vacías y el `0` se omiten, igual que Python omite los valores falsy (desde la 0.2.6). |
+| `mcpServers(Map)`, `outputFormat(json_schema)` | `--mcp-config`, `--json-schema` | Un valor que no se puede serializar hace fallar `connect()` con `CLIConnectionException` en lugar de descartar la flag. |
 
-**Redirección de stderr**: el stderr solo se redirige cuando `options.stderrCallback() != null`. La
+**Redirección de stderr**: el stderr solo se redirige cuando `options.stderrCallback() != null`. Si
+no, el CLI hereda el stderr de la JVM (desde la 0.2.6, igual que hace el `stderr=None` del SDK de
+Python); antes se redirigía y nunca se leía, y un CLI que escribía en stderr más de lo que cabe en el
+búfer de una tubería (unos 64 KB) se bloqueaba en su siguiente escritura. La
 antigua detección del argumento extra `--debug-to-stderr` se eliminó en 0.1.13 (preparando la
 obsolescencia de esa flag del CLI). Para capturar la salida de depuración detallada del CLI, pasa
 `extraArgs(Map.of("debug-file", "/path/to/log"))` y lee ese archivo.
@@ -70,6 +76,27 @@ bucle de lectura continúa con la línea siguiente. Antes, una excepción salía
 silencio todas las líneas de stderr posteriores durante el resto de la sesión. Los fallos del bucle
 externo (flujo cerrado de forma inesperada, errores de E/S) también se registran en `FINE` en vez de
 tragarse en silencio.
+
+**`close()` acotado** (0.2.6): cada paso de `close()` tiene un límite de tiempo, igual que en el SDK de
+Python, así que un CLI que se queda en silencio o una escritura bloqueada en una tubería de stdin
+llena ya no pueden dejarlo colgado:
+
+1. Toma el cerrojo de escritura para cerrar stdin, esperando hasta 5 s. Si una escritura todavía lo
+   retiene, el CLI se detiene sin cerrar stdin, y stdin se cierra más tarde en otro hilo en cuanto la
+   escritura lo suelta.
+2. Espera hasta 5 s a que el CLI salga tras el EOF de stdin, para que pueda volcar su archivo de
+   sesión.
+3. SIGTERM y luego espera hasta 5 s.
+4. SIGKILL y luego espera hasta 5 s.
+5. Apaga los ejecutores lectores de stderr y stdout (2 s, y luego 1 s forzado) y después cierra las
+   tuberías que tienen debajo.
+
+Una interrupción no acorta estas esperas. `close()` borra el indicador de interrupción mientras dura
+y lo vuelve a activar al terminar, así que quien llama con el indicador activado, o es interrumpido
+entretanto, sigue cerrando stdin y concede al CLI su periodo de gracia. Lo mismo vale para
+`disconnect()`/`close()` llamados desde dentro de un callback `canUseTool`, de hook o MCP del SDK; la
+petición que atiende ese callback queda sin respuesta. Antes de la 0.2.6, un cierre así mataba el CLI
+sin cerrar stdin.
 
 **Limpieza de hijos huérfanos** (0.1.18): cada proceso del CLI que se crea se registra en un conjunto
 estático `ACTIVE_CHILDREN`, y un shutdown hook de la JVM termina, con el mejor esfuerzo, los que
@@ -93,6 +120,39 @@ inicial por ser un ID de sesión no válido. Esto ocurre a nivel de argv (un arg
 **sin ningún shell de por medio**), así que es inyección de flags, no ejecución de comandos, y solo
 afecta a las aplicaciones que reenvían entrada no confiable a estas opciones. Sigue el mismo estilo
 `--setting-sources=` ya usado en otros puntos de `buildCommand()`.
+
+### Delimitación de líneas y contrapresión (0.2.6)
+
+**Stderr**: el stderr se divide en líneas igual que lo hace el `_handle_stderr` del SDK de Python:
+solo por `\n`, de modo que un `\r` suelto (una línea de progreso) se queda dentro de la línea; se
+eliminan los espacios finales y se omiten las líneas en blanco. Una línea más larga que
+`maxBufferSize` se entrega en trozos en lugar de acumularse sin límite, y una última línea sin salto
+de línea, o la parte de una línea leída antes de que fallara el flujo, se entrega igualmente.
+
+**Stdout**: el stdout es NDJSON, dividido solo por `\n`. Por cada línea completa:
+
+| Línea | Resultado |
+|---|---|
+| en blanco | se omite |
+| no empieza por `{` (por ejemplo, `[SandboxDebug] …`) | se omite y se registra en `FINE` |
+| un objeto JSON | se entrega |
+| empieza por `{` pero no se puede analizar, o tiene contenido después del objeto (`{"a":1} junk`) | `CLIJSONDecodeException` |
+| más larga que `maxBufferSize` | `CLIJSONDecodeException` |
+
+Una línea completa no puede completarse con datos posteriores, así que una corrupta es un error y no
+algo que seguir acumulando: la excepción termina el flujo de mensajes, igual que en el SDK de Python,
+y el iterador del consumidor la relanza. Antes de la 0.2.6, una línea mal formada se tragaba en
+silencio todos los mensajes que venían después. Una última línea cortada por el final del flujo se
+entrega si se puede analizar y se descarta si no. Cuando el stdout termina con normalidad, un código
+de salida del CLI distinto de cero se notifica como `ProcessException`.
+
+**Contrapresión**: el lector espera a que haya sitio en su cola en lugar de descartar un mensaje, así
+que un consumidor lento ralentiza al CLI en lugar de perder salida. Lo mismo ocurre una capa más
+arriba, en la cola de mensajes de `QueryHandler` (consulta
+[Arquitectura → QueryHandler](./architecture.md#queryhandler)). El `maxMsgQSize` de esa cola es un
+límite flexible: mientras una petición de control saliente espera su respuesta, `QueryHandler` sigue
+leyendo más allá de él, de modo que la `control_response` que hay detrás de los mensajes encolados
+todavía puede llegar.
 
 ### Windows: rechazo de un CLI en script batch (0.1.21)
 
@@ -219,6 +279,10 @@ opcional, y se interpreta como otra flag.
 | `Map.of("some-flag", "value")` | `--some-flag`, `value` |
 | `Map.of("some-flag", "--evil")` | `--some-flag=--evil` |
 | `Map.of("verbose-thing", "")` | `--verbose-thing` (flag booleana suelta) |
+| `verbose-thing` → `null` (en un `HashMap` / `LinkedHashMap`) | `--verbose-thing` (flag booleana suelta, desde la 0.2.6) |
+
+Las entradas se emiten en el orden de iteración del mapa (desde la 0.2.6), así que pasa un
+`LinkedHashMap` cuando importe el orden de las flags.
 
 ### Windows: habilitación del CLI en batch (0.1.22)
 

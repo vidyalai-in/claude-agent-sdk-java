@@ -230,14 +230,84 @@ public CompletableFuture<ToolResult> greet(String firstName, String lastName) {
 ```
 
 **要求：**
-- 编译时加上 `-parameters` 标志以保留参数名
-- 参数会自动映射为 JSON Schema
-- 类型映射：
-  - `String` → `"string"`
-  - `int`、`Integer`、`long`、`Long` → `"integer"`
-  - `double`、`Double`、`float`、`Float` → `"number"`
-  - `boolean`、`Boolean` → `"boolean"`
-  - `Map<String, Object>` → `"object"`
+- 编译时加上 `-parameters` 标志以保留参数名，或者用
+  [`@ToolParam(name = ...)`](#用-toolparam-描述参数) 为每个参数命名
+- 参数会自动映射为 JSON Schema，并且每个参数值都会按同一套逐类型规则转换为形参的 Java 类型，因此 schema
+  所接受的恰好就是方法能够接收的
+
+**类型映射**（自 0.2.6 起；在此之前，`List`、数组、枚举、`char` 或 `Optional` 参数得到的 schema 会拒绝所有合法参数）：
+
+| Java 形参类型 | 发布的 schema | 方法接收到的值 |
+|---|---|---|
+| `String`、`CharSequence` | `{"type": "string"}` | 该字符串 |
+| `char`、`Character` | `{"type": "string", "minLength": 1, "maxLength": 1}` | 该字符 |
+| `int`、`long`、`short`、`byte`、它们的包装类型、`BigInteger` | `{"type": "integer"}` | 该数字 |
+| `double`、`float`、其他 `Number` 类型 | `{"type": "number"}` | 该数字 |
+| `boolean`、`Boolean` | `{"type": "boolean"}` | 该布尔值 |
+| 枚举 | `{"type": "string", "enum": [...]}`（各常量的 JSON 名称） | 该常量 |
+| `List<T>`、`Set<T>`、其他集合、`T[]` | `{"type": "array", "items": <T>}` | `T` 的集合或数组 |
+| `Optional<T>` | `T` 的 schema，非必需 | 省略时为 `Optional.empty()` |
+| `UUID` / `URI` | `{"type": "string", "format": "uuid"}` / `"uri"` | 解析后的值 |
+| `LocalDate` | `{"type": "string", "format": "date"}` | 解析后的值 |
+| `Instant`、`OffsetDateTime` | `{"type": "string", "format": "date-time"}` | 解析后的值 |
+| `Path`、`File`、`ZoneId`、其他 `java.time` 类型 | `{"type": "string"}` | 解析后的值 |
+| `Map<String, V>` | `{"type": "object", "additionalProperties": <V>}`（`Map<String, Object>` 时为 `true`） | 该 map，其中的值已转换 |
+| record | 嵌套对象，每个组件一个属性 | 该 record |
+| `Object` | `{"type": "object"}` | 原样的 JSON 值 |
+
+record 组件是必需的，除非它是 `Optional` 或标注了 `@ToolParam(required = false)`；组件上的 `@ToolParam` 对它的描述方式
+与对形参的描述方式相同。非必需且被省略的形参会收到 `null`，基本类型则收到其零值。
+
+#### 用 `@ToolParam` 描述参数
+
+`@ToolParam(name, description, required)` 用于标注 `@Tool` 方法的形参或 record 组件。它是 Python SDK 的
+`Annotated[str, "..."]` 在 Java 中的对应物：
+
+- `description` 会成为 schema 中该属性的 `description`，模型正是依据它来决定传入什么。
+- `name` 设置模型所使用的参数名。它默认为 Java 形参名，因此对于未使用 `-parameters` 编译的代码，或者对于不是合法
+  Java 标识符的名称，正需要用到它。
+- `required = false` 让该参数变为可选。`Optional` 形参无论这里如何设置，都永远不是必需的。
+
+```java
+import in.vidyalai.claude.sdk.mcp.Tool;
+import in.vidyalai.claude.sdk.mcp.ToolParam;
+import in.vidyalai.claude.sdk.mcp.ToolResult;
+import java.util.List;
+import java.util.Optional;
+
+public class PaintTools {
+
+    public enum Color { WHITE, CREAM, SAGE, NAVY }
+
+    @Tool(name = "paint_walls", description = "Order paint for some walls of a room")
+    public ToolResult paintWalls(
+            @ToolParam(description = "Names of the walls to paint") List<String> walls,
+            @ToolParam(description = "Paint color") Color color,
+            @ToolParam(description = "Coats of paint (default 2)") Optional<Integer> coats) {
+        int n = coats.orElse(2);
+        return ToolResult.text("Ordered " + (walls.size() * n) + " litres of " + color + ".");
+    }
+}
+```
+
+发布的 schema：
+
+```json
+{
+    "type": "object",
+    "properties": {
+        "walls": {"type": "array", "items": {"type": "string"},
+                  "description": "Names of the walls to paint"},
+        "color": {"type": "string", "enum": ["WHITE", "CREAM", "SAGE", "NAVY"],
+                  "description": "Paint color"},
+        "coats": {"type": "integer", "description": "Coats of paint (default 2)"}
+    },
+    "required": ["walls", "color"]
+}
+```
+
+`AutoSchemaGeneration` 会针对 CLI 运行这个工具，并打印它发布的 schema：
+`mvn exec:java -Dexec.mainClass="examples.AutoSchemaGeneration" -Dexec.args="typed" -pl examples`。
 
 #### 2. Map 参数
 
@@ -253,8 +323,10 @@ public CompletableFuture<ToolResult> greet(Map<String, Object> args) {
 
 **适用于：**
 - 你希望手动提取参数
-- schema 比较复杂
-- 你需要可选参数
+- schema 比较复杂（请搭配[显式 schema](#显式-schema) 使用）
+
+唯一的参数形参是 `Map` 的方法会收到整个参数对象，并发布一个空的对象 schema。若要在类型化参数中使用可选参数，请使用
+`Optional<T>` 或 `@ToolParam(required = false)`。
 
 ### 自动生成 schema
 
@@ -282,6 +354,9 @@ public CompletableFuture<ToolResult> search(String query, int limit) {
     "required": ["query", "limit"]
 }
 ```
+
+每个参数都是必需的，除非它是 `Optional` 或标注了 `@ToolParam(required = false)`。所有受支持的形参类型参见
+[类型映射](#1-类型化参数推荐)。
 
 ### 显式 schema
 
@@ -389,6 +464,27 @@ SdkMcpTool<Map<String, Object>> searchTool = SdkMcpTool.builder("search", "Searc
     .build();
 ```
 
+#### 输入 schema 简写
+
+如果一个 map 的所有值都是 Java 类型（`Class`、其他 `java.lang.reflect.Type`，或 Jackson 的 `TypeReference`），它会被
+读作 Python SDK 的 `@tool` 所接受的 `{name: type}` 简写（`{"text": str}`）：每个键是一个必需参数，其值是该参数的
+Java 类型。服务器会按与 `@Tool` 形参相同的逐类型规则，把它展开为一个对象 schema。
+
+```java
+SdkMcpTool<Map<String, Object>> shout = SdkMcpTool.create(
+    "shout",
+    "Convert text to uppercase",
+    Map.of("text", String.class),          // -> {"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}
+    args -> CompletableFuture.completedFuture(
+        ToolResult.text(((String) args.get("text")).toUpperCase())));
+```
+
+对于泛型类型，请使用 Jackson 的 `TypeReference`，例如 `Map.of("tags", new TypeReference<List<String>>() {})`。其他
+任何 map 都是 JSON Schema，会按原样发布，无论它是否有顶层 `type`：`Map.of("type", "object")` 仍是开放的对象 schema；
+只有 `properties`/`required` 的 schema，或者一个 `anyOf`，会按原样发送并加上 `"type": "object"`，因为 MCP 要求每个
+输入 schema 都具备它。完全不含任何 JSON Schema 关键字的 map（例如 Python 风格的 `Map.of("text", "string")`）会被记录
+一条警告：它会接受任意参数，而简写需要以 Java 类型作为值（`Map.of("text", String.class)`）。
+
 ### 从工具创建服务器
 
 ```java
@@ -482,7 +578,10 @@ Map.of(
 
 ### ToolResult
 
-工具必须返回 `ToolResult`（包装在 CompletableFuture 中）：
+`SdkMcpTool` 的处理函数返回 `CompletableFuture<ToolResult>`。`@Tool` 方法既可以返回 `ToolResult`，也可以返回
+`CompletableFuture<ToolResult>`；其他任何值都会以其 `String.valueOf` 文本发送。返回 `null`（或以 `null` 完成的 future）
+会得到一个 `isError` 的“无结果”答复。声明为 `void`、`Void` 或 `CompletableFuture<Void>` 的方法会以文本为 `"null"` 的
+成功结果作答（参见[失败语义](#失败语义)）：
 
 ```java
 import in.vidyalai.claude.sdk.mcp.ToolResult;
@@ -604,6 +703,8 @@ public CompletableFuture<ToolResult> divide(double a, double b) {
 |---|---|---|
 | 处理函数返回 `ToolResult.error(msg)` | 结果，`isError: true` | `msg` |
 | 处理函数抛出异常，或其 future 失败 | 结果，`isError: true` | 异常消息；消息为 null/空白时为其类名 |
+| `SdkMcpTool` 处理函数或 `@Tool` 方法返回 `null`，或其 future 以 `null` 完成 | 结果，`isError: true` | `Tool '<name>' returned no result` / `… completed with no result`（在 0.2.6 之前，该调用永远得不到应答，或者 `@Tool` 方法的 `null` 会以文本 `"null"` 发送）。例外：声明为 `void`、`Void` 或 `CompletableFuture<Void>`/`CompletionStage<Void>` 的 `@Tool` 方法没有结果可给，仍以文本为 `"null"` 的成功结果作答 |
+| 结果中含有格式错误的内容块（没有 `text` 的 text 块等） | 结果，`isError: true` | 该内容块格式错误的原因 |
 | 参数与 `inputSchema` 不匹配 | 结果，`isError: true` | `Input validation error: …`（不运行处理函数） |
 | `inputSchema` 不是合法的 JSON Schema | 结果，`isError: true` | `… inputSchema this server cannot use …`（不运行处理函数） |
 | 工具名未注册 | 结果，`isError: true` | `Tool '<name>' not found` |
@@ -667,13 +768,15 @@ public CompletableFuture<ToolResult> processFile(String path) {
 
 ### 协议版本
 
-服务器公布 `2025-06-18` 和 `2024-11-05`，新的在前。在 `initialize` 时，如果客户端请求的版本它支持，就回显该版本；否则回应它支持的最新版本 —— 这正是规范规定的握手方式。
+服务器公布 `2025-11-25`、`2025-06-18` 和 `2024-11-05`，新的在前（`2025-11-25` 自 0.2.6 起）。在 `initialize` 时，如果客户端请求的版本它支持，就回显该版本；否则回应它支持的最新版本 —— 这正是规范规定的握手方式。
+
+之所以宣称支持 `2025-11-25`，是因为它新增的内容对仅提供工具的服务器来说都不是强制的：图标、任务、URL elicitation 以及带工具的 sampling 都是可选的或受能力控制的，输入校验失败本来就以工具执行错误的形式报告，而现在作为默认方言的 JSON Schema 2020-12，本来就是校验参数所用的方言。
 
 `2025-03-26` 被刻意排除。该修订版把 JSON-RPC 批处理列为*接收*端必须支持的能力，而一个批次是顶层数组，承载这些消息的控制请求把它们定型为 map，因而无法表达。宣称一个 SDK 无法兑现其唯一必要变更的版本，等于给客户端一个它会据以行动的承诺。
 
 ### 方法
 
-已实现 `initialize`、`ping`、`tools/list` 和 `tools/call`。其他一律回应 `-32601`，这是正确的而非缺失：服务器只公布 `tools` 能力，因此符合规范的客户端绝不会请求 resources、prompts 或 completions。（已对 CLI 验证：只声明 `tools` 的服务器不会收到 `resources/list` 或 `prompts/list`。）
+已实现 `initialize`、`ping`、`tools/list` 和 `tools/call`。`tools/list` 按注册顺序返回工具。`arguments` 存在但不是对象的 `tools/call` 会得到 `-32602` 答复；缺失或为 `null` 的 `arguments` 表示没有参数。其他一律回应 `-32601`，这是正确的而非缺失：服务器只公布 `tools` 能力，因此符合规范的客户端绝不会请求 resources、prompts 或 completions。（已对 CLI 验证：只声明 `tools` 的服务器不会收到 `resources/list` 或 `prompts/list`。）
 
 ### 通知
 
@@ -708,7 +811,32 @@ var options = ClaudeAgentOptions.builder()
 
 CLI 发送什么取决于 `initialize` 返回的 `capabilities`，因此公布了 resources 的处理器就会被请求 resources。
 
-`close()` 的含义是“使用你的这条连接要消失了”，而不是“关停”：同一个处理器可以注册给多个客户端，因此它必须是幂等的，并在之后仍然可用。出于同样的原因，请为每条连接注册一个 `SdkMcpServer` —— 两条活动连接共用一个服务器可能发出相同的 JSON-RPC id，此时第二个调用会被以 `-32603` 拒绝，而不是冒着响应送错调用方的风险。
+`close()` 的含义是“使用你的这条连接要消失了”，而不是“关停”：同一个处理器可以注册给多个客户端，因此它必须是幂等的，并在之后仍然可用。
+
+### 每个客户端一个会话：`openSession()`
+
+每个 `ClaudeSDKClient`（或一次性的 `query`）在启动时会对每个已配置的服务器调用一次 `openSession()`。它把该服务器的每条消息都路由到返回的处理器，并在关闭时对这个处理器（而不是注册的那个）调用 `close()`。
+
+`SdkMcpServer.openSession()` 返回一个新的会话，它共享工具与 schema，并拥有所有按连接区分的内容：进行中的调用、结清这些调用的 `notifications/cancelled`，以及只放弃该会话自身调用的 `close()`。因此，一个 `SdkMcpServer` 可以被任意数量的并发客户端共享。在 0.2.6 之前，它们共用一张调用表：它们的 JSON-RPC id 会冲突，一个客户端的取消可能落到另一个客户端的调用上，一个客户端的关闭会让另一个客户端的调用失败。Python SDK 通过每个 query 一个桥接来保持同样的划分。
+
+默认的 `McpMessageHandler.openSession()` 返回 `this`，因此每条连接都共享同一个自定义处理器，这也是在该方法出现之前编写的处理器的行为。带有按连接状态（进行中的请求、取消）的自定义处理器应当返回一个新对象：
+
+```java
+public class MyMcpServer implements McpMessageHandler {
+
+    @Override
+    public CompletableFuture<Map<String, Object>> handleMessage(Map<String, Object> message) {
+        ...
+    }
+
+    @Override
+    public McpMessageHandler openSession() {
+        return new MyMcpServer();   // per-connection state lives here
+    }
+}
+```
+
+在同一个会话内，仍在进行中的 JSON-RPC id 会被以 `-32603` 拒绝，而不是冒着响应送错调用方的风险。
 
 ## 外部 MCP 服务器
 

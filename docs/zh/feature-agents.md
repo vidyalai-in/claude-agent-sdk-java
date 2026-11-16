@@ -78,8 +78,34 @@ AgentDefinition compat = new AgentDefinition(
 | `initialPrompt` | `String`（可为 null） | agent 启动时发送的初始提示词 |
 | `maxTurns` | `Integer`（可为 null） | 该 agent 的最大轮数；为 null 表示不限 |
 | `background` | `Boolean`（可为 null） | 在后台运行该 agent |
-| `effort` | `String`（可为 null） | 努力级别：`"low"`、`"medium"`、`"high"`、`"xhigh"`、`"max"`。`"xhigh"` 是 Opus 4.7 专有的，在其他模型上会回退为 `"high"`。另请参见 [`EffortLevel`](feature-configuration-options.md#effortlevel-枚举) 枚举。 |
+| `effort` | `String`（可为 null） | 努力级别：`"low"`、`"medium"`、`"high"`、`"xhigh"`、`"max"`。`"xhigh"` 是 Opus 4.7 专有的，在其他模型上会回退为 `"high"`。另请参见 [`EffortLevel`](feature-configuration-options.md#effortlevel-枚举) 枚举。effort 为数值时为 null。 |
 | `permissionMode` | `String`（可为 null） | 该 agent 的权限模式 |
+| `numericEffort` | `Integer`（可为 null） | 以数值而非级别名称表示的 effort（自 0.2.6 起）。`effort` 与 `numericEffort` 至多只能设置一个；两者都设置时构造函数抛出 `IllegalArgumentException` |
+
+**Effort。** 使用 `withEffort(...)` 在副本上设置它，该方法接受级别名称、`EffortLevel` 或数值
+（均自 0.2.6 起）。两种形式都以同一个 `"effort"` 键发送给 CLI，与 Python SDK 的
+`effort: EffortLevel | int` 一致：级别以字符串发送，数值以 JSON 数字发送。每次调用都会替换另一种
+形式，因此 `withEffort(32000)` 会清除 `effort()`，`withEffort("high")` 会清除 `numericEffort()`。
+
+```java
+import in.vidyalai.claude.sdk.types.config.EffortLevel;
+
+AgentDefinition tester = new AgentDefinition(
+        "Creates and runs tests",
+        "You are a testing expert.",
+        List.of("Read", "Write", "Bash"),
+        "sonnet")
+    .withEffort(32000);                  // "effort": 32000
+
+AgentDefinition reviewer = tester.withEffort(EffortLevel.HIGH);   // "effort": "high"
+AgentDefinition quick = tester.withEffort("low");                 // "effort": "low"
+```
+
+`AgentsExample` 为其 test-runner agent 设置了数值 effort。
+
+该 record 在 0.2.6 中新增了末尾的 `numericEffort` 组件。之前的所有构造函数都得以保留，但 record
+解构模式（JDK 21+）必须加上它。`mcpServers` 中的 MCP 配置 record 在 agent 发送给 CLI 时会保留其
+`"type"`（在 0.2.6 之前会丢失）。
 
 **model 字段：** `model` 字段接受短别名（`"sonnet"`、`"opus"`、`"haiku"`、`"inherit"`）或完整的
 模型 ID（例如 `"claude-sonnet-4-5"`）。

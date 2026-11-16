@@ -420,6 +420,33 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+### 类型化参数
+
+`@Tool` 方法可以接收类型化参数，而不必使用 `Map`：SDK 会发布与之匹配的 JSON Schema
+（列表与数组、枚举、`Optional`、record、`UUID`、`java.time` 类型等），并把每个参数转换为
+形参的类型。`@ToolParam` 可以添加描述、为未使用 `-parameters` 编译的代码指定参数名，
+或者把参数设为可选：
+
+```java
+import in.vidyalai.claude.sdk.mcp.ToolParam;
+
+public class PaintTools {
+
+    public enum Color { WHITE, CREAM, SAGE, NAVY }
+
+    @Tool(name = "paint_walls", description = "Order paint for some walls of a room")
+    public ToolResult paintWalls(
+            @ToolParam(description = "Names of the walls to paint") List<String> walls,
+            @ToolParam(description = "Paint color") Color color,
+            @ToolParam(description = "Coats of paint (default 2)") Optional<Integer> coats) {
+        return ToolResult.text("Ordered paint for " + walls + " in " + color
+                + ", " + coats.orElse(2) + " coats.");
+    }
+}
+```
+
+完整的类型映射参见 [docs/feature-mcp-servers.md](../feature-mcp-servers.md#1-typed-parameters-recommended)。
+
 ### 直接使用 SdkMcpTool
 
 ```java
@@ -506,6 +533,9 @@ SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
 `McpSdkServerConfig` 持有一个 `McpMessageHandler`，因此当应用需要内置服务器并未提供的
 MCP 能力（资源、提示词、补全）时，可以自行实现该接口并以同样的方式注册。
 参见 [docs/feature-mcp-servers.md](../feature-mcp-servers.md#custom-mcp-handlers)。
+
+一个 `SdkMcpServer` 可以同时被多个客户端共享：每个客户端各自打开它的一个会话
+（`openSession()`），因此它们的调用、取消和关闭互不干扰。
 
 ### 相比外部 MCP 服务器的优势
 
@@ -1032,7 +1062,9 @@ ClaudeSDKException (base)
 消息；而进行收集的调用要么返回一个列表、要么抛出异常，因此它选择抛出本异常，并通过
 `partialMessages()` 以及便捷访问器 `resultMessage()` 把已收集的消息交还给你；它的
 `getCause()` 就是上文所述的 `ResultException`。只要你设置了 `maxTurns` 或
-`maxBudgetUsd`，就应当捕获它：达到你自己配置的上限是预期内的结果，而不是崩溃。
+`maxBudgetUsd`，就应当捕获它：达到你自己配置的上限是预期内的结果，而不是崩溃。自 0.2.6 起，当运行 `ClaudeSDK.query(...)`
+的线程被中断时，也会抛出本异常，其中带有截至当时收到的消息，且中断标志会被恢复；在这种情况下，
+流式迭代器则抛出 `ClaudeSDKException`。
 
 ## 流式事件
 

@@ -153,8 +153,11 @@ public record SessionStoreListEntry(String sessionId, long mtime);
 public record SessionSummaryEntry(String sessionId, long mtime, Map<String, Object> data);
 ```
 
-`SessionStoreEntry` é um invólucro fino sobre `Map<String, Object>` que exige um campo `type`; todo o
-resto passa adiante de forma opaca:
+`SessionStoreEntry` é um invólucro fino sobre `Map<String, Object>`, e o mapa inteiro passa adiante de
+forma opaca. Toda entrada que o CLI grava traz um `type` em string, mas nenhum é obrigatório: como no
+SDK Python, uma entrada sem ele atravessa espelhamento, importação e listagem sem alterações, e
+`type()` devolve `null` para ela. (Até a 0.2.5, o construtor lançava `IllegalArgumentException` para
+uma entrada assim.) `SessionStoreEntry.of(map)` copia o mapa e mantém a ordem das chaves:
 
 ```java
 SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
@@ -165,7 +168,7 @@ SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
     "timestamp", "2026-04-27T00:00:00Z"
 ));
 
-entry.type();      // "user"
+entry.type();      // "user" (null when the entry has no string type)
 entry.uuid();      // "u1"
 entry.timestamp(); // "2026-04-27T00:00:00Z"
 entry.<String>get("custom_field"); // typed convenience accessor
@@ -364,7 +367,19 @@ SDK Python), para que listagens de projetos grandes não esgotem os pools de con
 
 Se `listSessions` e `listSessionSummaries` estiverem ambos sem implementação, a chamada lança
 `IllegalStateException`. Falhas de `loadAsync` do adaptador rebaixam linhas individuais a entradas de
-resumo vazio em vez de derrubar a lista inteira.
+resumo vazio (o mtime da listagem, todos os outros campos, `cwd` inclusive, `null`) em vez de derrubar
+a lista inteira.
+
+Linhas derivadas de `load()` (o caminho de fallback, e `getSessionInfoFromStore`) passam pelo mesmo
+parser de uma transcrição local: as entradas são serializadas em JSONL, `fileSize` é o tamanho em bytes
+desse JSONL, e `firstPrompt` e `createdAt` vêm dos seus primeiros 64 KB. `getSessionInfoFromStore`
+tira `lastModified` do `timestamp` da última entrada e deixa uma exceção do `load()` do adaptador se
+propagar, em vez de reportar a sessão como não encontrada. Linhas montadas a partir de um arquivo
+lateral de resumo têm `fileSize` `null`. Timestamps sem deslocamento UTC são lidos como UTC.
+
+O argumento `directory` é canonicalizado (links simbólicos resolvidos, normalização NFC) antes de a
+chave do projeto ser derivada, exatamente como nas consultas em disco local, então uma chave do store
+sempre corresponde ao nome do diretório do projeto em disco.
 
 ## Mutações via SessionStore
 
@@ -385,11 +400,15 @@ ForkSessionResult fork = ClaudeSDK.forkSessionViaStore(
 Por dentro:
 
 - `renameSessionViaStore` acrescenta uma entrada `custom-title`.
-- `tagSessionViaStore` acrescenta uma entrada `tag`; `null` limpa via string vazia.
+- `tagSessionViaStore` acrescenta uma entrada `tag`; `null` limpa via string vazia. A tag é saneada
+  exatamente como `tagSession` a saneia (normalização NFKC, caracteres de formatação e de uso privado
+  removidos).
 - `deleteSessionViaStore` não faz nada se o store não implementar `delete()` (apropriado para
   back-ends WORM/somente-anexação, como S3 puro).
 - `forkSessionViaStore` executa a mesma transformação de remapeamento de UUID do fork em disco
   (`SessionMutations.buildForkLines` compartilhado) — uma cópia na camada de armazenamento NÃO basta.
+  Sem título, recorre ao título personalizado da origem, ao título gerado por IA e depois ao primeiro
+  prompt, mais `" (fork)"`.
 
 `listSubagentsFromStore` exige `listSubkeys()` e lança `IllegalStateException` caso contrário.
 
@@ -433,10 +452,20 @@ chama — resolvido como `options.env["CLAUDE_CONFIG_DIR"]` → ambiente do proc
 
 | Arquivo | Por que importa |
 |------|----------------|
-| `.credentials.json` | Credenciais OAuth, com `claudeAiOauth.refreshToken` removido |
+| `.credentials.json` | Credenciais OAuth, com `claudeAiOauth.refreshToken` removido (lidas do Keychain do macOS quando disponível, veja abaixo) |
 | `.claude.json` | Estado do CLI no nível do usuário |
 | `settings.json` | `apiKeyHelper`, além dos seus `env`, `hooks` e `permissions` |
 | `cowork_settings.json` | O nome alternativo de arquivo de configurações lido no modo cowork-plugins |
+
+**Keychain do macOS.** No macOS, a configuração padrão do CLI guarda o login OAuth no Keychain, não em
+`.credentials.json`, e um `CLAUDE_CONFIG_DIR` redirecionado muda o nome de serviço do Keychain que o
+subprocesso consulta. Por isso, quando nenhum entre `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY` e
+`CLAUDE_CODE_OAUTH_TOKEN` está definido (em `options.env` ou no ambiente do processo), o SDK lê o
+login com `security find-generic-password -a $USER -w -s "Claude Code-credentials"` (tempo limite de
+5 segundos), como faz o SDK Python, e o grava no `.credentials.json` temporário com o refresh token
+removido. Um resultado do Keychain prevalece sobre um arquivo de credenciais. A consulta é de melhor
+esforço: fora do macOS, ou quando o comando falha, expira ou não imprime nada, o arquivo de
+credenciais é usado como antes.
 
 Semear `settings.json` importa mais do que parece: `apiKeyHelper` é um quarto mecanismo de
 autenticação, ao lado do arquivo de credenciais, do Keychain do macOS e das variáveis de ambiente.
@@ -503,6 +532,11 @@ Tempos limite NÃO são repetidos (a chamada em voo ainda pode chegar — uma no
 duplicata concorrente). Adaptadores devem desduplicar por `entry.uuid()` para que uma nova tentativa
 após sucesso parcial seja segura quanto a duplicatas.
 
+Uma `MirrorErrorMessage` sempre chega antes do `ResultMessage` do turno cujo lote falhou, nos dois
+modos de gravação, e antes do erro que encerra um fluxo com falha (desde a 0.2.6; no modo eager ela
+podia chegar depois do resultado e, numa falha do leitor, podia se perder). Assim, quando você vê o
+resultado de um turno, toda falha de espelhamento daquele turno já foi reportada.
+
 ## Modo de gravação (batched vs eager)
 
 Por padrão, o `TranscriptMirrorBatcher` acumula todos os quadros `transcript_mirror` e grava uma vez
@@ -531,8 +565,17 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 segundo plano no executor de drenagem próprio do SDK (uma thread `session-store-mirror-drain-<n>`
 por tarefa; virtual no Java 21+), que chama o `appendAsync` do seu adaptador no
 `SessionStoreExecutor` configurado. As anexações continuam serializadas na ordem de enfileiramento; um adaptador lento não
-trava o laço de leitura, mas verá quadros agrupados enquanto estiver ocupado. A opção é ignorada
-quando `sessionStore` não está definido.
+trava o laço de leitura entre resultados, mas verá quadros agrupados enquanto estiver ocupado. A opção
+é ignorada quando `sessionStore` não está definido.
+
+> **Ressalva: um store lento segura o fluxo a cada resultado.** Nos dois modos, o leitor espera as
+> entradas pendentes serem gravadas antes de entregar cada `ResultMessage`. Nada mais é lido do CLI
+> nesse meio-tempo, respostas de controle inclusive, então uma chamada de controle como `interrupt()`,
+> `setModel()` ou `getMcpStatus()` feita durante essa gravação espera junto. O `close()` da mesma
+> forma espera a gravação final. Cada espera é limitada por `TranscriptMirrorBatcher.flushTimeoutMs()`,
+> 181 s por padrão (veja [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)). O SDK Python se
+> comporta da mesma forma. Mantenha o `append` rápido, ou repasse o trabalho lento a uma fila dentro
+> do seu adaptador.
 
 ## Importando sessões locais para um store
 
@@ -550,7 +593,9 @@ ClaudeSDK.importSessionToStore(
 
 O helper:
 
-- Percorre o JSONL local linha a linha (pula linhas em branco).
+- Percorre o JSONL local linha a linha (pula linhas em branco). Uma linha sem `type` é importada como
+  qualquer outra; ela não interrompe mais a importação. Uma linha que é JSON válido mas não é um
+  objeto é ignorada com um aviso.
 - Chama `store.append(key, batch)` a cada `batchSize` entradas (padrão 500) ou a cada 1 MiB de bytes
   de linha, o que vier primeiro.
 - Com `includeSubagents=true`, importa recursivamente `<sessionDir>/subagents/**/*.jsonl` e os
@@ -593,6 +638,10 @@ SessionStoreConformance.run(WormStore::new,
 O harness usa `AssertionError` puro (sem dependência de framework de teste), então funciona com JUnit,
 TestNG, Spock ou até num simples teste de fumaça com `main()`.
 
+Desde a 0.2.6, o harness é mais rigoroso: rejeita `null` onde uma lista vazia é exigida (por exemplo,
+de `listSessions` ou `listSubkeys` sem nada a listar) e rejeita uma sessão que tem resumo mas não
+aparece em `listSessions`. Um adaptador que devolve listas `null` passava antes e agora falha.
+
 Os 14 contratos cobrem:
 
 | # | Contrato |
@@ -625,7 +674,14 @@ Acumula os quadros `transcript_mirror` que o CLI emite no stdout e os grava em
 - Limiares de gravação imediata: `MAX_PENDING_ENTRIES=500`, `MAX_PENDING_BYTES=1 MiB`. Com
   `sessionStoreFlush(EAGER)` os dois limiares são zerados, de modo que cada quadro enfileirado agenda
   uma drenagem em segundo plano (veja [Modo de gravação](#modo-de-gravação-batched-vs-eager)).
-- Gravação explícita antes de cada mensagem `result` e novamente no fim do fluxo / ao fechar.
+- Gravação explícita antes de cada mensagem `result` e novamente no fim do fluxo / ao fechar. O fluxo
+  de mensagens espera cada uma dessas gravações, sem o corte de 5 segundos de antes da 0.2.6, então o
+  store já guarda o turno quando você vê o seu `result`. A espera continua limitada: toda gravação
+  conclui dentro de `flushTimeoutMs()`, que é tempo limite do append × tentativas mais recuo
+  (`3 × 60 000 + 200 + 800 = 181 000 ms` por padrão). Se esse teto for atingido, a gravação retorna
+  de qualquer forma, registra um aviso e a drenagem continua em segundo plano.
+- As drenagens são estritamente FIFO: drenagens eager e gravações explícitas fazem append na ordem de
+  enfileiramento, nunca intercaladas.
 - Agrupa quadros por `filePath`, de modo que cada arquivo único receba uma chamada `append` por
   gravação.
 - Quadros cujo caminho cai fora de `projectsDir` são descartados com um aviso (aconteceria se o

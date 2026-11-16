@@ -22,8 +22,9 @@ public record SdkPluginConfig(String type, String path) {
 ```
 
 Apenas o tipo `"local"` é suportado. Para cada plugin `local`, o transporte acrescenta
-`--plugin-dir <path>` ao comando do CLI; uma configuração com qualquer outro `type` é ignorada sem
-erro, então sempre construa as configurações com `local(...)`.
+`--plugin-dir <path>` ao comando do CLI. Desde a 0.2.6, uma configuração com qualquer outro `type`
+faz `connect()` lançar `IllegalArgumentException` (`Unsupported plugin type: …`), assim como o SDK
+Python lança `ValueError`; antes ela era ignorada com um aviso. Construa as configurações com `local(...)`.
 
 ## Configurando plugins
 

@@ -61,22 +61,22 @@ options.toBuilder()
 - `forkSession(boolean)`: bifurcar la sesión reanudada
 - `resumeSessionAt(String)`: reanudación con truncado: carga la conversación reanudada solo hasta este UUID de entrada de la transcripción (incluido), ramificando desde un punto anterior. Úsalo con `resume` y, normalmente, con `forkSession`. Acepta cualquier UUID de entrada de la transcripción, habitualmente un `AssistantMessage.uuid()` observado en vivo o un `SessionMessage.uuid()` obtenido de `ClaudeSDK.getSessionMessages(...)`. Se emite como `--resume-session-at=<value>`. Consulta [Reanudación con truncado](./feature-session-history.md#reanudación-con-truncado).
 - `resumeDropsTurn(String)`: junto con `resumeSessionAt`, el UUID del prompt de usuario cuyo turno pretende descartar el truncado. El CLI valida entonces, al cargar, que *todas* las entradas posteriores al punto de bifurcación pertenecen a ese turno y se niega en caso contrario, de modo que un mensaje de usuario en cola o una notificación de tarea que la sesión absorbió a mitad de turno nunca se descarta en silencio. La negativa aparece como una excepción cuyo mensaje contiene `Resume rejected by --resume-drops-turn:`; trátala como determinista y reanuda de forma normal en vez de reintentar. Se reenvía siempre que no sea nulo, así que una cadena vacía llega al CLI y allí se rechaza por estar mal formada, en lugar de desactivar la protección en silencio. Se emite como `--resume-drops-turn=<value>`.
-- `sessionStore(SessionStore)`: replica las transcripciones a un store externo y reanuda desde él (consulta [Session Store](./feature-session-store.md)). Cuando se define, el SDK pasa `--session-mirror` al CLI y enruta los marcos `transcript_mirror` a `store.appendAsync(...)`. La validación previa rechaza `continueConversation + sessionStore` sin soporte de `listSessions()` y `sessionStore + enableFileCheckpointing`.
+- `sessionStore(SessionStore)`: replica las transcripciones a un store externo y reanuda desde él (consulta [Session Store](./feature-session-store.md)). Cuando se define, el SDK pasa `--session-mirror` al CLI y enruta los marcos `transcript_mirror` a `store.appendAsync(...)`. La validación previa rechaza `continueConversation + sessionStore` sin soporte de `listSessions()` y `sessionStore + enableFileCheckpointing`. Un store lento retiene al lector durante el vaciado previo a cada `ResultMessage` (las llamadas de control esperan con él), y `close()` espera al vaciado final; cada espera dura hasta 181 s por defecto.
 - `sessionStoreFlush(SessionStoreFlushMode)`: cuándo se vuelcan al `sessionStore` las entradas del espejo de transcripción. `BATCHED` (por defecto) agrupa entradas y vuelca una vez por turno o cuando el búfer supera 500 entradas / 1 MiB; `EAGER` programa un volcado en segundo plano tras cada marco, para una entrega casi en tiempo real. Se ignora si `sessionStore` no está definido. Consulta [Modo de volcado](./feature-session-store.md#modo-de-volcado-batched-frente-a-eager).
 - `loadTimeoutMs(long)`: tiempo de espera por llamada de `store.loadAsync()` / `listSubkeysAsync()` durante la materialización de la reanudación, en milisegundos (por defecto `60_000`). Un valor de `0` significa expiración inmediata; valores muy grandes lo desactivan en la práctica.
 
 ### Límites
-- `maxTurns(Integer)`: máximo de turnos de conversación
+- `maxTurns(Integer)`: máximo de turnos de conversación; `0` se trata como no definido y no envía `--max-turns`
 - `maxBudgetUsd(Double)`: coste máximo en USD
 - `maxBufferSize(Integer)`: bytes máximos del búfer de stdout
 - `thinking(ThinkingConfig)`: configuración del razonamiento extendido
 - `effort(String)`: nivel de profundidad del razonamiento (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`). `"xhigh"` es propio de Opus 4.7 y recae en `"high"` en los demás modelos.
 - `effort(EffortLevel)`: igual que el anterior, pero con seguridad de tipos usando el enum [`EffortLevel`](feature-configuration-options.md#enum-effortlevel) (`LOW`, `MEDIUM`, `HIGH`, `XHIGH`, `MAX`). Pasa `null` para limpiarlo.
 - `maxThinkingTokens(Integer)`: **OBSOLETO**. Usa `thinking()`. En los modelos más recientes el valor se trata como encendido/apagado (0 = desactivado, cualquier otro = adaptativo)
-- `maxMsgQSize(Integer)`: tamaño máximo de la cola de mensajes
+- `maxMsgQSize(Integer)`: tamaño máximo de la cola de mensajes (1000 por defecto, como mínimo 1). Una cola llena frena al lector hasta que consumes un mensaje (contrapresión); no se descarta ningún mensaje. Es un límite flexible: mientras una petición de control saliente (`interrupt()`, `setModel()`, ...) espera su respuesta, el lector sigue leyendo más allá del límite para que la respuesta pueda llegar
 
 ### Modelo
-- `model(String)`: nombre del modelo de IA
+- `model(String)`: nombre del modelo de IA; una cadena vacía no envía `--model` (igual que con `fallbackModel`, `permissionPromptToolName`, `resume`, `sessionId` y `settings`)
 - `fallbackModel(String)`: modelo de reserva
 - `betas(List<SdkBeta>)`: funciones beta
 
@@ -88,17 +88,17 @@ options.toBuilder()
 - `addDirs(List<Path>)`: directorios de contexto adicionales
 - `env(Map<String, String>)`: variables de entorno, fusionadas sobre el entorno heredado. El SDK también establece `CLAUDE_CODE_ENTRYPOINT` (sobrescribible), `CLAUDE_AGENT_SDK_VERSION` y `CLAUDE_CODE_SDK_READS_SESSION_STATE=1` salvo que ya estén nombradas, y descarta un `CLAUDE_AGENT_SDK_DERIVED_CLIENT_APP` heredado; consulta [env()](./feature-configuration-options.md#env)
 - `clientApp(String)`: identificador de tu aplicación o biblioteca (por ejemplo, `"my-app/1.0.0"`), enviado en las peticiones a la API como `CLAUDE_AGENT_SDK_CLIENT_APP`; prevalece sobre `env` y sobre el valor heredado, y `""` no envía ninguno. Consulta [clientApp()](./feature-configuration-options.md#clientapp)
-- `extraArgs(Map<String, String>)`: flags adicionales del CLI; claves sin el `--` inicial, valor en blanco para un flag sin valor
+- `extraArgs(Map<String, ? extends @Nullable String>)`: flags adicionales del CLI; claves sin el `--` inicial, valor `null` o en blanco para un flag sin valor. Se pasan en el orden de iteración del mapa (usa un `LinkedHashMap` cuando el orden importe); consulta [extraArgs()](./feature-configuration-options.md#extraargs)
 
 ### Callbacks
-- `stderrCallback(Consumer<String>)`: callback de stderr
+- `stderrCallback(Consumer<String>)`: se invoca una vez por cada línea de stderr del CLI (separadas por `\n`, sin espacios finales, omitiendo las líneas en blanco). Sin él, el CLI hereda el stderr de la JVM; consulta [stderrCallback()](./feature-configuration-options.md#stderrcallback)
 
 ### Hooks
 - `hooks(Map<HookEvent, List<HookMatcher>>)`: callbacks de hook. Un `HookMatcher` puede definir `timeoutSeconds` y una política `onFailure` (`HookOnFailure.CONTINUE` o `BLOCK`); consulta [Hooks → Política de fallo](./feature-hooks.md#política-de-fallo-onfailure)
 - `includeHookEvents(boolean)`: cuando es `true`, el CLI envía los eventos del ciclo de vida de los hooks (`PreToolUse`, `PostToolUse`, `Stop`, …) al flujo de mensajes como objetos `HookEventMessage`. Los eventos de hook `SessionStart` y `Setup` se emiten en cualquier caso. Corresponde a `--include-hook-events`. Consulta [Hooks → Eventos del ciclo de vida en el flujo](./feature-hooks.md#eventos-del-ciclo-de-vida-de-los-hooks-en-el-flujo).
 
 ### Avanzado
-- `user(String)`: identidad del usuario
+- `user(String)`: **obsoleto, sin soporte.** `connect()` lanza `CLIConnectionException` cuando está definido, ya que Java no puede ejecutar el CLI como otro usuario del sistema operativo; consulta [user()](./feature-configuration-options.md#user)
 - `includePartialMessages(boolean)`: emite un `StreamEvent` por cada evento del stream de la API (`--include-partial-messages`)
 - `verbatimPrompts(boolean)`: marca como `client_composed` todos los mensajes de usuario que envía el SDK, para que Claude Code los entregue tal como están escritos: sin expansión de `@path` ni despacho de comandos slash. Mientras está activo, sobrescribe cualquier valor por mensaje. Requiere Claude Code 2.1.248+ (el SDK avisa con CLI más antiguos). Consulta [verbatimPrompts()](./feature-configuration-options.md#verbatimprompts)
 - `forwardSubagentText(boolean)`: cuando es `true`, los bloques de texto y de razonamiento de los subagentes se reenvían al flujo de mensajes junto con los bloques `tool_use` / `tool_result`, que siempre se reenvían. Se envía en la petición de control `initialize` (sin flag de CLI). Consulta [Agentes → Observar la salida de un subagente](./feature-agents.md#observar-la-salida-de-un-subagente).
@@ -107,7 +107,7 @@ options.toBuilder()
 - `skills(List<String>)`: lista de skills permitidas (inyecta automáticamente `Skill(name)` en `allowedTools` y fija `settingSources` en user/project). Los nombres deben ser exactos: los comodines, los delimitadores de reglas y los espacios alrededor lanzan `IllegalArgumentException` en `connect()`
 - `skillsAll()`: habilita todas las skills detectadas (inyecta automáticamente la herramienta `Skill` sin argumentos)
 - `sandbox(SandboxSettings)`: configuración del sandbox para comandos bash; su clave `network` configura el aislamiento de red propio del sandbox (las restricciones a nivel de herramienta siguen en las reglas de permisos)
-- `plugins(List<SdkPluginConfig>)`: directorios de plugins locales, `SdkPluginConfig.local(path)` → `--plugin-dir`
+- `plugins(List<SdkPluginConfig>)`: directorios de plugins locales, `SdkPluginConfig.local(path)` → `--plugin-dir`; cualquier otro tipo lanza `IllegalArgumentException` en `connect()`
 - `outputFormat(Map<String, Object>)`: formato de salida
 - `enableFileCheckpointing(boolean)`: habilita los checkpoints de archivos para `rewindFiles()`; incompatible con `sessionStore`
 

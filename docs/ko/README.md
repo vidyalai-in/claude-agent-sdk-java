@@ -429,6 +429,34 @@ try (var client = ClaudeSDK.createClient(options)) {
 }
 ```
 
+### 타입 지정 매개변수
+
+`@Tool` 메서드는 `Map` 대신 타입 지정 매개변수를 받을 수 있습니다: SDK는 그에 맞는 JSON Schema(리스트와
+배열, 열거형, `Optional`, 레코드, `UUID`, `java.time` 타입 등)를 게시하고 각 인자를 매개변수의 타입으로
+변환합니다. `@ToolParam`은 설명을 덧붙이거나, `-parameters` 없이 컴파일된 코드에서 매개변수 이름을
+지정하거나, 매개변수를 선택 사항으로 만듭니다:
+
+```java
+import in.vidyalai.claude.sdk.mcp.ToolParam;
+
+public class PaintTools {
+
+    public enum Color { WHITE, CREAM, SAGE, NAVY }
+
+    @Tool(name = "paint_walls", description = "Order paint for some walls of a room")
+    public ToolResult paintWalls(
+            @ToolParam(description = "Names of the walls to paint") List<String> walls,
+            @ToolParam(description = "Paint color") Color color,
+            @ToolParam(description = "Coats of paint (default 2)") Optional<Integer> coats) {
+        return ToolResult.text("Ordered paint for " + walls + " in " + color
+                + ", " + coats.orElse(2) + " coats.");
+    }
+}
+```
+
+전체 타입 매핑은 [docs/feature-mcp-servers.md](../feature-mcp-servers.md#1-typed-parameters-recommended)를
+참고하세요.
+
 ### SdkMcpTool 직접 사용
 
 ```java
@@ -516,6 +544,9 @@ SdkMcpTool<Map<String, Object>> crawl = SdkMcpTool.create(
 MCP 기능(리소스, 프롬프트, 자동완성)이 필요한 애플리케이션은 이 인터페이스를 직접 구현해
 동일한 방식으로 등록할 수 있습니다.
 [docs/feature-mcp-servers.md](../feature-mcp-servers.md#custom-mcp-handlers)를 참고하세요.
+
+`SdkMcpServer` 하나를 여러 클라이언트가 동시에 공유할 수 있습니다: 각 클라이언트가 자신만의 세션을
+열기 때문에(`openSession()`) 호출, 취소, 종료가 서로 섞이지 않습니다.
 
 ### 외부 MCP 서버 대비 장점
 
@@ -1051,7 +1082,9 @@ CLI는 `error_max_turns`나 `error_max_budget_usd` 같은 상황을 하나의 �
 던지고, 모아 둔 메시지는 `partialMessages()`와 편의 접근자 `resultMessage()`를 통해
 돌려줍니다. 그 `getCause()`가 바로 위에서 설명한 `ResultException`입니다. `maxTurns`나
 `maxBudgetUsd`를 설정했다면 반드시 이 예외를 잡으세요. 직접 설정한 한도에 도달하는 것은
-충돌이 아니라 예상된 결과입니다.
+충돌이 아니라 예상된 결과입니다. 0.2.6부터는 `ClaudeSDK.query(...)`를 실행하는 스레드가 인터럽트될 때도
+지금까지 받은 메시지와 함께 이 예외를 던지고 인터럽트 플래그를 복원합니다. 스트리밍 이터레이터는 이 경우
+`ClaudeSDKException`을 던집니다.
 
 ## 스트리밍 이벤트
 

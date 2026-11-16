@@ -22,8 +22,9 @@ public record SdkPluginConfig(String type, String path) {
 ```
 
 サポートされているのは `"local"` タイプだけです。トランスポートは `local` プラグインごとに CLI コマンドへ
-`--plugin-dir <path>` を追加します。それ以外の `type` を持つ設定はエラーなしでスキップされるので、設定は
-常に `local(...)` で作成してください。
+`--plugin-dir <path>` を追加します。0.2.6 以降、それ以外の `type` を持つ設定があると、Python SDK が
+`ValueError` を送出するのと同様に、`connect()` が `IllegalArgumentException`（`Unsupported plugin type: …`）を
+投げます。以前は警告付きでスキップされていました。設定は `local(...)` で作成してください。
 
 ## プラグインの設定
 

@@ -230,14 +230,88 @@ public CompletableFuture<ToolResult> greet(String firstName, String lastName) {
 ```
 
 **要件：**
-- パラメーター名を保持するため `-parameters` フラグ付きでコンパイルする
-- パラメーターは自動的に JSON Schema にマッピングされる
-- 型のマッピング：
-  - `String` → `"string"`
-  - `int`、`Integer`、`long`、`Long` → `"integer"`
-  - `double`、`Double`、`float`、`Float` → `"number"`
-  - `boolean`、`Boolean` → `"boolean"`
-  - `Map<String, Object>` → `"object"`
+- パラメーター名を保持するため `-parameters` フラグ付きでコンパイルする。または、各パラメーターに
+  [`@ToolParam(name = ...)`](#toolparam-でパラメーターを説明する) で名前を付ける
+- パラメーターは自動的に JSON Schema にマッピングされ、各引数は同じ型ごとのルールでパラメーターの Java 型に
+  変換される。そのため、スキーマが許すものはメソッドが受け取れるものと正確に一致する
+
+**型のマッピング**（0.2.6 以降。それ以前は、`List`、配列、enum、`char`、`Optional` のパラメーターには、妥当な
+引数をすべて拒否するスキーマが付いていました）：
+
+| Java のパラメーター型 | 公開されるスキーマ | メソッドが受け取るもの |
+|---|---|---|
+| `String`、`CharSequence` | `{"type": "string"}` | その文字列 |
+| `char`、`Character` | `{"type": "string", "minLength": 1, "maxLength": 1}` | その文字 |
+| `int`、`long`、`short`、`byte`、それらのボックス型、`BigInteger` | `{"type": "integer"}` | その数値 |
+| `double`、`float`、その他の `Number` 型 | `{"type": "number"}` | その数値 |
+| `boolean`、`Boolean` | `{"type": "boolean"}` | その真偽値 |
+| enum | `{"type": "string", "enum": [...]}`（定数の JSON 名） | その定数 |
+| `List<T>`、`Set<T>`、その他のコレクション、`T[]` | `{"type": "array", "items": <T>}` | `T` のコレクションまたは配列 |
+| `Optional<T>` | `T` のスキーマ。必須ではない | 省略された場合は `Optional.empty()` |
+| `UUID` / `URI` | `{"type": "string", "format": "uuid"}` / `"uri"` | パースされた値 |
+| `LocalDate` | `{"type": "string", "format": "date"}` | パースされた値 |
+| `Instant`、`OffsetDateTime` | `{"type": "string", "format": "date-time"}` | パースされた値 |
+| `Path`、`File`、`ZoneId`、その他の `java.time` 型 | `{"type": "string"}` | パースされた値 |
+| `Map<String, V>` | `{"type": "object", "additionalProperties": <V>}`（`Map<String, Object>` では `true`） | 値が変換されたマップ |
+| レコード | コンポーネントごとに 1 つのプロパティを持つ入れ子のオブジェクト | そのレコード |
+| `Object` | `{"type": "object"}` | JSON の値そのまま |
+
+レコードのコンポーネントは、`Optional` であるか `@ToolParam(required = false)` が付いていない限り必須です。
+コンポーネントに付けた `@ToolParam` は、パラメーターの場合と同じようにそれを説明します。必須ではない
+パラメーターが省略された場合は `null`（プリミティブの場合はゼロ値）を受け取ります。
+
+#### `@ToolParam` でパラメーターを説明する
+
+`@ToolParam(name, description, required)` は `@Tool` メソッドのパラメーターまたはレコードのコンポーネントに
+付けるアノテーションです。Python SDK の `Annotated[str, "..."]` に相当する Java の仕組みです：
+
+- `description` はスキーマ内のプロパティの `description` になります。これはモデルが何を渡すかを決めるために
+  読むものです。
+- `name` はモデルが使う引数名を設定します。既定は Java のパラメーター名なので、`-parameters` なしでコンパイル
+  したコードや、Java の識別子として正しくない名前の場合に必要になります。
+- `required = false` は引数を省略可能にします。`Optional` のパラメーターは、この指定にかかわらず決して必須に
+  なりません。
+
+```java
+import in.vidyalai.claude.sdk.mcp.Tool;
+import in.vidyalai.claude.sdk.mcp.ToolParam;
+import in.vidyalai.claude.sdk.mcp.ToolResult;
+import java.util.List;
+import java.util.Optional;
+
+public class PaintTools {
+
+    public enum Color { WHITE, CREAM, SAGE, NAVY }
+
+    @Tool(name = "paint_walls", description = "Order paint for some walls of a room")
+    public ToolResult paintWalls(
+            @ToolParam(description = "Names of the walls to paint") List<String> walls,
+            @ToolParam(description = "Paint color") Color color,
+            @ToolParam(description = "Coats of paint (default 2)") Optional<Integer> coats) {
+        int n = coats.orElse(2);
+        return ToolResult.text("Ordered " + (walls.size() * n) + " litres of " + color + ".");
+    }
+}
+```
+
+公開されるスキーマ：
+
+```json
+{
+    "type": "object",
+    "properties": {
+        "walls": {"type": "array", "items": {"type": "string"},
+                  "description": "Names of the walls to paint"},
+        "color": {"type": "string", "enum": ["WHITE", "CREAM", "SAGE", "NAVY"],
+                  "description": "Paint color"},
+        "coats": {"type": "integer", "description": "Coats of paint (default 2)"}
+    },
+    "required": ["walls", "color"]
+}
+```
+
+`AutoSchemaGeneration` はこのツールを CLI に対して実行し、公開するスキーマを出力します：
+`mvn exec:java -Dexec.mainClass="examples.AutoSchemaGeneration" -Dexec.args="typed" -pl examples`。
 
 #### 2. Map パラメーター
 
@@ -253,8 +327,11 @@ public CompletableFuture<ToolResult> greet(Map<String, Object> args) {
 
 **次の場合に使います：**
 - パラメーターを手動で取り出したい
-- スキーマが複雑
-- 省略可能なパラメーターが必要
+- スキーマが複雑（[明示的なスキーマ](#明示的なスキーマ)と組み合わせる）
+
+引数パラメーターが `Map` 1 つだけのメソッドは、引数オブジェクト全体を受け取り、空のオブジェクトスキーマを
+公開します。型付きパラメーターで省略可能な引数を扱うには、`Optional<T>` または `@ToolParam(required = false)`
+を使ってください。
 
 ### スキーマの自動生成
 
@@ -282,6 +359,9 @@ public CompletableFuture<ToolResult> search(String query, int limit) {
     "required": ["query", "limit"]
 }
 ```
+
+すべてのパラメーターは、`Optional` であるか `@ToolParam(required = false)` が付いていない限り必須です。
+サポートされるすべてのパラメーター型は[型のマッピング](#1-型付きパラメーター推奨)を参照してください。
 
 ### 明示的なスキーマ
 
@@ -389,6 +469,30 @@ SdkMcpTool<Map<String, Object>> searchTool = SdkMcpTool.builder("search", "Searc
     .build();
 ```
 
+#### 入力スキーマの省略記法
+
+値がすべて Java の型（`Class`、その他の `java.lang.reflect.Type`、または Jackson の `TypeReference`）である
+マップは、Python SDK の `@tool` が受け取る `{name: type}` の省略記法（`{"text": str}`）として読まれます：各キーは
+必須の引数で、その値は引数の Java 型です。サーバーはこれを、`@Tool` のパラメーターと同じ型ごとのルールで
+オブジェクトスキーマに展開します。
+
+```java
+SdkMcpTool<Map<String, Object>> shout = SdkMcpTool.create(
+    "shout",
+    "Convert text to uppercase",
+    Map.of("text", String.class),          // -> {"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}
+    args -> CompletableFuture.completedFuture(
+        ToolResult.text(((String) args.get("text")).toUpperCase())));
+```
+
+ジェネリック型には Jackson の `TypeReference` を使ってください。たとえば
+`Map.of("tags", new TypeReference<List<String>>() {})` です。それ以外のマップは JSON Schema であり、トップレベルの
+`type` があるかどうかにかかわらず、書かれたとおりに公開されます：`Map.of("type", "object")` は開いたオブジェクト
+スキーマのままで、`properties`/`required` だけのスキーマや `anyOf` は、MCP がすべての入力スキーマに求める
+`"type": "object"` を加えたうえで書かれたとおりに送られます。Python 風の `Map.of("text", "string")` のように
+JSON Schema のキーワードをまったく持たないマップは、警告として記録されます：これはどんな引数も受け付けてしまう
+うえ、省略記法では値に Java の型が必要です（`Map.of("text", String.class)`）。
+
 ### ツールからサーバーを作る
 
 ```java
@@ -482,7 +586,11 @@ Map.of(
 
 ### ToolResult
 
-ツールは `ToolResult` を返す必要があります（CompletableFuture に包んで）。
+`SdkMcpTool` のハンドラーは `CompletableFuture<ToolResult>` を返します。`@Tool` メソッドは `ToolResult` または
+`CompletableFuture<ToolResult>` のどちらかを返せます。それ以外の値は `String.valueOf` のテキストとして送られます。
+`null` を返す（または future が `null` で完了する）と、`isError` の「結果なし」の応答になります。`void`、`Void`、
+`CompletableFuture<Void>` と宣言されたメソッドは、テキストが `"null"` の成功で応答します
+（[失敗のセマンティクス](#失敗のセマンティクス)を参照）：
 
 ```java
 import in.vidyalai.claude.sdk.mcp.ToolResult;
@@ -604,6 +712,8 @@ public CompletableFuture<ToolResult> divide(double a, double b) {
 |---|---|---|
 | ハンドラーが `ToolResult.error(msg)` を返す | 結果、`isError: true` | `msg` |
 | ハンドラーがスローする、または future が失敗する | 結果、`isError: true` | 例外メッセージ。null/空白のときはそのクラス名 |
+| `SdkMcpTool` のハンドラーまたは `@Tool` メソッドが `null` を返す、または future が `null` で完了する | 結果、`isError: true` | `Tool '<name>' returned no result` / `… completed with no result`（0.2.6 より前は呼び出しに応答が返されないか、`@Tool` メソッドの `null` がテキスト `"null"` として送られていました）。例外：`void`、`Void`、または `CompletableFuture<Void>`/`CompletionStage<Void>` と宣言された `@Tool` メソッドには返す結果がないため、引き続きテキストが `"null"` の成功で応答します |
+| 結果が不正なコンテンツブロック（`text` のない text など）を含む | 結果、`isError: true` | そのブロックが不正である理由 |
 | 引数が `inputSchema` に合致しない | 結果、`isError: true` | `Input validation error: …`（ハンドラーは動かない） |
 | `inputSchema` が妥当な JSON Schema でない | 結果、`isError: true` | `… inputSchema this server cannot use …`（ハンドラーは動かない） |
 | ツール名が登録されていない | 結果、`isError: true` | `Tool '<name>' not found` |
@@ -666,13 +776,15 @@ public CompletableFuture<ToolResult> processFile(String path) {
 
 ### プロトコルのバージョン
 
-サーバーは `2025-06-18` と `2024-11-05` を、新しい順で公表します。`initialize` では、話せるバージョンをクライアントが要求していればそれをそのまま返し、そうでなければ自分が話せる最新のものを返します — 仕様が定める握手のとおりです。
+サーバーは `2025-11-25`、`2025-06-18`、`2024-11-05` を、新しい順で公表します（`2025-11-25` は 0.2.6 以降）。`initialize` では、話せるバージョンをクライアントが要求していればそれをそのまま返し、そうでなければ自分が話せる最新のものを返します — 仕様が定める握手のとおりです。
+
+`2025-11-25` を名乗るのは、この版が追加するもののうち、ツールだけのサーバーにとって必須のものが何もないからです：アイコン、タスク、URL によるエリシテーション、ツール付きのサンプリングは省略可能か能力によって制御されるものであり、入力検証の失敗はすでにツール実行エラーとして報告されており、いまや既定の方言となった JSON Schema 2020-12 は、すでに引数の検証に使われている方言です。
 
 `2025-03-26` は意図的に名乗りません。この版は JSON-RPC のバッチを*受信*側で必須としましたが、バッチはトップレベルの配列であり、これらのメッセージを運ぶコントロールリクエストはそれをマップとして型付けしているため表現できません。SDK が唯一の必須変更を守れないバージョンを名乗ることは、クライアントがそれに基づいて動く約束をすることになります。
 
 ### メソッド
 
-`initialize`、`ping`、`tools/list`、`tools/call` を実装しています。それ以外はすべて `-32601` で答えますが、これは欠落ではなく正しい動作です。サーバーは `tools` 能力のみを公表するので、準拠したクライアントが resources、prompts、completions を求めることはありません。（CLI に対して検証済み：`tools` のみを宣言するサーバーに `resources/list` や `prompts/list` が送られることはありません。）
+`initialize`、`ping`、`tools/list`、`tools/call` を実装しています。`tools/list` はツールを登録順に返します。`arguments` が存在するもののオブジェクトではない `tools/call` には `-32602` で答えます。`arguments` が存在しないか `null` の場合は、引数なしを意味します。それ以外はすべて `-32601` で答えますが、これは欠落ではなく正しい動作です。サーバーは `tools` 能力のみを公表するので、準拠したクライアントが resources、prompts、completions を求めることはありません。（CLI に対して検証済み：`tools` のみを宣言するサーバーに `resources/list` や `prompts/list` が送られることはありません。）
 
 ### 通知
 
@@ -707,7 +819,32 @@ var options = ClaudeAgentOptions.builder()
 
 CLI が何を送るかは `initialize` から返す `capabilities` で決まるため、resources を公表したハンドラーには resources が求められます。
 
-`close()` は「あなたを使っている接続が消えます」という意味であり、「停止せよ」ではありません。1 つのハンドラーが複数のクライアントに登録されうるので、冪等で、その後も使える状態でなければなりません。同じ理由から、`SdkMcpServer` は接続ごとに 1 つ登録してください — 2 つの生きた接続が 1 つのサーバーを共有すると同じ JSON-RPC id を発行しうるため、2 つ目の呼び出しは、レスポンスが誤った呼び出し側に届く危険を冒す代わりに `-32603` で拒否されます。
+`close()` は「あなたを使っている接続が消えます」という意味であり、「停止せよ」ではありません。1 つのハンドラーが複数のクライアントに登録されうるので、冪等で、その後も使える状態でなければなりません。
+
+### クライアントごとに 1 つのセッション：`openSession()`
+
+各 `ClaudeSDKClient`（または単発の `query`）は、起動時に設定されたサーバーごとに 1 回 `openSession()` を呼びます。そのサーバー宛てのすべてのメッセージを返されたハンドラーに送り、シャットダウン時には登録されたハンドラーではなく、そのハンドラーの `close()` を呼びます。
+
+`SdkMcpServer.openSession()` は新しいセッションを返します。このセッションはツールとスキーマを共有し、接続ごとのものをすべて所有します：進行中の呼び出し、それらを決着させる `notifications/cancelled`、そしてそのセッションの呼び出しだけを放棄する `close()` です。そのため、1 つの `SdkMcpServer` を任意の数の並行クライアントで共有できます。0.2.6 より前は、それらのクライアントが 1 つの呼び出しテーブルを共有していました：JSON-RPC id が衝突し、あるクライアントのキャンセルが別のクライアントの呼び出しに届くことがあり、あるクライアントのクローズが別のクライアントの呼び出しを失敗させていました。Python SDK も、クエリごとに 1 つのブリッジを持つことで同じ分離を保っています。
+
+既定の `McpMessageHandler.openSession()` は `this` を返すため、すべての接続が独自のハンドラーを共有します。これは、このメソッドが存在する前に書かれたハンドラーの挙動と同じです。接続ごとの状態（進行中のリクエスト、キャンセル）を持つ独自のハンドラーは、新しいオブジェクトを返すべきです：
+
+```java
+public class MyMcpServer implements McpMessageHandler {
+
+    @Override
+    public CompletableFuture<Map<String, Object>> handleMessage(Map<String, Object> message) {
+        ...
+    }
+
+    @Override
+    public McpMessageHandler openSession() {
+        return new MyMcpServer();   // per-connection state lives here
+    }
+}
+```
+
+1 つのセッション内では、まだ進行中の JSON-RPC id は、レスポンスが誤った呼び出し側に届く危険を冒す代わりに `-32603` で拒否されます。
 
 ## 外部 MCP サーバー
 

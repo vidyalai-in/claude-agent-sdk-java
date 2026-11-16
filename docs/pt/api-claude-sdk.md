@@ -45,7 +45,7 @@ Executa uma consulta com opções próprias.
 - `IllegalArgumentException` — se canUseTool e permissionPromptToolName forem ambos definidos
 - `CLIConnectionException` — falha de conexão
 - `ProcessException` — falha do processo do CLI
-- `QueryFailedException` — a execução terminou em um resultado de erro (`error_max_turns`, `error_max_budget_usd`, uma retomada recusada por `resumeDropsTurn`). Carrega as mensagens coletadas antes disso — veja abaixo.
+- `QueryFailedException` — a execução terminou em um resultado de erro (`error_max_turns`, `error_max_budget_usd`, uma retomada recusada por `resumeDropsTurn`) ou, desde a 0.2.6, a thread chamadora foi interrompida enquanto esperava mensagens. Carrega as mensagens coletadas antes disso — veja abaixo. Em uma interrupção, a causa é uma `ClaudeSDKException` causada pela `InterruptedException`, o CLI ainda é encerrado de forma ordenada e a flag de interrupção é restaurada (antes da 0.2.6, uma interrupção devolvia uma lista truncada).
 
 ### query(Iterator<Map<String, Object>> messageStream, ClaudeAgentOptions options)
 
@@ -255,12 +255,14 @@ Lê de `~/.claude/projects/` sem interpretar os arquivos JSONL por completo — 
 public static List<SDKSessionInfo> listSessions(Path directory)
 ```
 
-Lista as sessões de um diretório de projeto específico.
+Lista as sessões de um diretório de projeto específico e de seus worktrees do git.
+
+O diretório é canonicalizado (links simbólicos resolvidos, normalização NFC) antes de ser comparado com os diretórios de projeto. Quando ele está dentro de um repositório git com mais de um worktree, as sessões de todos os worktrees são incluídas, como em `listSessions(directory, null, true)`. Antes da 0.2.6, esta sobrecarga lia apenas o próprio diretório; passe `includeWorktrees = false` à sobrecarga de três ou quatro argumentos para manter esse comportamento.
 
 **Parâmetros**:
 - `directory` — o diretório de trabalho do projeto usado como filtro
 
-**Retorna**: `List<SDKSessionInfo>`
+**Retorna**: `List<SDKSessionInfo>` ordenada pela última modificação, da mais recente para a mais antiga
 
 ### listSessions(Path directory, Integer limit, boolean includeWorktrees)
 
@@ -490,7 +492,7 @@ public static void renameSession(
 ) throws IOException
 ```
 
-Renomeia uma sessão limitando a busca a um diretório de projeto.
+Renomeia uma sessão limitando a busca a um diretório de projeto. Quando a sessão não está no projeto desse diretório, os worktrees do git do diretório são tentados em seguida. A entrada é gravada com um append atômico que nunca cria o arquivo, então não pode sobrescrever uma linha que um CLI em execução acabou de acrescentar.
 
 **Parâmetros**:
 - `sessionId` — UUID da sessão a renomear
@@ -529,7 +531,7 @@ public static void tagSession(
 ) throws IOException
 ```
 
-Marca uma sessão limitando a busca a um diretório de projeto.
+Marca uma sessão limitando a busca a um diretório de projeto. Assim como `renameSession`, recorre aos worktrees do git do diretório e grava com um append atômico.
 
 **Parâmetros**:
 - `sessionId` — UUID da sessão a marcar
@@ -608,8 +610,10 @@ Bifurca uma sessão com ponto de truncamento opcional e título personalizado.
 **Parâmetros**:
 - `sessionId` — UUID da sessão de origem
 - `directory` — diretório de projeto (null busca em todos)
-- `upToMessageId` — corta a transcrição neste UUID de mensagem (inclusive); null copia tudo
-- `title` — título personalizado da bifurcação; null deriva do original + " (fork)"
+- `upToMessageId` — corta a transcrição neste UUID de mensagem (inclusive); null ou vazio copia tudo
+- `title` — título personalizado da bifurcação; null deriva do título personalizado, do título gerado por IA ou do primeiro prompt do original + " (fork)"
+
+A transcrição bifurcada é criada com modo `0600` em sistemas de arquivos com permissões POSIX.
 
 ### listSessions(Path directory, Integer limit, int offset, boolean includeWorktrees)
 
@@ -674,6 +678,8 @@ public static @Nullable SDKSessionInfo getSessionInfoFromStore(
 
 Lê os metadados de uma sessão a partir de um store. Devolve `null` para UUIDs inválidos, sessões
 ausentes, sessões laterais ou sessões sem resumo extraível.
+
+As entradas carregadas são serializadas em JSONL e analisadas exatamente como uma transcrição local: `fileSize` é o tamanho em bytes do JSONL, `firstPrompt` e `createdAt` vêm dos seus primeiros 64 KB, e `lastModified` é o `timestamp` da última entrada. Uma exceção lançada pelo `load()` do adaptador é propagada; ela não é tratada como sessão ausente.
 
 ### getSessionMessagesFromStore(SessionStore, String, Path, Integer, int)
 
@@ -756,7 +762,7 @@ public static ForkSessionResult forkSessionViaStore(
 ```
 
 Bifurca uma sessão em um novo ramo com UUIDs novos, através do store. Executa a mesma transformação de
-remapeamento de UUID do fork em disco — uma cópia na camada de armazenamento NÃO basta.
+remapeamento de UUID do fork em disco — uma cópia na camada de armazenamento NÃO basta. Sem `title`, o título do fork recorre ao título personalizado, ao título gerado por IA ou ao primeiro prompt da origem, como em disco.
 
 **Lança**: `IllegalArgumentException` para UUIDs inválidos; `FileNotFoundException` se a sessão de
 origem não for encontrada no store.

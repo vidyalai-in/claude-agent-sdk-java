@@ -230,14 +230,91 @@ public CompletableFuture<ToolResult> greet(String firstName, String lastName) {
 ```
 
 **Requisitos:**
-- Compila con la bandera `-parameters` para conservar los nombres de los parámetros
-- Los parámetros se mapean automáticamente a JSON Schema
-- Mapeo de tipos:
-  - `String` → `"string"`
-  - `int`, `Integer`, `long`, `Long` → `"integer"`
-  - `double`, `Double`, `float`, `Float` → `"number"`
-  - `boolean`, `Boolean` → `"boolean"`
-  - `Map<String, Object>` → `"object"`
+- Compila con la bandera `-parameters` para conservar los nombres de los parámetros, o da nombre a
+  cada parámetro con [`@ToolParam(name = ...)`](#describir-parámetros-con-toolparam)
+- Los parámetros se mapean automáticamente a JSON Schema, y cada argumento se convierte al tipo Java
+  del parámetro con la misma regla por tipo, de modo que lo que admite el esquema es exactamente lo
+  que el método puede recibir
+
+**Mapeo de tipos** (desde la 0.2.6; antes, un parámetro `List`, array, enum, `char` u `Optional`
+recibía un esquema que rechazaba todos los argumentos válidos):
+
+| Tipo Java del parámetro | Esquema publicado | Lo que recibe el método |
+|---|---|---|
+| `String`, `CharSequence` | `{"type": "string"}` | la cadena |
+| `char`, `Character` | `{"type": "string", "minLength": 1, "maxLength": 1}` | el carácter |
+| `int`, `long`, `short`, `byte`, sus envoltorios, `BigInteger` | `{"type": "integer"}` | el número |
+| `double`, `float`, otros tipos `Number` | `{"type": "number"}` | el número |
+| `boolean`, `Boolean` | `{"type": "boolean"}` | el booleano |
+| un enum | `{"type": "string", "enum": [...]}` (los nombres JSON de las constantes) | la constante |
+| `List<T>`, `Set<T>`, otras colecciones, `T[]` | `{"type": "array", "items": <T>}` | una colección o array de `T` |
+| `Optional<T>` | el esquema de `T`, no obligatorio | `Optional.empty()` cuando se omite |
+| `UUID` / `URI` | `{"type": "string", "format": "uuid"}` / `"uri"` | el valor analizado |
+| `LocalDate` | `{"type": "string", "format": "date"}` | el valor analizado |
+| `Instant`, `OffsetDateTime` | `{"type": "string", "format": "date-time"}` | el valor analizado |
+| `Path`, `File`, `ZoneId`, otros tipos de `java.time` | `{"type": "string"}` | el valor analizado |
+| `Map<String, V>` | `{"type": "object", "additionalProperties": <V>}` (`true` para `Map<String, Object>`) | el mapa, con los valores convertidos |
+| un record | un objeto anidado, con una propiedad por componente | el record |
+| `Object` | `{"type": "object"}` | el valor JSON tal cual |
+
+Un componente de record es obligatorio salvo que sea `Optional` o esté marcado con
+`@ToolParam(required = false)`, y `@ToolParam` en un componente lo describe igual que describe un
+parámetro. Un parámetro que no es obligatorio y se omite recibe `null`, o el valor cero en el caso de
+un primitivo.
+
+#### Describir parámetros con `@ToolParam`
+
+`@ToolParam(name, description, required)` anota un parámetro de un método `@Tool` o un componente de
+record. Es el equivalente en Java del `Annotated[str, "..."]` del SDK de Python:
+
+- `description` pasa a ser la `description` de la propiedad en el esquema, que es lo que lee el
+  modelo para decidir qué pasar.
+- `name` fija el nombre de argumento que usa el modelo. Por defecto es el nombre del parámetro Java,
+  así que es lo que necesitas para código compilado sin `-parameters`, o para un nombre que no es un
+  identificador Java válido.
+- `required = false` vuelve opcional el argumento. Un parámetro `Optional` nunca es obligatorio,
+  diga lo que diga esto.
+
+```java
+import in.vidyalai.claude.sdk.mcp.Tool;
+import in.vidyalai.claude.sdk.mcp.ToolParam;
+import in.vidyalai.claude.sdk.mcp.ToolResult;
+import java.util.List;
+import java.util.Optional;
+
+public class PaintTools {
+
+    public enum Color { WHITE, CREAM, SAGE, NAVY }
+
+    @Tool(name = "paint_walls", description = "Order paint for some walls of a room")
+    public ToolResult paintWalls(
+            @ToolParam(description = "Names of the walls to paint") List<String> walls,
+            @ToolParam(description = "Paint color") Color color,
+            @ToolParam(description = "Coats of paint (default 2)") Optional<Integer> coats) {
+        int n = coats.orElse(2);
+        return ToolResult.text("Ordered " + (walls.size() * n) + " litres of " + color + ".");
+    }
+}
+```
+
+Esquema publicado:
+
+```json
+{
+    "type": "object",
+    "properties": {
+        "walls": {"type": "array", "items": {"type": "string"},
+                  "description": "Names of the walls to paint"},
+        "color": {"type": "string", "enum": ["WHITE", "CREAM", "SAGE", "NAVY"],
+                  "description": "Paint color"},
+        "coats": {"type": "integer", "description": "Coats of paint (default 2)"}
+    },
+    "required": ["walls", "color"]
+}
+```
+
+`AutoSchemaGeneration` ejecuta esta herramienta contra la CLI e imprime el esquema que publica:
+`mvn exec:java -Dexec.mainClass="examples.AutoSchemaGeneration" -Dexec.args="typed" -pl examples`.
 
 #### 2. Parámetro Map
 
@@ -253,8 +330,11 @@ public CompletableFuture<ToolResult> greet(Map<String, Object> args) {
 
 **Úsalo cuando:**
 - Quieras extraer los parámetros a mano
-- El esquema sea complejo
-- Necesites parámetros opcionales
+- El esquema sea complejo (combínalo con un [esquema explícito](#esquema-explícito))
+
+Un método cuyo único parámetro de argumentos es un `Map` recibe el objeto de argumentos completo y
+publica un esquema de objeto vacío. Para argumentos opcionales con parámetros tipados, usa
+`Optional<T>` o `@ToolParam(required = false)`.
 
 ### Generación automática de esquema
 
@@ -282,6 +362,10 @@ Esquema generado:
     "required": ["query", "limit"]
 }
 ```
+
+Todos los parámetros son obligatorios salvo que sean `Optional` o estén marcados con
+`@ToolParam(required = false)`. Consulta el [mapeo de tipos](#1-parámetros-tipados-recomendado) para
+ver todos los tipos de parámetro admitidos.
 
 ### Esquema explícito
 
@@ -389,6 +473,32 @@ SdkMcpTool<Map<String, Object>> searchTool = SdkMcpTool.builder("search", "Searc
     .build();
 ```
 
+#### Forma abreviada del esquema de entrada
+
+Un mapa cuyos valores son todos tipos Java (una `Class`, otro `java.lang.reflect.Type` o un
+`TypeReference` de Jackson) se lee como la forma abreviada `{name: type}` que acepta el `@tool` del
+SDK de Python (`{"text": str}`): cada clave es un argumento obligatorio y su valor es el tipo Java
+del argumento. El servidor lo expande a un esquema de objeto con las mismas reglas por tipo que los
+parámetros de `@Tool`.
+
+```java
+SdkMcpTool<Map<String, Object>> shout = SdkMcpTool.create(
+    "shout",
+    "Convert text to uppercase",
+    Map.of("text", String.class),          // -> {"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}
+    args -> CompletableFuture.completedFuture(
+        ToolResult.text(((String) args.get("text")).toUpperCase())));
+```
+
+Usa un `TypeReference` de Jackson para un tipo genérico, por ejemplo
+`Map.of("tags", new TypeReference<List<String>>() {})`. Cualquier otro mapa es un JSON Schema y se
+publica tal como está escrito, tenga o no un `type` de nivel superior: `Map.of("type", "object")`
+sigue siendo el esquema de objeto abierto, y un esquema con solo `properties`/`required`, o un
+`anyOf`, se envía tal como está escrito más `"type": "object"`, que MCP exige en todo esquema de
+entrada. Un mapa sin ninguna palabra clave de JSON Schema, como el `Map.of("text", "string")` al
+estilo de Python, se registra con un aviso: aceptaría cualquier argumento, y la forma abreviada
+necesita tipos Java como valores (`Map.of("text", String.class)`).
+
 ### Crear el servidor a partir de las herramientas
 
 ```java
@@ -482,7 +592,11 @@ Map.of(
 
 ### ToolResult
 
-Las herramientas deben devolver `ToolResult` (envuelto en CompletableFuture):
+Un handler de `SdkMcpTool` devuelve un `CompletableFuture<ToolResult>`. Un método `@Tool` puede
+devolver un `ToolResult` o un `CompletableFuture<ToolResult>`; cualquier otro valor se envía como su
+texto `String.valueOf`. Un retorno `null` (o un future que se completa con `null`) es una respuesta
+`isError` de «sin resultado». Un método declarado `void`, `Void` o `CompletableFuture<Void>` responde
+con un éxito cuyo texto es `"null"` (consulta [Semántica de los fallos](#semántica-de-los-fallos)):
 
 ```java
 import in.vidyalai.claude.sdk.mcp.ToolResult;
@@ -604,6 +718,8 @@ Cómo llega cada tipo de fallo a quien llama:
 |---|---|---|
 | El handler devuelve `ToolResult.error(msg)` | resultado, `isError: true` | `msg` |
 | El handler lanza, o su future falla | resultado, `isError: true` | el mensaje de la excepción, o el nombre de su clase si el mensaje es nulo o vacío |
+| Un handler de `SdkMcpTool` o un método `@Tool` devuelve `null`, o su future se completa con `null` | resultado, `isError: true` | `Tool '<name>' returned no result` / `… completed with no result` (antes de la 0.2.6 la llamada nunca se respondía, o el `null` de un método `@Tool` se enviaba como el texto `"null"`). Excepción: un método `@Tool` declarado `void`, `Void` o `CompletableFuture<Void>`/`CompletionStage<Void>` no tiene resultado que dar, y sigue respondiendo con un éxito cuyo texto es `"null"` |
+| El resultado contiene un bloque de contenido malformado (texto sin `text`, …) | resultado, `isError: true` | el motivo por el que el bloque está malformado |
 | Los argumentos no encajan con `inputSchema` | resultado, `isError: true` | `Input validation error: …` (no se ejecuta el handler) |
 | `inputSchema` no es JSON Schema válido | resultado, `isError: true` | `… inputSchema this server cannot use …` (no se ejecuta el handler) |
 | El nombre de la herramienta no está registrado | resultado, `isError: true` | `Tool '<name>' not found` |
@@ -666,13 +782,15 @@ public CompletableFuture<ToolResult> processFile(String path) {
 
 ### Versión del protocolo
 
-El servidor anuncia `2025-06-18` y `2024-11-05`, de más nueva a más antigua. En `initialize` devuelve la versión que pidió el cliente cuando la habla, y en caso contrario responde con la más nueva que sí habla: el handshake que prescribe la especificación.
+El servidor anuncia `2025-11-25`, `2025-06-18` y `2024-11-05`, de más nueva a más antigua (`2025-11-25` desde la 0.2.6). En `initialize` devuelve la versión que pidió el cliente cuando la habla, y en caso contrario responde con la más nueva que sí habla: el handshake que prescribe la especificación.
+
+Se reivindica `2025-11-25` porque nada de lo que añade es obligatorio para un servidor que solo ofrece herramientas: los iconos, las tareas, la elicitación por URL y el sampling con herramientas son opcionales o dependen de capacidades, los fallos de validación de la entrada ya se notifican como errores de ejecución de herramienta, y JSON Schema 2020-12, ahora el dialecto por defecto, ya es el dialecto con el que se validan los argumentos.
 
 `2025-03-26` no se reivindica a propósito. Esa revisión hizo obligatorio *recibir* lotes JSON-RPC, y un lote es un array de nivel superior, algo que la petición de control que transporta estos mensajes tipa como mapa y no puede representar. Reivindicar una versión cuyo único cambio obligatorio el SDK no podría cumplir sería una promesa sobre la que el cliente actuaría.
 
 ### Métodos
 
-Están implementados `initialize`, `ping`, `tools/list` y `tools/call`. A cualquier otra cosa se responde `-32601`, lo cual es correcto y no una carencia: el servidor solo anuncia la capacidad `tools`, así que un cliente conforme nunca pide resources, prompts ni completions. (Verificado con la CLI: a un servidor que declara solo `tools` nunca se le envía `resources/list` ni `prompts/list`.)
+Están implementados `initialize`, `ping`, `tools/list` y `tools/call`. `tools/list` devuelve las herramientas en el orden de registro. Un `tools/call` cuyo `arguments` está presente pero no es un objeto recibe `-32602`; un `arguments` ausente o `null` significa sin argumentos. A cualquier otra cosa se responde `-32601`, lo cual es correcto y no una carencia: el servidor solo anuncia la capacidad `tools`, así que un cliente conforme nunca pide resources, prompts ni completions. (Verificado con la CLI: a un servidor que declara solo `tools` nunca se le envía `resources/list` ni `prompts/list`.)
 
 ### Notificaciones
 
@@ -707,7 +825,32 @@ var options = ClaudeAgentOptions.builder()
 
 Lo que envía la CLI depende de las `capabilities` devueltas por `initialize`, así que a un handler que anuncie resources se le pedirán.
 
-`close()` significa «la conexión que te usaba se va», no «apágate»: un mismo handler puede registrarse con más de un cliente, así que debe ser idempotente y seguir siendo utilizable después. Por la misma razón, registra un `SdkMcpServer` por conexión: dos conexiones vivas compartiendo un servidor pueden emitir el mismo id JSON-RPC, y entonces la segunda llamada se rechaza con `-32603` en lugar de arriesgarse a que una respuesta llegue a quien no llamó.
+`close()` significa «la conexión que te usaba se va», no «apágate»: un mismo handler puede registrarse con más de un cliente, así que debe ser idempotente y seguir siendo utilizable después.
+
+### Una sesión por client: `openSession()`
+
+Cada `ClaudeSDKClient` (o `query` de una sola vez) llama a `openSession()` una vez por cada servidor configurado al arrancar. Enruta todos los mensajes de ese servidor al handler devuelto y, al terminar, llama a `close()` sobre ese handler, no sobre el registrado.
+
+`SdkMcpServer.openSession()` devuelve una sesión nueva que comparte las herramientas y los esquemas y es dueña de todo lo que es propio de cada conexión: las llamadas en curso, los `notifications/cancelled` que las resuelven y `close()`, que abandona solo las llamadas de esa sesión. Así, un mismo `SdkMcpServer` puede compartirse entre cualquier número de clients concurrentes. Antes de la 0.2.6 compartían una única tabla de llamadas: sus ids JSON-RPC chocaban, la cancelación de un client podía alcanzar la llamada de otro y el cierre de un client hacía fallar las llamadas del otro. El SDK de Python mantiene la misma separación con un puente por consulta.
+
+El `McpMessageHandler.openSession()` por defecto devuelve `this`, así que todas las conexiones comparten un handler propio, que es como se comportan los handlers escritos antes de que existiera el método. Un handler propio con estado por conexión (peticiones en curso, cancelación) debería devolver un objeto nuevo:
+
+```java
+public class MyMcpServer implements McpMessageHandler {
+
+    @Override
+    public CompletableFuture<Map<String, Object>> handleMessage(Map<String, Object> message) {
+        ...
+    }
+
+    @Override
+    public McpMessageHandler openSession() {
+        return new MyMcpServer();   // per-connection state lives here
+    }
+}
+```
+
+Dentro de una sesión, un id JSON-RPC que todavía está en curso se rechaza con `-32603` en lugar de arriesgarse a que una respuesta llegue a quien no llamó.
 
 ## Servidores MCP externos
 

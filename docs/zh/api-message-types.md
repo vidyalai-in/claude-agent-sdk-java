@@ -42,8 +42,9 @@ record UserMessage(
     Object content,                               // String or List<ContentBlock>
     @Nullable String uuid,                        // Unique message identifier
     @Nullable String parentToolUseId,             // Set when inside a subagent tool use
-    @Nullable Map<String, Object> toolUseResult,  // Tool execution metadata
-    @Nullable MessageOrigin origin                // Provenance; null when unattributed
+    @Nullable Map<String, Object> toolUseResult,  // Tool execution metadata (a non-object value is wrapped; deprecated)
+    @Nullable MessageOrigin origin,               // Provenance; null when unattributed
+    @Nullable Object toolUseResultRaw             // tool_use_result exactly as sent (Map, String, List, Number or Boolean)
 ) implements Message {
     String type();                    // Returns "user"
     @Nullable String contentAsString();           // Content as String, or null if structured
@@ -51,8 +52,14 @@ record UserMessage(
 }
 ```
 
-不含 `origin` 的 4 参数向后兼容构造函数仍然可用。`origin` 会在被注入的轮次（任务通知、通道/对等消息）
+不含 `toolUseResultRaw` 的向后兼容构造函数（5 参数，会将其设为 `toolUseResult`）以及不含 `origin` 的
+向后兼容构造函数（4 参数）仍然可用。`origin` 会在被注入的轮次（任务通知、通道/对等消息）
 以及 CLI 回放的用户消息上被填充；工具结果消息从不携带它。参见 [MessageOrigin](#messageorigin)。
+
+`toolUseResultRaw`（自 0.2.6 起）按 CLI 发送的原样保存 `tool_use_result`，即使它不是 JSON 对象；它对应
+Python SDK 的 `tool_use_result` 所保存的内容。当 CLI 发送的是对象时，`toolUseResult` 就是同一个 map。
+其他任何值都会被包装为 `{"unknown": value}`（值本身，而不是它的 `toString()`），这种包装已被弃用：
+请改为读取 `toolUseResultRaw`。
 
 ## AssistantMessage
 
@@ -68,7 +75,8 @@ record AssistantMessage(
     @Nullable String sessionId,                   // Session ID this message belongs to
     @Nullable String uuid,                        // Unique identifier in the session transcript
     @Nullable String userMessageUuid,             // uuid of the user message this turn is answering
-    @Nullable List<String> userMessageUuids       // uuid of every user message this turn has taken in so far
+    @Nullable List<String> userMessageUuids,      // uuid of every user message this turn has taken in so far
+    @Nullable Object errorRaw                     // top-level "error" exactly as sent (normally a String)
 ) implements Message {
     String type();              // Returns "assistant"
     String getTextContent();    // Concatenates text from all TextBlock instances
@@ -83,9 +91,19 @@ new AssistantMessage(content, model, parentToolUseId, error)  // usage and all l
 new AssistantMessage(content, model, parentToolUseId, error, usage)  // messageId and later fields default to null
 ```
 
-不含 `userMessageUuid` 与 `userMessageUuids` 的 9 参数构造函数也被保留。这两个字段只会在其值被设置或
+不含 `errorRaw` 的 11 参数构造函数（会将其设为 `error.getValue()`）以及不含 `userMessageUuid` 与
+`userMessageUuids` 的 9 参数构造函数也被保留。`userMessageUuid` 与 `userMessageUuids` 只会在其值被设置或
 发生变化后的第一条顶层助手消息上设置（这可能发生在某一轮的中途），在其他所有消息上都为 null。参见
 [将结果与你的提示词对应起来](#将结果与你的提示词对应起来)。
+
+当 CLI 发送的值是当前 SDK 版本无法识别的，或者不是字符串时，`error` 读作 `AssistantMessageError.UNKNOWN`。
+`errorRaw`（自 0.2.6 起）保留线上的原始值，因此你仍然可以看到它是什么：
+
+```java
+if (assistant.error() == AssistantMessageError.UNKNOWN) {
+    System.err.println("Unrecognized error: " + assistant.errorRaw());
+}
+```
 
 ### AssistantMessageError
 
@@ -698,7 +716,7 @@ record TaskNotificationMessage(
     String subtype,                  // always "task_notification"
     Map<String, Object> data,        // raw message data
     String taskId,                   // unique task identifier
-    TaskNotificationStatus status,   // COMPLETED, FAILED, or STOPPED
+    @Nullable TaskNotificationStatus status, // COMPLETED, FAILED, STOPPED; null if unknown (see statusValue())
     String outputFile,               // path to task output file
     String summary,                  // human-readable summary
     String uuid,                     // message UUID
@@ -706,9 +724,13 @@ record TaskNotificationMessage(
     @Nullable String toolUseId,      // tool use ID (may be null)
     @Nullable TaskUsage usage        // final usage statistics (may be null)
 ) implements Message {
-    String type();  // Returns "system"
+    String type();                   // Returns "system"
+    @Nullable String statusValue();  // the status string exactly as sent
 }
 ```
+
+当 CLI 发送了当前 SDK 版本无法识别的状态（或没有发送状态）时，`status()` 为 `null`；此时
+`statusValue()` 保存线上的字符串。在 0.2.5 及之前的版本中，未知状态会终止消息流。
 
 ### TaskNotificationStatus
 
@@ -719,7 +741,8 @@ enum TaskNotificationStatus {
     STOPPED;    // "stopped"
 
     String getValue();
-    static TaskNotificationStatus fromValue(String);
+    static TaskNotificationStatus fromValue(String);                      // throws on unknown
+    static @Nullable TaskNotificationStatus fromValueOrNull(String);      // null on unknown/null
 }
 ```
 

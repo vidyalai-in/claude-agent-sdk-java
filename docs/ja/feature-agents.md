@@ -78,8 +78,35 @@ AgentDefinition compat = new AgentDefinition(
 | `initialPrompt` | `String`（null 可） | エージェント開始時に送られる初期プロンプト |
 | `maxTurns` | `Integer`（null 可） | そのエージェントの最大ターン数。null なら無制限 |
 | `background` | `Boolean`（null 可） | そのエージェントをバックグラウンドで実行する |
-| `effort` | `String`（null 可） | エフォートレベル：`"low"`、`"medium"`、`"high"`、`"xhigh"`、`"max"`。`"xhigh"` は Opus 4.7 専用で、他のモデルでは `"high"` にフォールバックします。[`EffortLevel`](feature-configuration-options.md#effortlevel-列挙型) 列挙型も参照してください。 |
+| `effort` | `String`（null 可） | エフォートレベル：`"low"`、`"medium"`、`"high"`、`"xhigh"`、`"max"`。`"xhigh"` は Opus 4.7 専用で、他のモデルでは `"high"` にフォールバックします。[`EffortLevel`](feature-configuration-options.md#effortlevel-列挙型) 列挙型も参照してください。エフォートが数値の場合は null です。 |
 | `permissionMode` | `String`（null 可） | そのエージェントの権限モード |
+| `numericEffort` | `Integer`（null 可） | レベル名ではなく数値で表したエフォート（0.2.6 以降）。`effort` と `numericEffort` のうち設定できるのは多くとも一方だけで、両方を指定するとコンストラクタが `IllegalArgumentException` を投げます |
+
+**エフォート。** `withEffort(...)` でコピーに設定します。これはレベル名、`EffortLevel`、または数値を受け取ります
+（いずれも 0.2.6 以降）。Python SDK の `effort: EffortLevel | int` と同様に、どちらの形式も同じ `"effort"` キーで
+CLI に送られます：レベルは文字列として、数値は JSON の数値として送られます。それぞれの呼び出しはもう一方の形式を
+置き換えるので、`withEffort(32000)` は `effort()` をクリアし、`withEffort("high")` は `numericEffort()` を
+クリアします。
+
+```java
+import in.vidyalai.claude.sdk.types.config.EffortLevel;
+
+AgentDefinition tester = new AgentDefinition(
+        "Creates and runs tests",
+        "You are a testing expert.",
+        List.of("Read", "Write", "Bash"),
+        "sonnet")
+    .withEffort(32000);                  // "effort": 32000
+
+AgentDefinition reviewer = tester.withEffort(EffortLevel.HIGH);   // "effort": "high"
+AgentDefinition quick = tester.withEffort("low");                 // "effort": "low"
+```
+
+`AgentsExample` はテストランナーのエージェントに数値のエフォートを設定しています。
+
+このレコードには 0.2.6 で末尾のコンポーネント `numericEffort` が追加されました。以前のコンストラクタはすべて
+残されていますが、レコードの分解パターン（JDK 21+）ではこれを追加する必要があります。`mcpServers` 内の MCP
+設定レコードは、エージェントが CLI に送られるときに `"type"` を保持します（0.2.6 より前は失われていました）。
 
 **model フィールド：** `model` フィールドは短いエイリアス（`"sonnet"`、`"opus"`、`"haiku"`、
 `"inherit"`）または完全なモデル ID（例：`"claude-sonnet-4-5"`）を受け付けます。

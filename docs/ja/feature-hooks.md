@@ -86,6 +86,10 @@ record HookContext(
 SDK は、返された future の完了を待ってから CLI に応答します。同期的な処理では
 `CompletableFuture.completedFuture(...)` を返してください。
 
+Python SDK と同様に、SDK はこの待機に独自の時間制限を設けません。CLI がマッチャーの `timeoutSeconds`
+（既定は 60 秒）を強制し、期限が切れると `control_cancel_request` を送ります。0.2.6 より前は SDK も
+すべてのコールバックを 60 秒で打ち切っていたため、自身の `timeout` がそれより長いフックは失敗していました。
+
 コールバックが例外を投げた場合、例外的に完了する future を返した場合、`null` で完了した場合、
 または `null` の future を返した場合は、エラーとして応答されます。意見のないコールバックは
 `null` ではなく、必ず `HookOutput.empty()` を返してください。エラーによってアクションが続行されるか
@@ -94,7 +98,10 @@ SDK は、返された future の完了を待ってから CLI に応答します
 CLI がフック呼び出しを放棄した場合（たとえばターンが中断されたときに `control_cancel_request` を
 送ってきた場合）、SDK はコールバックが返した future をキャンセルし、それを待っているスレッドに割り込み、
 応答は送りません。自分のスレッドをブロックするコールバックは `InterruptedException` を受け取り、
-処理を別のスレッドに渡すコールバックは、キャンセルされた future に反応できます。
+処理を別のスレッドに渡すコールバックは、キャンセルされた future に反応できます。クライアントを閉じると、
+進行中のコールバックが同じ方法で一度にキャンセルされます。フック自身がクライアントを閉じることもできます
+（0.2.6 以降）：CLI にはそれでも stdin の EOF と猶予期間が与えられ、閉じようとしているスレッドは割り込まれず、
+そのフック自身のリクエストには応答が返されないままになります。
 
 > **ディスパッチ順序：** 同じイベントに複数のマッチャーが登録されている場合、CLI は一致するフック
 > コールバックを順番にではなく**並行に**（並列で）ディスパッチします。各フックは互いに独立するよう
@@ -147,6 +154,7 @@ HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), nu
 | `permissionMode()` | `@Nullable String` | 現在の権限モード |
 | `promptId()` | `@Nullable String` | 処理中のユーザープロンプトの UUID。OpenTelemetry イベントの `prompt.id` 属性と一致します。最初のユーザー入力までは null です |
 | `effort()` | `@Nullable HookEffort` | 現在のターンで有効な effort。`HookEffort(String level)` として表されます（例：`"low"`、`"high"`、`"max"`。選択されたモデルに合わせて引き下げられた後の値）。effort をサポートするモデルで、ツール使用のコンテキスト内で発火するフックに存在します |
+| `raw()` | `Map<String, Object>` | CLI が送ったとおりの入力。レコードがモデル化していないものも含め、すべてのキーを含みます。変更不可。コンストラクタで構築した入力では空です（0.2.6 以降） |
 
 イベント固有のフィールド：
 
@@ -160,12 +168,34 @@ HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), nu
 | `StopHookInput` | `stopHookActive`、`lastAssistantMessage`、`backgroundTasks`、`sessionCrons` |
 | `SubagentStartHookInput` | `agentId`、`agentType` |
 | `SubagentStopHookInput` | `stopHookActive`、`agentId`、`agentTranscriptPath`、`agentType`、`lastAssistantMessage`、`backgroundTasks`、`sessionCrons` |
-| `PreCompactHookInput` | `trigger`（`CompactTriggerType`）、`customInstructions` |
+| `PreCompactHookInput` | `trigger`（`CompactTriggerType`。この SDK が知らない値の場合は `null`）、`customInstructions` |
 | `NotificationHookInput` | `message`、`title`、`notificationType` |
 
 CLI が省略することのあるフィールドは、存在しない場合 `null` になります：`permissionMode`、`promptId`、
 `effort`、ツール入力の `agentId`／`agentType`、`isInterrupt`、`durationMs`、`lastAssistantMessage`、
 `backgroundTasks`、`sessionCrons`、`permissionSuggestions`、`title`、`customInstructions`。
+`PreCompactHookInput.trigger()` も、この SDK バージョンが知らないトリガーを CLI が送った場合は `null` に
+なります。0.2.6 より前は、そのような値があるとフックが失敗していました。
+
+### SDK より新しいフィールドの読み取り
+
+Python SDK がフックに生の dict を渡すのと同様に、`raw()` はすべてのフックに CLI が送ったとおりの入力を
+渡します。新しい CLI が送るものの型付きレコードがまだモデル化していないキーや、`null` の enum の背後にある
+ワイヤ上の値に使ってください：
+
+```java
+HookMatcher.HookCallback onCompact = (input, context) -> {
+    if (input instanceof PreCompactHookInput compact && compact.trigger() == null) {
+        System.out.println("Unknown compact trigger: " + compact.raw().get("trigger"));
+    }
+    Object extra = input.raw().get("some_new_field");  // null when absent
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+```
+
+0.2.6 で、すべてのフック入力レコードに末尾のコンポーネント `raw` が追加されました。以前のコンストラクタは
+いずれも残されており `raw()` を空のままにしますが、レコードの分解パターン（JDK 21+）では新しいコンポーネントを
+追加する必要があります。
 
 ### サブエージェントの文脈
 
@@ -240,8 +270,21 @@ HookOutput.builder()
     .build();
 ```
 
-送信されるのは設定したフィールドだけです。`async` が設定されている場合は、`async` と `asyncTimeout` だけが
-送信されます。
+送信されるのは設定したフィールドだけです。`async` が設定されている場合は、`async` と `asyncTimeout`
+（および後述の追加フィールド）だけが送信されます。
+
+型付きのビルダーがモデル化していないトップレベルのキー（この SDK より新しいものなど）には、
+`extraField(key, value)` または `extraFields(map)` を使ってください（0.2.6 以降）。値はそのまま送られ、`null`
+は JSON の `null` として送られます。同じキーの型付きフィールドも設定されている場合は、追加フィールドより
+型付きフィールドが優先されます：
+
+```java
+HookOutput.builder()
+    .systemMessage("Checked")
+    .extraField("someNewKey", true)
+    .extraFields(Map.of("anotherKey", "value"))
+    .build();
+```
 
 ## フック固有の出力
 

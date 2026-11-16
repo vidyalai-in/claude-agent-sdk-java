@@ -37,9 +37,13 @@ public void connect() throws CLIConnectionException
 
 Estabelece a conexão com o CLI do Claude Code.
 
-**Segurança entre threads**: thread-safe, idempotente
+**Segurança entre threads**: thread-safe, idempotente. `connect()`, `disconnect()` e
+`close()` são serializados (desde a 0.2.6): cada um espera por outro que já esteja em execução em
+outra thread.
 
-**Lança**: `IllegalStateException` se chamado depois de close()
+**Lança**: `IllegalStateException` se chamado depois de close(), ou se `close()`
+for chamado em outra thread enquanto a conexão está em andamento (a conexão primeiro
+libera tudo o que havia preparado)
 
 ### connect(String initialMessage)
 
@@ -47,7 +51,13 @@ Estabelece a conexão com o CLI do Claude Code.
 public void connect(String initialMessage) throws CLIConnectionException
 ```
 
-Conecta e envia uma mensagem inicial.
+Conecta e envia uma mensagem inicial. Qualquer mensagem não nula é enviada, inclusive a string
+vazia (desde a 0.2.6, como no SDK Python); passe `null`, ou chame `connect()`, para conectar sem
+mensagem.
+
+**Lança**: `CLIConnectionException` se o CLI não puder ser iniciado (um executável ausente é a
+subclasse `CLINotFoundException`) ou se `user(...)` estiver definido. Uma conexão que falha limpa
+o processo, suas threads e qualquer `CLAUDE_CONFIG_DIR` temporário antes de relançar a exceção.
 
 ### isConnected()
 
@@ -68,7 +78,13 @@ public void close()
 
 Fecha a conexão e libera recursos.
 
-**Segurança entre threads**: thread-safe, idempotente
+**Segurança entre threads**: thread-safe, idempotente. Serializado com `connect()`: uma chamada
+feita enquanto outra thread conecta ou desconecta espera por ela.
+
+Desde a 0.2.6, é seguro chamá-lo de dentro de um callback `canUseTool`, de hook ou de ferramenta
+MCP do SDK, e com a flag de interrupção da thread chamadora definida. O CLI ainda recebe o EOF no
+stdin e seu período de tolerância para sair, e a flag de interrupção é preservada.
+A requisição que o callback chamador está atendendo fica sem resposta.
 
 ## Enviando mensagens
 
@@ -167,6 +183,11 @@ Obtém um iterador sobre todas as mensagens (contínuo).
 
 **Retorna**: `Iterator<Message>`
 
+**Lança** (em `hasNext()`): `ClaudeSDKException` causada por
+`InterruptedException` se a thread que espera for interrompida, com a flag de interrupção
+restaurada (desde a 0.2.6; antes, uma interrupção encerrava o stream como se ele estivesse
+completo)
+
 ### receiveResponse()
 
 ```java
@@ -178,6 +199,10 @@ Obtém as mensagens até o próximo ResultMessage (fecha automaticamente).
 **Segurança entre threads**: thread-safe
 
 **Retorna**: `Iterable<Message>`
+
+**Lança**: assim como `receiveMessages()`, `ClaudeSDKException` causada por
+`InterruptedException` se a thread que espera for interrompida, com a flag de interrupção
+restaurada
 
 ## Métodos de controle
 
@@ -298,12 +323,13 @@ public Map<String, Object> getServerInfo()
 Obtém as informações de inicialização do servidor: comandos disponíveis, estilos de saída e
 capacidades do servidor.
 
-**Retorna**: `Map<String, Object>` — as informações da resposta de `initialize`
-(`null` somente se o CLI não tiver retornado nenhuma)
+**Retorna**: `Map<String, Object>` — as informações da resposta de `initialize`.
+Um mapa vazio quando a resposta não tem corpo (desde a 0.2.6; antes era
+`null`)
 
 ## Segurança entre threads
 
-- **connect()**: thread-safe, sincronizado
+- **connect()**: thread-safe, serializado com `disconnect()` e `close()`
 - **métodos de envio**: thread-safe
 - **métodos de recebimento**: thread-safe, mas compartilham a fila
 - **métodos de controle**: thread-safe

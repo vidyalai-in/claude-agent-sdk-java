@@ -47,6 +47,8 @@ for (Message msg : ClaudeSDK.query(prompt)) {
 
 **未知の型と不正な内容は別物です。** `null` を返すのは*認識できないメッセージ型*の場合だけです。構造が不正な*既知*の型（`user` / `assistant`）は別のケースで、黙って捨てる代わりにパーサーが `MessageParseException` を発生させるため、本物のプロトコル違反が隠れることはありません。0.1.18 以降これは明示的に強制されています。`content` がリストでない `assistant` メッセージ（たとえば裸の文字列）は `"Invalid assistant content (expected list, got …)"` を、`content` リストの要素がオブジェクトでない場合（`user` と `assistant` の両方）は `"Invalid content block (expected dict, got …)"` を発生させます。以前はこれらが生の `ClassCastException` として表面化していましたが、現在はパーサーの他の構造検証と同様に `MessageParseException` として一貫して報告されます。
 
+0.2.6 以降、パーサーは Python SDK と同様に*省略可能な*フィールドに対して寛容です。明示的な `null` や型の違う省略可能フィールドによってフレームが失敗することはもうありません。コンテンツブロックでは、オブジェクトでない `input`、`content`、`source`、または真偽値でない `is_error` によってもフレームは失敗しなくなりました（型付きレコードが値を保持できない場合は `null` として読まれます）。また、`type` が文字列でないブロックやメッセージは、`ClassCastException` を発生させる代わりにスキップされます。`type` フィールドのないメッセージと、上記の構造上のエラーは、引き続き `MessageParseException` を発生させます。
+
 ## メッセージ型の階層
 
 ```
@@ -88,9 +90,17 @@ record UserMessage(
     Object content,                          // String or List<ContentBlock>
     @Nullable String uuid,                   // Unique message identifier
     @Nullable String parentToolUseId,        // Set when inside a subagent tool use
-    @Nullable Map<String, Object> toolUseResult  // Tool execution metadata (file edits, etc.)
+    @Nullable Map<String, Object> toolUseResult, // Tool execution metadata (file edits, etc.)
+    @Nullable MessageOrigin origin,          // Provenance; null when unattributed
+    @Nullable Object toolUseResultRaw        // tool_use_result exactly as sent
 ) implements Message
 ```
+
+`toolUseResultRaw`（0.2.6 以降）は CLI が送ったとおりの `tool_use_result` です：JSON オブジェクトなら
+`Map`（`toolUseResult` と同じマップ）、それ以外なら `String`、`List`、`Number`、`Boolean` のいずれかです。
+`toolUseResult` はオブジェクトでない値を `{"unknown": value}` として包みます。この包み方は非推奨なので、値が
+オブジェクトでない可能性がある場合は `toolUseResultRaw` を読んでください。`toolUseResultRaw` を持たない
+コンストラクターと `origin` を持たないコンストラクターも残されています。[メッセージの出所](#メッセージの出所)を参照してください。
 
 ### メソッド
 
@@ -130,6 +140,12 @@ if (msg instanceof UserMessage user) {
     if (toolResult != null) {
         System.out.println("File edited: " + toolResult.get("filePath"));
     }
+
+    // The value as sent, which need not be an object
+    Object raw = user.toolUseResultRaw();
+    if (raw instanceof String s) {
+        System.out.println("Tool result text: " + s);
+    }
 }
 ```
 
@@ -151,11 +167,14 @@ record AssistantMessage(
     @Nullable String sessionId,              // Session ID this message belongs to
     @Nullable String uuid,                   // Unique identifier in the session transcript
     @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
-    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
+    @Nullable List<String> userMessageUuids, // uuid of every user message this turn has taken in so far
+    @Nullable Object errorRaw                // top-level "error" exactly as sent (normally a String)
 ) implements Message
 ```
 
 `usage` マップは、利用可能な場合にターンごとの API トークン消費データを含み、`input_tokens`、`output_tokens`、キャッシュ関連のキーなどが入ります。`messageId`、`stopReason`、`sessionId`、`uuid` の各フィールドは API レベルの識別子を保持します。これらは null 許容で、部分／ストリーミングメッセージでは存在しません。`userMessageUuid` と `userMessageUuids` は、その値が設定または変更された後の最初のトップレベルのアシスタントメッセージにだけ設定されます。[プロンプトに対応する結果の特定](#プロンプトに対応する結果の特定)を参照してください。新しいフィールドを含まない後方互換のコンストラクターも用意されています。
+
+この SDK バージョンが認識しない値、または文字列でない値の場合、`error` は `UNKNOWN` になります。`errorRaw`（0.2.6 以降）はワイヤ上の値を保持するので、`assistant.errorRaw()` で CLI が実際に何を送ったかがわかります。
 
 ### メソッド
 
@@ -174,7 +193,7 @@ record AssistantMessage(
 | `RATE_LIMIT` | `"rate_limit"` | レート制限を超過 |
 | `INVALID_REQUEST` | `"invalid_request"` | リクエストの形式が不正 |
 | `SERVER_ERROR` | `"server_error"` | サーバー内部エラー |
-| `UNKNOWN` | `"unknown"` | 不明または認識できないエラー |
+| `UNKNOWN` | `"unknown"` | 不明または認識できないエラー（ワイヤ上の値は `errorRaw()` にあります） |
 
 ### 例
 
@@ -347,7 +366,7 @@ record TaskNotificationMessage(
     String subtype,                  // always "task_notification"
     Map<String, Object> data,        // raw message data
     String taskId,                   // unique task identifier
-    TaskNotificationStatus status,   // COMPLETED, FAILED, or STOPPED
+    @Nullable TaskNotificationStatus status, // COMPLETED, FAILED, STOPPED; null if unknown (see statusValue())
     String outputFile,               // path to task output file
     String summary,                  // human-readable summary
     String uuid,                     // message UUID
@@ -355,6 +374,22 @@ record TaskNotificationMessage(
     @Nullable String toolUseId,      // tool use ID (may be null)
     @Nullable TaskUsage usage        // final usage statistics (may be null)
 ) implements Message
+```
+
+| メソッド | 説明 |
+|--------|-------------|
+| `type()` | `"system"` を返す |
+| `statusValue()` | CLI が送ったとおりの `status` 文字列（存在しない場合や文字列でない場合は null） |
+| `get(String key)` | 生の data マップから値を取得する |
+
+この SDK バージョンがモデル化していないステータスを CLI が報告した場合、`status()` は `null` になります。その場合は
+`statusValue()` を読んでください。0.2.6 より前は、未知のステータスがあるとメッセージストリームが終了していました。
+
+```java
+if (msg instanceof TaskNotificationMessage n) {
+    String status = n.status() != null ? n.status().getValue() : n.statusValue();
+    System.out.println("Task " + n.taskId() + " ended: " + status);
+}
 ```
 
 ### TaskNotificationStatus
@@ -366,6 +401,8 @@ enum TaskNotificationStatus {
     STOPPED("stopped")
 }
 ```
+
+`fromValue(String)` は未知の値に対して例外を投げます。`fromValueOrNull(String)` は未知の値または `null` に対して `null` を返します。
 
 ### TaskUpdatedMessage
 

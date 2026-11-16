@@ -18,7 +18,7 @@ public record SdkPluginConfig(String type, String path) {
 }
 ```
 
-只支持 `"local"` 类型。对于每个 `local` 插件，传输层都会在 CLI 命令中添加 `--plugin-dir <path>`；`type` 为其他值的配置会被跳过且不报错，所以请始终用 `local(...)` 构建配置。
+只支持 `"local"` 类型。对于每个 `local` 插件，传输层都会在 CLI 命令中添加 `--plugin-dir <path>`。自 0.2.6 起，`type` 为其他值的配置会使 `connect()` 抛出 `IllegalArgumentException`（`Unsupported plugin type: …`），与 Python SDK 抛出 `ValueError` 的行为一致；以前这类配置会被跳过并给出警告。请用 `local(...)` 构建配置。
 
 ## 配置插件
 

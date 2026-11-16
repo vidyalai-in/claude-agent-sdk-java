@@ -223,6 +223,9 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
 
 Map は `--mcp-config` に渡される前に `{"mcpServers": {...}}` としてシリアライズされます。パスや JSON
 文字列はそのまま渡されるので、JSON 文字列でも同じトップレベルの `mcpServers` キーを使う必要があります。
+シリアライズできない Map は `CLIConnectionException` で `connect()` を失敗させます（0.2.6 以降。以前は警告を
+出してフラグを落としていました）。サーバー設定の未設定のフィールドは `null` として送られるのではなく JSON から
+省かれるので、`new McpStdioServerConfig("node")` や `new McpHttpServerConfig(url)` は期待どおりに読み込まれます。
 
 ## 権限の設定
 
@@ -304,9 +307,11 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` には `store.implementsListSessions()` が必要です。
 - `sessionStore + enableFileCheckpointing` は拒否されます — チェックポイントはローカルディスク専用です。
 
+**遅いストアはストリームを止めます。** 各 `ResultMessage` の前に、リーダーは保留中のエントリが追記されるのを待ち、その間 CLI から他には何も読みません。そのため、`interrupt()` のような制御呼び出しも待たされます。`close()` も同様に最後のフラッシュを待ちます。それぞれの待機はバッチャーのフラッシュタイムアウト（既定では 181 秒）で上限が決まっています。Python SDK も同じ挙動です。[Session Store ガイドの注意点](./feature-session-store.md#フラッシュモードbatched-と-eager)を参照してください。
+
 ### sessionStoreFlush()
 
-設定した `sessionStore` にトランスクリプトミラーのエントリをいつフラッシュするかを制御します。デフォルトは `SessionStoreFlushMode.BATCHED`（ターンごと、またはバッファ溢れ時に 1 回フラッシュ）。`SessionStoreFlushMode.EAGER` を使うと、フレームごとにバックグラウンドのフラッシュをスケジュールし、ほぼリアルタイムで送信します — 追加はエンキュー順に直列化されたままですが、遅いアダプターが読み取りループを止めることはありません。`sessionStore` が未設定の場合は無視されます。
+設定した `sessionStore` にトランスクリプトミラーのエントリをいつフラッシュするかを制御します。デフォルトは `SessionStoreFlushMode.BATCHED`（ターンごと、またはバッファ溢れ時に 1 回フラッシュ）。`SessionStoreFlushMode.EAGER` を使うと、フレームごとにバックグラウンドのフラッシュをスケジュールし、ほぼリアルタイムで送信します — 追加はエンキュー順に直列化されたままですが、遅いアダプターが result と result の間で読み取りループを止めることはありません（各 `ResultMessage` の前のフラッシュは、どちらのモードでもそれを待ちます）。`sessionStore` が未設定の場合は無視されます。
 
 ```java
 import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
@@ -336,6 +341,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```java
 .maxTurns(10)  // Limit to 10 turns
 ```
+
+`0` は未設定として扱われます：Python SDK と同様に、SDK はその場合 `--max-turns` を省略するので、CLI の既定値が適用されます。
+`model`、`fallbackModel`、`permissionPromptToolName`、`resume`、`sessionId`、`settings` の空文字列や、
+空の `mcpServersJson` も同様です：0.2.6 以降、フラグは空のまま送られるのではなく省略されます。
 
 **ユースケース**：
 - 予算の管理
@@ -387,7 +396,7 @@ CLI の stdout をバッファリングする最大バイト数。
 
 **型**：
 - `ThinkingConfigAdaptive` — 適応的思考、デフォルト 32,000 トークン
-- `ThinkingConfigEnabled(int budgetTokens)` — 固定トークン予算（0 より大きい必要があります）
+- `ThinkingConfigEnabled(int budgetTokens)` — 固定トークン予算（0 以上。`0` は `--max-thinking-tokens 0` として送られます）
 - `ThinkingConfigDisabled` — 思考トークンなし
 
 **注意**：このオプションは非推奨の `maxThinkingTokens()` より優先されます。
@@ -463,7 +472,16 @@ String wire = level.getValue(); // "xhigh"
 .maxMsgQSize(1000)
 ```
 
-高スループットのシナリオでは増やしてください。
+既定値：1000。キューが満杯になると、リーダーはコードがメッセージを取り出すまで待ちます（Python SDK の await
+される送信と同様のバックプレッシャー）。そのため、遅い消費者は出力を失う代わりに CLI を遅くします。0.2.6 より
+前は、5 秒間満杯のキューに出会ったメッセージは破棄されていました。ストリームの終端とエラーは、後から作られた
+イテレータに対しても必ず届けられます。高スループットのシナリオではサイズを増やしてください。
+
+これはソフトリミットです（0.2.6 以降）。SDK が送った制御リクエスト（`interrupt()`、`setModel()`、
+`getMcpStatus()` など）が応答を待っている間、その応答はメッセージと同じ stdout で届くため、リーダーは上限を
+超えて読み続けます。したがって、誰もキューを取り出す前に行われた制御呼び出しが、満杯のキューの後ろでタイム
+アウトすることはもうありません。何も破棄されず、順序も保たれます。値は 1 以上でなければなりません：それより
+小さい値は `IllegalArgumentException` で `connect()`（または `ClaudeSDK.query`）を失敗させます。
 
 ## モデルの設定
 
@@ -648,6 +666,17 @@ Python SDK と異なり、この SDK がデフォルトの識別子を導出す�
 値は値なしのフラグを出力します。`-` で始まる値は、別のフラグとして解釈されないよう `--flag=value` の
 形で送られます。それ以外の値は 2 つのトークンとして送られます。
 
+0.2.6 以降、マップは `null` 値（Python SDK における値なしのフラグの書き方）を保持でき、フラグはマップの反復順で
+渡されます。`Map.of` は null を保持できず、順序も定義されていないので、どちらかが重要な場合は `LinkedHashMap`
+を使ってください：
+
+```java
+Map<String, String> flags = new LinkedHashMap<>();
+flags.put("replay-user-messages", null);   // --replay-user-messages
+flags.put("debug", "api");                  // --debug api, always after it
+.extraArgs(flags)
+```
+
 ## コールバック
 
 ### canUseTool()
@@ -676,7 +705,14 @@ BiFunction<String, Object, ToolPermissionContext, CompletableFuture<PermissionRe
 
 ### stderrCallback()
 
-CLI の stderr 出力を受け取ります。CLI が出力するたびに stderr 1 行ごとに呼ばれます（このコールバックを設定したときだけパイプされます）。
+CLI の stderr 出力を受け取ります。CLI が出力するたびに stderr 1 行ごとに呼ばれます。stderr がパイプされるのは
+このコールバックを設定したときだけです。設定しない場合、0.2.6 以降は Python SDK と同様に CLI が JVM の stderr を
+継承するので、その出力はプロセスの stderr に現れます。（以前はパイプされたまま一度も読まれなかったため、パイプの
+バッファを超えて書き込んだ CLI がブロックすることがありました。）
+
+行は Python SDK と同じ方法で区切られます：`\n` でのみ分割し（進捗表示の行が使う単独の `\r` は行の中に残ります）、
+末尾の空白を取り除き、空行はスキップします。`maxBufferSize` より長い行は分割して渡され、改行のない最後の行も
+それでも届けられます。
 
 ```java
 .stderrCallback(line -> {
@@ -731,11 +767,12 @@ new HookMatcher("Bash", List.of(guard), null, HookOnFailure.BLOCK)
 
 ### user()
 
-トラッキング用のユーザー識別子を設定します。
-
-```java
-.user("user-12345")
-```
+**非推奨で、Java SDK ではサポートされていません。** Python SDK は CLI のサブプロセスをこの OS ユーザーとして
+実行しますが、Java の `ProcessBuilder` はユーザーを切り替えられません。0.2.5 までは、このオプションは受け付け
+られたうえで黙って無視され、CLI は JVM のユーザーとして実行されていました。0.2.6 以降、これが設定されていると
+`connect()`（および `ClaudeSDK.query(...)`）は `CLIConnectionException` で失敗します。オプションから取り除いて
+ください。CLI を別のユーザーとして実行するには、ユーザーを切り替えるラッパースクリプト（たとえば
+`sudo -u <user> claude "$@"` を実行するもの）を [`cliPath()`](#clipath) に指定してください。
 
 ### includePartialMessages()
 
@@ -937,7 +974,7 @@ SandboxIgnoreViolations.of(Map.of(
 ))
 ```
 
-各 `local` プラグインは `--plugin-dir <path>` になります。[プラグインシステム](./feature-plugin-system.md)を参照してください。
+各 `local` プラグインは `--plugin-dir <path>` になります。それ以外の `type` は `connect()` に `IllegalArgumentException` を投げさせます（0.2.6 以降。以前はスキップされていました）。[プラグインシステム](./feature-plugin-system.md)を参照してください。
 
 ### outputFormat()
 
@@ -956,6 +993,9 @@ SandboxIgnoreViolations.of(Map.of(
     )
 ))
 ```
+
+スキーマは `--json-schema` として送られます。シリアライズできないスキーマは、破棄されるのではなく
+`CLIConnectionException` で `connect()` を失敗させます。
 
 ### enableFileCheckpointing()
 

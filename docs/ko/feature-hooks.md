@@ -84,6 +84,10 @@ record HookContext(
 SDK는 반환된 future가 완료될 때까지 기다린 뒤 CLI에 응답합니다. 동기 작업이라면
 `CompletableFuture.completedFuture(...)`를 반환하세요.
 
+Python SDK와 마찬가지로 SDK는 이 대기에 자체 시간 제한을 두지 않습니다. CLI가 matcher의 `timeoutSeconds`(기본
+60초)를 강제하고, 시간이 다 되면 `control_cancel_request`를 보냅니다. 0.2.6 이전에는 SDK도 모든 콜백을 60초 뒤에
+끊었기 때문에, 자체 `timeout`이 그보다 긴 훅이 실패했습니다.
+
 예외를 던지거나, 예외로 완료되는 future를 반환하거나, `null`로 완료되거나, `null` future를 반환하는 콜백에는
 오류로 응답합니다. 의견이 없는 콜백은 `null`이 아니라 `HookOutput.empty()`를 반환해야 합니다. 오류가 났을 때
 동작이 그대로 진행되는지는 matcher의 [실패 정책](#실패-정책onfailure)에 달려 있습니다.
@@ -91,7 +95,9 @@ SDK는 반환된 future가 완료될 때까지 기다린 뒤 CLI에 응답합니
 CLI가 훅 호출을 포기하면(예를 들어 턴이 중단되어 `control_cancel_request`를 보내면), SDK는 콜백이 반환한
 future를 취소하고, 그 future를 기다리던 스레드를 인터럽트하며, 응답을 보내지 않습니다. 자기 스레드를
 블로킹하는 콜백은 `InterruptedException`을 받고, 작업을 다른 스레드에 넘기는 콜백은 취소된 future에 반응할
-수 있습니다.
+수 있습니다. 클라이언트를 닫으면 진행 중인 콜백이 같은 방식으로 즉시 취소됩니다. 훅이 직접 클라이언트를 닫을 수도
+있습니다(0.2.6부터): CLI는 여전히 stdin EOF와 유예 시간을 받고, 닫는 스레드는 인터럽트되지 않으며, 그 훅 자신의
+요청에는 응답하지 않은 채로 남습니다.
 
 > **디스패치 순서:** 같은 이벤트에 여러 매처가 등록되어 있으면, CLI는 일치하는 훅 콜백을 순차적으로가
 > 아니라 **동시에**(병렬로) 디스패치합니다. 각 훅은 서로 독립적이도록 설계하세요 — 하나가 끝난 뒤에
@@ -142,6 +148,7 @@ HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), nu
 | `permissionMode()` | `@Nullable String` | 현재 권한 모드 |
 | `promptId()` | `@Nullable String` | 처리 중인 사용자 프롬프트의 UUID. OpenTelemetry 이벤트의 `prompt.id` 속성과 일치합니다. 첫 사용자 입력 전까지는 null입니다 |
 | `effort()` | `@Nullable HookEffort` | 현재 턴에 적용된 노력 수준으로, `HookEffort(String level)` 형태입니다(예: `"low"`, `"high"`, `"max"`. 선택한 모델에 맞춰 하향 조정된 뒤의 값). 노력 수준을 지원하는 모델에서 도구 사용 맥락 안에서 발동하는 훅에 존재합니다 |
+| `raw()` | `Map<String, Object>` | CLI가 보낸 그대로의 입력으로, 레코드가 모델링하지 않는 키까지 모든 키를 포함합니다. 수정할 수 없으며, 생성자로 만든 입력에서는 비어 있습니다(0.2.6부터) |
 
 이벤트별 필드:
 
@@ -155,12 +162,31 @@ HookMatcher guard = new HookMatcher("Bash|PowerShell", List.of(checkCommand), nu
 | `StopHookInput` | `stopHookActive`, `lastAssistantMessage`, `backgroundTasks`, `sessionCrons` |
 | `SubagentStartHookInput` | `agentId`, `agentType` |
 | `SubagentStopHookInput` | `stopHookActive`, `agentId`, `agentTranscriptPath`, `agentType`, `lastAssistantMessage`, `backgroundTasks`, `sessionCrons` |
-| `PreCompactHookInput` | `trigger` (`CompactTriggerType`), `customInstructions` |
+| `PreCompactHookInput` | `trigger` (`CompactTriggerType`, 이 SDK가 알지 못하는 값이면 `null`), `customInstructions` |
 | `NotificationHookInput` | `message`, `title`, `notificationType` |
 
 CLI가 생략할 수 있는 필드는 없을 때 `null`입니다: `permissionMode`, `promptId`, `effort`, 도구 입력의
 `agentId`/`agentType`, `isInterrupt`, `durationMs`, `lastAssistantMessage`, `backgroundTasks`,
-`sessionCrons`, `permissionSuggestions`, `title`, `customInstructions`.
+`sessionCrons`, `permissionSuggestions`, `title`, `customInstructions`. CLI가 이 SDK 버전이 알지 못하는 trigger를
+보내면 `PreCompactHookInput.trigger()`도 `null`입니다. 0.2.6 이전에는 그런 값 때문에 훅이 실패했습니다.
+
+### SDK보다 새로운 필드 읽기
+
+Python SDK가 훅에 원시 dict를 넘기듯, `raw()`는 모든 훅에 CLI가 보낸 그대로의 입력을 줍니다. 새로운 CLI가 보내지만
+타입 지정 레코드가 아직 모델링하지 않는 키나, `null` 열거형 뒤에 있는 와이어 값이 필요할 때 사용하세요:
+
+```java
+HookMatcher.HookCallback onCompact = (input, context) -> {
+    if (input instanceof PreCompactHookInput compact && compact.trigger() == null) {
+        System.out.println("Unknown compact trigger: " + compact.raw().get("trigger"));
+    }
+    Object extra = input.raw().get("some_new_field");  // null when absent
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+```
+
+0.2.6에서 모든 훅 입력 레코드의 끝에 `raw` 컴포넌트가 추가되었습니다. 이전의 생성자는 모두 유지되며 `raw()`를
+비워 두지만, 레코드 분해 패턴(JDK 21+)에는 새 컴포넌트를 추가해야 합니다.
 
 ### 서브에이전트 맥락
 
@@ -232,7 +258,19 @@ HookOutput.builder()
     .build();
 ```
 
-설정한 필드만 전송됩니다. `async`가 설정되면 `async`와 `asyncTimeout`만 전송됩니다.
+설정한 필드만 전송됩니다. `async`가 설정되면 `async`와 `asyncTimeout`(그리고 아래의 추가 필드)만 전송됩니다.
+
+SDK보다 새로운 키처럼 타입 지정 빌더가 모델링하지 않는 최상위 키에는 `extraField(key, value)`나 `extraFields(map)`을
+사용하세요(0.2.6부터). 값은 주어진 그대로 전송되고 `null`은 JSON `null`로 전송되며, 같은 키의 타입 지정 필드도
+설정되어 있으면 추가 필드보다 타입 지정 필드가 우선합니다:
+
+```java
+HookOutput.builder()
+    .systemMessage("Checked")
+    .extraField("someNewKey", true)
+    .extraFields(Map.of("anotherKey", "value"))
+    .build();
+```
 
 ## 훅별 출력
 

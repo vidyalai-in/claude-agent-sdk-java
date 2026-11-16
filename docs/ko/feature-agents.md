@@ -79,8 +79,34 @@ AgentDefinition compat = new AgentDefinition(
 | `initialPrompt` | `String`(null 허용) | 에이전트가 시작될 때 보내는 초기 프롬프트 |
 | `maxTurns` | `Integer`(null 허용) | 그 에이전트의 최대 턴 수. null이면 무제한 |
 | `background` | `Boolean`(null 허용) | 그 에이전트를 백그라운드로 실행 |
-| `effort` | `String`(null 허용) | 노력 수준: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. `"xhigh"`는 Opus 4.7 전용이며 다른 모델에서는 `"high"`로 대체됩니다. [`EffortLevel`](feature-configuration-options.md#effortlevel-열거형) 열거형도 참고하세요. |
+| `effort` | `String`(null 허용) | 노력 수준: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. `"xhigh"`는 Opus 4.7 전용이며 다른 모델에서는 `"high"`로 대체됩니다. [`EffortLevel`](feature-configuration-options.md#effortlevel-열거형) 열거형도 참고하세요. 노력 수준이 숫자이면 null입니다. |
 | `permissionMode` | `String`(null 허용) | 그 에이전트의 권한 모드 |
+| `numericEffort` | `Integer`(null 허용) | 수준 이름 대신 숫자로 지정한 노력 수준(0.2.6부터). `effort`와 `numericEffort` 중 많아야 하나만 설정할 수 있으며, 둘 다 설정하면 생성자가 `IllegalArgumentException`을 던집니다 |
+
+**노력 수준.** `withEffort(...)`로 복사본에 설정합니다. 이 메서드는 수준 이름, `EffortLevel` 또는 숫자를
+받습니다(모두 0.2.6부터). Python SDK의 `effort: EffortLevel | int`와 마찬가지로 두 형태 모두 같은 `"effort"` 키로
+CLI에 전달됩니다: 수준은 문자열로, 숫자는 JSON 숫자로 전달됩니다. 호출할 때마다 다른 형태를 대체하므로,
+`withEffort(32000)`은 `effort()`를 지우고 `withEffort("high")`는 `numericEffort()`를 지웁니다.
+
+```java
+import in.vidyalai.claude.sdk.types.config.EffortLevel;
+
+AgentDefinition tester = new AgentDefinition(
+        "Creates and runs tests",
+        "You are a testing expert.",
+        List.of("Read", "Write", "Bash"),
+        "sonnet")
+    .withEffort(32000);                  // "effort": 32000
+
+AgentDefinition reviewer = tester.withEffort(EffortLevel.HIGH);   // "effort": "high"
+AgentDefinition quick = tester.withEffort("low");                 // "effort": "low"
+```
+
+`AgentsExample`은 테스트 실행 에이전트에 숫자 노력 수준을 설정합니다.
+
+레코드에는 0.2.6에서 끝에 `numericEffort` 컴포넌트가 추가되었습니다. 이전의 생성자는 모두 유지되지만,
+레코드 분해 패턴(JDK 21+)에는 이 컴포넌트를 추가해야 합니다. `mcpServers`의 MCP 구성 레코드는 에이전트가
+CLI로 전송될 때 `"type"`을 유지합니다(0.2.6 이전에는 사라졌습니다).
 
 **model 필드:** `model` 필드는 짧은 별칭(`"sonnet"`, `"opus"`, `"haiku"`, `"inherit"`) 또는 전체
 모델 ID(예: `"claude-sonnet-4-5"`)를 받습니다.

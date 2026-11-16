@@ -56,9 +56,14 @@ Transport transport = new SubprocessCLITransport(options);
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display`는 `Adaptive`와 `Enabled` 구성에서만(그리고 `display != null`일 때만) 전달됩니다. `Disabled`는 결코 내보내지 않습니다. |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | `display`가 설정되면 두 플래그가 함께 나갑니다. |
 | `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | 일반 문자열과 같습니다. `snapshot`은 대신 `initialize` 요청에 실려 갑니다. |
-| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | `local` 플러그인마다 하나씩. 다른 타입은 건너뜁니다. |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | `local` 플러그인마다 하나씩. 다른 타입은 `IllegalArgumentException`을 던집니다(0.2.6 이전에는 건너뜀). |
+| `thinking(ThinkingConfigEnabled(0))` | `--max-thinking-tokens 0` | Python SDK와 마찬가지로 0 예산도 받아서 전송합니다. |
+| `maxTurns(0)`, `model("")`, `fallbackModel("")`, `permissionPromptToolName("")`, `resume("")`, `sessionId("")`, `settings("")`, `mcpServersJson("")` | *(없음)* | Python이 거짓 값을 생략하듯 빈 문자열과 `0`은 생략됩니다(0.2.6부터). |
+| `mcpServers(Map)`, `outputFormat(json_schema)` | `--mcp-config`, `--json-schema` | 직렬화할 수 없는 값은 플래그를 빠뜨리는 대신 `connect()`를 `CLIConnectionException`으로 실패시킵니다. |
 
-**stderr 파이프**: stderr는 `options.stderrCallback() != null`일 때만 파이프됩니다. 예전의
+**stderr 파이프**: stderr는 `options.stderrCallback() != null`일 때만 파이프됩니다. 그렇지 않으면 CLI가 JVM의
+stderr를 물려받습니다(0.2.6부터, Python SDK의 `stderr=None`과 동일). 이전에는 파이프되었지만 읽히지 않아서, 파이프
+버퍼(약 64 KB)보다 많은 stderr를 쓴 CLI는 다음 쓰기에서 블로킹되었습니다. 예전의
 `--debug-to-stderr` 추가 인자 감지는 0.1.13에서 제거되었습니다(해당 CLI 플래그의 폐기에 대비).
 CLI의 자세한 디버그 출력을 얻으려면 `extraArgs(Map.of("debug-file", "/path/to/log"))`를 넘기고 그
 파일을 읽으세요.
@@ -68,6 +73,21 @@ CLI의 자세한 디버그 출력을 얻으려면 `extraArgs(Map.of("debug-file"
 루프는 다음 줄로 이어집니다. 예전에는 한 번 예외가 나면 루프를 빠져나가, 그 세션이 끝날 때까지 이후의
 모든 stderr 줄이 조용히 버려졌습니다. 바깥 루프의 실패(스트림이 예기치 않게 닫힘, I/O 오류)도 조용히
 삼켜지는 대신 `FINE`으로 기록됩니다.
+
+**제한된 `close()`**(0.2.6): Python SDK와 마찬가지로 `close()`의 모든 단계에 시간 제한이 있으므로, 응답 없는 CLI나
+가득 찬 stdin 파이프에서 블로킹된 쓰기가 더는 `close()`를 멈춰 세울 수 없습니다:
+
+1. stdin을 닫기 위해 쓰기 잠금을 최대 5초 기다려 잡습니다. 쓰기가 여전히 잠금을 쥐고 있으면 stdin을 닫지 않고 CLI를
+   멈추며, 쓰기가 잠금을 놓으면 나중에 다른 스레드에서 stdin을 닫습니다.
+2. stdin EOF 후 CLI가 세션 파일을 플러시할 수 있도록 종료를 최대 5초 기다립니다.
+3. SIGTERM을 보내고 최대 5초 기다립니다.
+4. SIGKILL을 보내고 최대 5초 기다립니다.
+5. stderr와 stdout 리더 실행기를 종료하고(2초, 이어서 강제로 1초), 그 아래의 파이프를 닫습니다.
+
+인터럽트는 이 대기 시간을 줄이지 않습니다. `close()`는 실행되는 동안 인터럽트 플래그를 지웠다가 반환할 때 다시
+설정하므로, 플래그가 설정된 호출자나 도중에 인터럽트된 호출자도 stdin을 닫고 CLI에 유예 시간을 줍니다.
+`canUseTool`, 훅, SDK MCP 콜백 안에서 호출한 `disconnect()`/`close()`도 마찬가지이며, 그 콜백이 처리하던 요청에는
+응답하지 않은 채로 남습니다. 0.2.6 이전에는 그런 닫기가 stdin을 닫지 않고 CLI를 죽였습니다.
 
 **고아 자식 프로세스 정리**(0.1.18): 생성된 모든 CLI 프로세스는 정적 `ACTIVE_CHILDREN` 집합에
 등록되고, `close()`가 실행되기 전에 프로세스가 종료되면 JVM 종료 훅이 아직 살아 있는 것들을 최선을
@@ -88,6 +108,32 @@ ID를 읽는 "내 세션 재개" 엔드포인트 등)은 임의의 CLI 플래그
 argv 수준의 문제이고(옵션당 인자 하나, **셸은 전혀 개입하지 않음**) 명령 실행이 아니라 플래그
 주입이며, 신뢰할 수 없는 입력을 이 옵션들로 전달하는 앱에만 영향을 줍니다. `buildCommand()`의 다른
 곳에서 이미 쓰고 있는 `--setting-sources=` 방식과 일치합니다.
+
+### 줄 구분과 백프레셔 (0.2.6)
+
+**stderr**: stderr는 Python SDK의 `_handle_stderr`와 같은 방식으로 줄로 나뉩니다: `\n`에서만 나누므로 단독 `\r`(진행률
+줄)은 줄 안에 남습니다. 끝의 공백은 제거되고 빈 줄은 건너뜁니다. `maxBufferSize`보다 긴 줄은 한없이 버퍼링하지 않고
+여러 조각으로 나누어 전달되며, 줄바꿈 없는 마지막 줄이나 스트림이 실패하기 전에 읽은 줄의 일부도 여전히 전달됩니다.
+
+**stdout**: stdout은 NDJSON이며 `\n`에서만 나뉩니다. 완전한 줄마다:
+
+| 줄 | 결과 |
+|---|---|
+| 빈 줄 | 건너뜀 |
+| `{`로 시작하지 않음(예: `[SandboxDebug] …`) | 건너뛰고 `FINE`으로 기록 |
+| JSON 객체 하나 | 전달 |
+| `{`로 시작하지만 파싱되지 않거나, 객체 뒤에 내용이 있음(`{"a":1} junk`) | `CLIJSONDecodeException` |
+| `maxBufferSize`보다 김 | `CLIJSONDecodeException` |
+
+완전한 줄은 이후의 데이터로 완성될 수 없으므로, 손상된 줄은 계속 버퍼링할 대상이 아니라 오류입니다: Python SDK와
+마찬가지로 예외가 메시지 스트림을 끝내고, 소비자의 이터레이터가 그 예외를 다시 던집니다. 0.2.6 이전에는 잘못된
+형식의 줄이 그 뒤의 모든 메시지를 조용히 삼켰습니다. 스트림의 끝에서 잘린 마지막 줄은 파싱되면 전달되고 그렇지
+않으면 버려집니다. stdout이 정상적으로 끝났을 때 CLI 종료 코드가 0이 아니면 `ProcessException`으로 보고됩니다.
+
+**백프레셔**: 리더는 메시지를 버리지 않고 큐에 자리가 날 때까지 기다리므로, 느린 소비자는 출력을 잃는 대신 CLI의
+속도를 늦춥니다. 한 계층 위인 `QueryHandler`의 메시지 큐에서도 마찬가지입니다([아키텍처 → QueryHandler](./architecture.md#queryhandler)
+참고). 그 큐의 `maxMsgQSize`는 소프트 한도입니다: 나가는 제어 요청이 응답을 기다리는 동안에는 `QueryHandler`가 한도를
+넘어 계속 읽으므로, 큐에 쌓인 메시지 뒤의 `control_response`도 도착할 수 있습니다.
 
 ### Windows: 배치 스크립트 CLI 거부 (0.1.21)
 
@@ -203,6 +249,9 @@ ClaudeAgentOptions.builder().resume("Refactor the parser (part 2)").build();
 | `Map.of("some-flag", "value")` | `--some-flag`, `value` |
 | `Map.of("some-flag", "--evil")` | `--some-flag=--evil` |
 | `Map.of("verbose-thing", "")` | `--verbose-thing`(맨 불리언 플래그) |
+| `verbose-thing` → `null`(`HashMap` / `LinkedHashMap` 안에서) | `--verbose-thing`(맨 불리언 플래그, 0.2.6부터) |
+
+항목은 맵의 순회 순서대로 내보내집니다(0.2.6부터). 따라서 플래그 순서가 중요하면 `LinkedHashMap`을 넘기세요.
 
 ### Windows: 배치 CLI 옵트인 (0.1.22)
 

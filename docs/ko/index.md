@@ -74,13 +74,13 @@ Claude Agent SDK for Java는 Claude AI 기능을 Java 애플리케이션에 통�
 - **[MCP 서버](./feature-mcp-servers.md)** — Model Context Protocol로 사용자 정의 도구 만들기
   - SDK MCP 서버 (인프로세스)
   - 외부 MCP 서버 (stdio/SSE/HTTP)
-  - @Tool 어노테이션 사용법
-  - 프로그래밍 방식의 도구 생성
+  - @Tool 어노테이션 사용법, 타입 지정 매개변수(리스트, 열거형, `Optional`, 레코드, `java.time`)와 `@ToolParam`
+  - `Map.of("text", String.class)` 스키마 축약형을 포함한 프로그래밍 방식의 도구 생성
   - 도구 스키마와 도구의 `inputSchema`에 대한 인자 검증
   - 실패 의미론 (도구 호출이 마주치는 모든 상황에 대한 `isError` 결과)
   - `ToolCallContext`로 실행 중인 도구 취소하기
   - 프로토콜 세부 사항 (버전 협상, 알림, 메서드)
-  - `McpMessageHandler`를 통한 사용자 정의 MCP 핸들러
+  - `McpMessageHandler`를 통한 사용자 정의 MCP 핸들러와 클라이언트당 세션 하나(`openSession()`)
   - 비동기 실행 패턴
   - 전체 예제 (계산기, 데이터베이스, API 연동)
 
@@ -88,11 +88,11 @@ Claude Agent SDK for Java는 Claude AI 기능을 Java 애플리케이션에 통�
   - 인라인 에이전트 정의
   - 파일시스템 기반 에이전트
   - 대용량 에이전트 지원 (stdin을 통한 260KB 이상)
-  - AgentDefinition API (skills, 메모리 범위, MCP 서버 필드 포함)
+  - AgentDefinition API (skills, 메모리 범위, MCP 서버 필드, `withEffort(int)`를 통한 숫자 노력 수준 포함)
   - 서브에이전트 출력 관찰과 `forwardSubagentText`
 
 - **[세션 히스토리](./feature-session-history.md)** — 디스크에 저장된 과거 Claude Code 대화 세션 읽기 및 관리
-  - 전체 프로젝트 또는 디렉터리로 필터링한 세션 목록
+  - 전체 프로젝트 또는 디렉터리로 필터링한 세션 목록 (git worktree 포함)
   - ID로 단일 세션 조회 (`getSessionInfo`)
   - 전체 대화 트랜스크립트 읽기
   - 서브에이전트 트랜스크립트 읽기 (`listSubagents`, `getSubagentMessages`),
@@ -137,7 +137,8 @@ Claude Agent SDK for Java는 Claude AI 기능을 Java 애플리케이션에 통�
 - **[훅 시스템](./feature-hooks.md)** — 수명 주기 이벤트 가로채기 및 응답
   - 10가지 훅 이벤트
   - HookMatcher, HookCallback, HookOutput
-  - `promptId`, `effort`, 도구 `durationMs`, 그리고 Stop의 백그라운드 작업과 예약된 깨우기를 포함한 타입 지정 훅 입력
+  - `promptId`, `effort`, 도구 `durationMs`, 그리고 Stop의 백그라운드 작업과 예약된 깨우기를 포함한 타입 지정 훅 입력. SDK보다 새로운 필드를 위한 `raw()`
+  - 빌더가 모델링하지 않는 출력 키를 위한 `HookOutput.Builder.extraField(...)`
   - 21가지 훅별 출력 타입 전체 (예: Stop 훅의 `additionalContext`는 모델이 계속 진행하게 함)
   - PostToolUse의 `updatedToolOutput` (모든 도구의 출력 교체)과 `updatedMCPToolOutput`
   - `PermissionDecision.DEFER`와 ResultMessage의 `DeferredToolUse`

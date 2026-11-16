@@ -83,11 +83,11 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```
 
 **Parámetros**:
-- `budgetTokens` (int): máximo de tokens de razonamiento (debe ser positivo)
+- `budgetTokens` (int): máximo de tokens de razonamiento (cero o más). Desde la 0.2.6 se acepta `0`, que se envía como `--max-thinking-tokens 0`, igual que lo envía el SDK de Python
 - `display` (opcional, puede ser `null`): consulta [Visualización del
   razonamiento](#visualización-del-razonamiento) más abajo
 
-**Lanza**: `IllegalArgumentException` si `budgetTokens ≤ 0`
+**Lanza**: `IllegalArgumentException` si `budgetTokens < 0`
 
 **Mejor para**:
 - Aplicaciones atentas al presupuesto
@@ -453,10 +453,10 @@ public record ThinkingConfigEnabled(
 ```
 
 **Parámetros**:
-- `budgetTokens`: máximo de tokens de razonamiento (debe ser > 0)
+- `budgetTokens`: máximo de tokens de razonamiento (cero o más)
 - `display` (opcional, puede ser `null`): consulta `ThinkingDisplay` más abajo
 
-**Lanza**: `IllegalArgumentException` si `budgetTokens ≤ 0`
+**Lanza**: `IllegalArgumentException` si `budgetTokens < 0`
 
 Flags del CLI: `--max-thinking-tokens <budgetTokens>` (siempre); `--thinking-display <value>`
 (cuando `display != null`).

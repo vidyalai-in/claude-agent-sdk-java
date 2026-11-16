@@ -213,7 +213,7 @@ McpStdioServerConfig externalServer = new McpStdioServerConfig(
     """)
 ```
 
-map 在传给 `--mcp-config` 之前会被序列化为 `{"mcpServers": {...}}`；路径或 JSON 字符串则原样传递，因此 JSON 字符串必须使用同样的顶层 `mcpServers` 键。
+map 在传给 `--mcp-config` 之前会被序列化为 `{"mcpServers": {...}}`；路径或 JSON 字符串则原样传递，因此 JSON 字符串必须使用同样的顶层 `mcpServers` 键。无法序列化的 map 会使 `connect()` 以 `CLIConnectionException` 失败（自 0.2.6 起；以前该标志会被丢弃并给出警告）。服务器配置中未设置的字段不会写入 JSON，而不是以 `null` 发送，因此 `new McpStdioServerConfig("node")` 或 `new McpHttpServerConfig(url)` 能按预期加载。
 
 ## 权限设置
 
@@ -295,9 +295,11 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` 要求 `store.implementsListSessions()`。
 - `sessionStore + enableFileCheckpointing` 会被拒绝 —— 检查点只支持本地磁盘。
 
+**慢速存储会拖住消息流。** 在每个 `ResultMessage` 之前，读取线程会等待待处理的条目追加完成，在此期间不从 CLI 读取任何其他内容，因此像 `interrupt()` 这样的控制调用也会等待。`close()` 同样会等待最后一次刷写。每次等待都以批处理器的刷写超时为上限，默认 181 秒。Python SDK 的行为相同；参见 [Session Store 指南中的注意事项](./feature-session-store.md#刷写模式batched-与-eager)。
+
 ### sessionStoreFlush()
 
-控制何时把 transcript-mirror 条目刷写到配置的 `sessionStore`。默认是 `SessionStoreFlushMode.BATCHED`（每轮或缓冲区溢出时刷写一次）。使用 `SessionStoreFlushMode.EAGER` 会在每一帧之后安排一次后台刷写，实现近乎实时的投递 —— 追加仍按入队顺序串行执行，但慢速适配器不会阻塞读取循环。未设置 `sessionStore` 时该项被忽略。
+控制何时把 transcript-mirror 条目刷写到配置的 `sessionStore`。默认是 `SessionStoreFlushMode.BATCHED`（每轮或缓冲区溢出时刷写一次）。使用 `SessionStoreFlushMode.EAGER` 会在每一帧之后安排一次后台刷写，实现近乎实时的投递 —— 追加仍按入队顺序串行执行，但慢速适配器不会在两次 result 之间阻塞读取循环（在两种模式下，每个 `ResultMessage` 之前的刷写仍会等待它）。未设置 `sessionStore` 时该项被忽略。
 
 ```java
 import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
@@ -327,6 +329,10 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 ```java
 .maxTurns(10)  // Limit to 10 turns
 ```
+
+`0` 视为未设置：与 Python SDK 一样，SDK 对它不发送 `--max-turns`，因此适用 CLI 的默认值。
+`model`、`fallbackModel`、`permissionPromptToolName`、`resume`、`sessionId` 和 `settings` 中的空字符串，
+以及空的 `mcpServersJson` 同理：自 0.2.6 起，该标志会被省略，而不是以空值发送。
 
 **适用场景**：
 - 预算控制
@@ -378,7 +384,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 **类型**：
 - `ThinkingConfigAdaptive` —— 自适应思考，默认 32,000 token
-- `ThinkingConfigEnabled(int budgetTokens)` —— 固定 token 预算（必须大于 0）
+- `ThinkingConfigEnabled(int budgetTokens)` —— 固定 token 预算（零或更大；`0` 以 `--max-thinking-tokens 0` 发送）
 - `ThinkingConfigDisabled` —— 不使用思考 token
 
 **注意**：本选项优先于已弃用的 `maxThinkingTokens()`。
@@ -452,7 +458,14 @@ String wire = level.getValue(); // "xhigh"
 .maxMsgQSize(1000)
 ```
 
-高吞吐场景可以调高。
+默认值：1000。队列满时，读取线程会等待，直到你的代码取走一条消息（背压，与 Python SDK 中被 await 的发送
+一致），因此慢速的消费者会让 CLI 变慢，而不会丢失输出。在 0.2.6 之前，遇到队列已满持续 5 秒的消息会被
+丢弃。流的结束以及任何错误总会被交付，即使是交付给之后才创建的迭代器。高吞吐场景可以调高该值。
+
+它是一个软上限（自 0.2.6 起）。当 SDK 发出的控制请求（`interrupt()`、`setModel()`、`getMcpStatus()` 等）
+在等待应答时，读取线程会越过上限继续读取，因为该应答与消息来自同一个 stdout。因此，在没有人消费队列之前
+发起的控制调用，不会再因为队列已满而超时。不会丢弃任何内容，顺序也会保持。该值必须至少为 1：更小的值会使
+`connect()`（或 `ClaudeSDK.query`）以 `IllegalArgumentException` 失败。
 
 ## 模型配置
 
@@ -614,6 +627,16 @@ Windows CLI 发现顺序](./feature-transport-layer.md#windowscli-发现顺序01
 
 键是**不带**前导 `--` 的标志名；传输层会自动加上。值为 `null` 或空白时输出一个不带值的标志。以 `-` 开头的值会以 `--flag=value` 形式发送，以免被解析成另一个独立的标志；其他值则作为两个 token 发送。
 
+自 0.2.6 起，map 中可以包含 `null` 值（Python SDK 表示不带值标志的写法），标志会按 map 的迭代顺序传递。
+`Map.of` 不能包含 null，也没有确定的顺序，因此只要其中任何一点重要，就请使用 `LinkedHashMap`：
+
+```java
+Map<String, String> flags = new LinkedHashMap<>();
+flags.put("replay-user-messages", null);   // --replay-user-messages
+flags.put("debug", "api");                  // --debug api, always after it
+.extraArgs(flags)
+```
+
 ## 回调
 
 ### canUseTool()
@@ -642,7 +665,12 @@ BiFunction<String, Object, ToolPermissionContext, CompletableFuture<PermissionRe
 
 ### stderrCallback()
 
-接收 CLI 的 stderr 输出。CLI 每输出一行 stderr 就调用一次（只有设置了该回调时才会接管管道）。
+接收 CLI 的 stderr 输出。CLI 每输出一行 stderr 就调用一次。只有设置了该回调时才会为 stderr 建立管道。
+未设置时，自 0.2.6 起 CLI 会继承 JVM 的 stderr（与 Python SDK 一致），因此其输出会出现在你的进程的
+stderr 上。（以前 stderr 会被接入管道却从不读取，CLI 一旦写入超过管道缓冲区的内容就可能阻塞。）
+
+行按 Python SDK 的方式分帧：只按 `\n` 拆分（进度行所用的单独 `\r` 会保留在行内），去掉行尾空白，并跳过
+空行。超过 `maxBufferSize` 的行会被分段传递，没有换行符的最后一行仍然会被交付。
 
 ```java
 .stderrCallback(line -> {
@@ -696,11 +724,11 @@ new HookMatcher("Bash", List.of(guard), null, HookOnFailure.BLOCK)
 
 ### user()
 
-设置用于追踪的用户标识。
-
-```java
-.user("user-12345")
-```
+**已弃用，Java SDK 不支持。** Python SDK 会以这个操作系统用户的身份运行 CLI 子进程；Java 的
+`ProcessBuilder` 无法切换用户。在 0.2.5 及之前的版本中，该选项会被接受并被悄悄忽略，因此 CLI 以 JVM 的
+用户身份运行。自 0.2.6 起，设置该选项时 `connect()`（以及 `ClaudeSDK.query(...)`）会以
+`CLIConnectionException` 失败。请从你的选项中移除它。若要以另一个用户的身份运行 CLI，请把
+[`cliPath()`](#clipath) 指向一个切换用户的包装脚本（例如运行 `sudo -u <user> claude "$@"` 的脚本）。
 
 ### includePartialMessages()
 
@@ -881,7 +909,7 @@ SandboxIgnoreViolations.of(Map.of(
 ))
 ```
 
-每个 `local` 插件都会变成 `--plugin-dir <path>`。参见[插件系统](./feature-plugin-system.md)。
+每个 `local` 插件都会变成 `--plugin-dir <path>`。其他任何 `type` 都会使 `connect()` 抛出 `IllegalArgumentException`（自 0.2.6 起；以前会被跳过）。参见[插件系统](./feature-plugin-system.md)。
 
 ### outputFormat()
 
@@ -900,6 +928,9 @@ SandboxIgnoreViolations.of(Map.of(
     )
 ))
 ```
+
+schema 以 `--json-schema` 发送。无法序列化的 schema 会使 `connect()` 以 `CLIConnectionException` 失败，
+而不是被丢弃。
 
 ### enableFileCheckpointing()
 

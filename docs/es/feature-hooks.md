@@ -86,6 +86,11 @@ record HookContext(
 El SDK espera al future devuelto antes de responder al CLI. Devuelve
 `CompletableFuture.completedFuture(...)` para el trabajo síncrono.
 
+El SDK no fija ningún límite de tiempo propio para esa espera, igual que el SDK de Python. El CLI
+aplica el `timeoutSeconds` del matcher (60 segundos por defecto) y envía un `control_cancel_request`
+cuando vence. Antes de la 0.2.6 el SDK también cortaba todo callback a los 60 segundos, lo que hacía
+fallar un hook cuyo `timeout` propio era mayor.
+
 Un callback que lanza una excepción, devuelve un future que se completa de forma excepcional, se
 completa con `null` o devuelve un future `null` recibe como respuesta un error. Un callback sin
 opinión devuelve `HookOutput.empty()`, nunca `null`. Que un error deje seguir adelante la acción
@@ -94,7 +99,10 @@ depende de la [política de fallo](#política-de-fallo-onfailure) del matcher.
 Si el CLI abandona la llamada al hook (envía un `control_cancel_request`, por ejemplo cuando se
 interrumpe el turno), el SDK cancela el future que devolvió el callback, interrumpe el hilo que lo
 espera y no envía ninguna respuesta. Un callback que bloquea su hilo ve una `InterruptedException`;
-uno que pasa el trabajo a otro hilo puede reaccionar al future cancelado.
+uno que pasa el trabajo a otro hilo puede reaccionar al future cancelado. Cerrar el client cancela
+del mismo modo, de inmediato, los callbacks en curso. Un hook puede cerrar él mismo el client (desde
+la 0.2.6): el CLI sigue recibiendo el EOF de stdin y su periodo de gracia, el hilo que cierra no se
+interrumpe y la petición de ese mismo hook queda sin respuesta.
 
 > **Orden de despacho:** cuando hay varios matchers registrados en el mismo evento, el CLI despacha
 > todos los callbacks de hook que encajan **de forma concurrente** (en paralelo), no secuencialmente.
@@ -149,6 +157,7 @@ rechazo.
 | `permissionMode()` | `@Nullable String` | Modo de permiso actual |
 | `promptId()` | `@Nullable String` | UUID del prompt de usuario que se está procesando. Coincide con el atributo `prompt.id` de los eventos de OpenTelemetry. Es nulo hasta la primera entrada del usuario |
 | `effort()` | `@Nullable HookEffort` | Esfuerzo vigente en el turno actual, como `HookEffort(String level)` (por ejemplo, `"low"`, `"high"`, `"max"`, tras cualquier rebaja para el modelo seleccionado). Presente en los hooks que se disparan dentro de un contexto de uso de herramienta en modelos que admiten esfuerzo |
+| `raw()` | `Map<String, Object>` | La entrada exactamente como la envió el CLI, con todas las claves, también las que el record no modela. No modificable; vacía para una entrada construida con un constructor (desde la 0.2.6) |
 
 Campos específicos de cada evento:
 
@@ -162,13 +171,35 @@ Campos específicos de cada evento:
 | `StopHookInput` | `stopHookActive`, `lastAssistantMessage`, `backgroundTasks`, `sessionCrons` |
 | `SubagentStartHookInput` | `agentId`, `agentType` |
 | `SubagentStopHookInput` | `stopHookActive`, `agentId`, `agentTranscriptPath`, `agentType`, `lastAssistantMessage`, `backgroundTasks`, `sessionCrons` |
-| `PreCompactHookInput` | `trigger` (`CompactTriggerType`), `customInstructions` |
+| `PreCompactHookInput` | `trigger` (`CompactTriggerType`, `null` para un valor que este SDK no conoce), `customInstructions` |
 | `NotificationHookInput` | `message`, `title`, `notificationType` |
 
 Los campos que el CLI puede omitir son `null` cuando faltan: `permissionMode`, `promptId`,
 `effort`, `agentId`/`agentType` en las entradas de herramienta, `isInterrupt`,
 `durationMs`, `lastAssistantMessage`, `backgroundTasks`, `sessionCrons`,
-`permissionSuggestions`, `title` y `customInstructions`.
+`permissionSuggestions`, `title` y `customInstructions`. `PreCompactHookInput.trigger()`
+también es `null` cuando el CLI envía un trigger que esta versión del SDK no conoce; antes de la
+0.2.6 un valor así hacía fallar el hook.
+
+### Leer campos más recientes que el SDK
+
+`raw()` entrega a cada hook la entrada del CLI tal como se envió, igual que el SDK de Python entrega
+a sus hooks el dict sin procesar. Úsalo para una clave que envía un CLI más reciente y que el record
+tipado todavía no modela, o para ver el valor recibido detrás de un enum `null`:
+
+```java
+HookMatcher.HookCallback onCompact = (input, context) -> {
+    if (input instanceof PreCompactHookInput compact && compact.trigger() == null) {
+        System.out.println("Unknown compact trigger: " + compact.raw().get("trigger"));
+    }
+    Object extra = input.raw().get("some_new_field");  // null when absent
+    return CompletableFuture.completedFuture(HookOutput.empty());
+};
+```
+
+Todos los records de entrada de hook ganaron un componente final `raw` en la 0.2.6. Se conservan
+todos los constructores anteriores, que dejan `raw()` vacío, pero un patrón de deconstrucción de
+records (JDK 21+) tiene que añadir el nuevo componente.
 
 ### Contexto del subagente
 
@@ -247,7 +278,20 @@ HookOutput.builder()
 ```
 
 Solo se envían los campos que estableces. Cuando se establece `async`, solo se envían `async` y
-`asyncTimeout`.
+`asyncTimeout` (más los campos extra, véase abajo).
+
+Para una clave de nivel superior que el builder tipado no modela, como una más reciente que este SDK,
+usa `extraField(key, value)` o `extraFields(map)` (desde la 0.2.6). El valor se envía tal cual,
+`null` como `null` de JSON, y un campo tipado que también esté definido gana a un campo extra con la
+misma clave:
+
+```java
+HookOutput.builder()
+    .systemMessage("Checked")
+    .extraField("someNewKey", true)
+    .extraFields(Map.of("anotherKey", "value"))
+    .build();
+```
 
 ## Salidas específicas de hook
 

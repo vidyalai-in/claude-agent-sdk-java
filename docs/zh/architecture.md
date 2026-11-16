@@ -83,7 +83,7 @@ SDK 采用分层架构，各层职责清晰分离：
   - `sendMessage()` / `query()` —— 发送消息
   - `receiveMessages()` / `receiveResponse()` —— 接收消息
   - 控制方法：`interrupt()`、`setModel()`、`setPermissionMode()` 等
-- **线程安全**：部分线程安全，并有明确文档化的保证
+- **线程安全**：部分线程安全，并有明确文档化的保证。`connect()`、`disconnect()` 和 `close()` 在同一把生命周期锁上串行执行（自 0.2.6 起）；在 `connect()` 期间到来的 `close()` 会使连接操作释放一切并抛出 `IllegalStateException`
 - **资源管理**：实现 AutoCloseable 以便正确清理
 
 **设计模式**：Builder + 资源管理（try-with-resources）
@@ -135,9 +135,30 @@ SDK 采用分层架构，各层职责清晰分离：
 - **关键特性**：
   - 使用 CompletableFuture 的异步控制协议
   - 请求 ID 的生成与跟踪
-  - 大小可配置的消息队列
+  - 带**背压**的有界消息队列（`maxMsgQSize`，默认 1000）：队列满时，读取线程会等待消费者，而不是丢弃消息，
+    与 Python SDK 中被 await 的发送一致。在 0.2.6 之前，等待了 5 秒的消息会被丢弃。流的结束以及任何错误
+    都会被记录为终止状态，因此满的队列可以推迟它们，但绝不会丢失它们，之后才创建的迭代器也仍能看到它们
+  - 该上限是**软性**的：当一个出站控制请求在等待其 `control_response` 时，读取线程会越过上限继续读取，
+    因为应答也来自同一个 stdout。因此，一个不在消费消息的线程所发起的控制调用，不会因为队列已满而超时。
+    队列仍是单一的 FIFO，顺序不变。`MirrorErrorMessage` 报告同样可以越过上限入队
+  - **中断**：在 `hasNext()` 中等待时被中断的消费者，会得到一个由 `InterruptedException` 引起的
+    `ClaudeSDKException`，并恢复中断标志，而不是正常的流结束。`close()` 在执行期间会清除中断标志，并在
+    返回时重新设置它，因此被中断的调用者仍能优雅地关闭
+  - **在回调中关闭**：在 `canUseTool`、钩子或 SDK MCP 回调中调用 `close()`，会取消该回调所服务的请求
+    （它永远不会被应答），但既不会中断执行关闭的线程，也不会等待它
   - 后台读取线程（在 Java 21+ 上为虚拟线程）
   - 用于异步回调的控制执行器
+  - **超时**：*出站*控制请求（SDK 发往 CLI，例如 `interrupt`、`setModel` 或 `setPermissionMode`）保留其
+    60 秒期限；`initialize` 有自己的期限，由 `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` 设置。*入站*请求
+    （`canUseTool`、钩子回调、SDK MCP 调用）自 0.2.6 起在 SDK 端没有期限，与 Python SDK 一致；它们在回调
+    作答、收到 `control_cancel_request` 或 `close()` 时结束。钩子 matcher 自身的 `timeout` 由 CLI 强制执行
+  - **宽松的控制响应**：没有已知 `request_id` 的 `control_response` 会被忽略，`"error"` 以外的任何
+    `subtype` 都算作成功，不是对象的成功响应体会被读作空，因此格式错误的帧不会再杀死读取线程
+  - **会话记录镜像的等待**：每个 `result` 之前、流结束时以及关闭时的刷写都会被等待，且没有外层上限
+    （在 0.2.6 之前会在 5 秒时被切断），因此当消费者看到某一轮的结果时，存储中已保存该轮，并且该轮的任何
+    `MirrorErrorMessage` 都会先于其 `ResultMessage` 到达。result 之前的刷写在读取线程上运行，因此慢速存储
+    也会推迟控制响应，直到刷写完成。批处理器自身为每次刷写设定了上限；参见
+    [TranscriptMirrorBatcher](#transcriptmirrorbatcher内部)
 
 **设计模式**：异步请求/响应 + Observer（用于钩子）
 
@@ -148,6 +169,9 @@ SDK 采用分层架构，各层职责清晰分离：
   - 支持所有消息类型（user、assistant、system、result、stream_event）
   - 内容块解析（text、thinking、tool_use、tool_result）
   - 错误处理与校验
+  - 宽松的可选字段（自 0.2.6 起）：显式的 `null`、类型错误的可选字段或非字符串的 `type`，都不再使整帧失败。
+    类型化字段无法容纳的线上值仍然可读（`UserMessage.toolUseResultRaw()`、`AssistantMessage.errorRaw()`、
+    `TaskNotificationMessage.statusValue()`）
 
 **设计模式**：Parser + Factory
 
@@ -173,7 +197,14 @@ SDK 采用分层架构，各层职责清晰分离：
   - 管理 CLI 子进程的生命周期
   - stdin/stdout 通信
   - 带可配置上限的缓冲读取
-  - 支持 stderr 回调，并逐行隔离异常（抛出异常的用户回调不再会杀死读取循环）
+  - stdout 采用 NDJSON 分帧，只按 `\n` 拆分：以 `{` 开头但并非恰好一个 JSON 对象的完整行会引发
+    `CLIJSONDecodeException`；其他非 JSON 行会被跳过（参见[传输层 → 行分帧](./feature-transport-layer.md#行分帧与背压026)）
+  - 只有设置了 `stderrCallback` 时才为 stderr 建立管道，否则由 JVM 继承；接入管道的行按 Python SDK 的方式
+    分帧，并逐行隔离异常（抛出异常的用户回调不会杀死读取循环）
+  - 派生失败：只有可执行文件缺失才是 `CLINotFoundException`；其他任何失败都是 `CLIConnectionException`，
+    并链接其 cause
+  - 有时限的 `close()`：写锁 5 秒，stdin EOF 后等待 CLI 退出 5 秒，SIGTERM 后 5 秒，SIGKILL 后 5 秒。中断
+    不会缩短任何一步：被中断的调用者仍会发送 stdin EOF 并等满宽限期，返回时中断标志会被重新设置
   - 自动清理进程
   - **JVM 关闭钩子**：一个静态的 `ConcurrentHashMap.newKeySet()` 跟踪每个被派生的 `Process`；在类初始化
     时注册的 `Runtime.addShutdownHook` 会对每个仍存活的子进程调用 `destroy()`，从而在父 JVM 先于
@@ -199,7 +230,11 @@ SDK 采用分层架构，各层职责清晰分离：
   - 工具注册与执行
   - 从 @Tool 注解自动生成 schema
   - 基于 CompletableFuture 的异步执行
-  - 服务器信息，以及在 `2025-06-18` / `2024-11-05` 之间进行的 `initialize` 版本协商
+  - 服务器信息，以及在 `2025-11-25` / `2025-06-18` / `2024-11-05` 之间进行的 `initialize` 版本协商
+  - 类型化的 `@Tool` 参数 schema（`ToolSchemas`）：每种 Java 类型对应一个绑定，它同时驱动所发布的 schema
+    与参数转换，因此 schema 绝不会接受方法无法接收的参数
+  - 每个连接一个会话（`openSession()`）：工具与 schema 是共享的，而进行中的调用、它们的取消以及 `close()`
+    则是每个客户端各自独立的
   - MCP 协议消息（`initialize`、`ping`、`tools/list`、`tools/call`）
   - 针对每个工具 `inputSchema` 的参数校验，在服务器构造时一次性编译
   - 取消：`notifications/cancelled` 会结清挂起的调用，并向处理函数发出信号
@@ -222,6 +257,9 @@ SDK 采用分层架构，各层职责清晰分离：
 - **契约**：`handleMessage` 对请求返回 JSON-RPC 响应，对任何不期待回复的消息返回 `null`。`close()` 的
   含义是"使用你的那个连接要走了"，而不是"关停"：一个处理器可以服务多个客户端，因此它必须是幂等的，
   并且保持可用。
+- **每个客户端的会话**：每个客户端在启动时对每个服务器调用一次 `openSession()`，把该服务器的消息路由到
+  返回的处理器，并在关闭时关闭该处理器。默认实现返回 `this`；`SdkMcpServer` 返回一个新的会话，因此共享
+  同一个服务器的并发客户端不会在 JSON-RPC id 上冲突，不会取消彼此的调用，也不会在关闭时让彼此的调用失败。
 
 #### ToolCallContext
 - **用途**：让正在运行的工具得知它的调用已被取消。
@@ -265,6 +303,9 @@ SDK 采用分层架构，各层职责清晰分离：
   - 按 `filePath` 合并帧，使每个唯一文件在每次刷写时只产生一次 `append` 调用。
   - 有界重试：`MIRROR_APPEND_MAX_ATTEMPTS=3` 次尝试，退避为 `[200ms, 800ms]`。超时不重试（进行中的
     调用仍可能落地）。
+  - 严格 FIFO 的排空：每次排空都串接在之前所有排空之后，因此即时排空与显式刷写都按入队顺序追加。
+  - 有时限的完成：`flush()` 和 `close()` 总会在 `flushTimeoutMs()`（追加超时 × 尝试次数 + 退避，默认
+    181 000 ms）内完成；超过这个时间后，future 照样完成，排空则在后台继续进行。
   - 路径落在所配置 `projectsDir` 之外的帧会被丢弃并给出警告。
   - 失败会以 `MirrorErrorMessage` 出现在消费者的消息流中 —— 绝不阻塞会话。
 
@@ -276,7 +317,8 @@ SDK 采用分层架构，各层职责清晰分离：
   1. 通过 `store.loadAsync()` 加载条目（对于 `continueConversation`，则选出最近修改过的非支线会话）。
   2. 把 JSONL 写入一个布局类似 `~/.claude/` 的临时目录。
   3. 复制 `.credentials.json`（其中的 `refreshToken` 会被抹去，以防从临时目录消耗令牌）与
-     `.claude.json`。
+     `.claude.json`。在 macOS 上，当 `CLAUDE_CONFIG_DIR`、`ANTHROPIC_API_KEY` 和 `CLAUDE_CODE_OAUTH_TOKEN`
+     都未设置时，会改为从钥匙串读取登录信息（`security find-generic-password`），与 Python SDK 一致。
   4. 当存储实现了 `listSubkeys` 时，物化子 agent 的会话记录与 `.meta.json` 附属文件。
   5. 以 `CLAUDE_CONFIG_DIR=<temp dir>` 派生 CLI。
   6. 断开连接时清理，遇到 Windows 杀软/索引器的临时锁定会重试。
@@ -531,6 +573,9 @@ CLI 可以放弃它发出的某个控制请求（例如在某一轮被中断时�
 它的响应，输掉竞争的取消则什么也不做，因此取消永远不会在响应写入 stdin 的中途打断它。这与 Python SDK
 的做法一致：Python SDK 会取消处理函数的任务并跳过响应。
 
+`close()` 会对每个仍在应答中的入站请求立即做同样的处理，不应答其中任何一个。在 0.2.6 之前，它会先等待
+这些请求最多 5 秒。
+
 ### stdin 的生命周期与一次运行的结束
 
 > **`controlExecutor` 必须保持"每任务一线程"。** SDK MCP 工具调用会驻留其控制线程直到工具作答，而终止
@@ -613,7 +658,7 @@ SDK 采用多线程架构（在 Java 21+ 上为虚拟线程，在 17-20 上为�
 - **AtomicBoolean**：用于连接状态与关闭状态
 - **volatile**：用于 QueryHandler 与 Transport 的可见性
 - **同步**：用于 connect() 以避免竞态条件
-- **BlockingQueue**：线程安全的消息队列
+- **BlockingQueue**：线程安全的有界消息队列；队列满时会阻塞生产者（背压），而不是丢弃消息
 - **ConcurrentHashMap**：线程安全的控制请求跟踪
 
 ### 资源管理
@@ -787,7 +832,7 @@ HookOutput (class, builder)
 
 1. **虚拟线程**：在 Java 21+ 上可实现数千个并发操作
 2. **缓冲 I/O**：减少子进程通信的系统调用
-3. **消息队列**：大小可配置，以平衡内存与吞吐量
+3. **消息队列**：大小可配置，以平衡内存与吞吐量；队列满时会让 CLI 变慢，而不会丢失消息
 4. **惰性初始化**：仅在需要时创建 QueryHandler
 5. **资源复用**：跨操作复用 ExecutorService
 6. **直接内存**：Jackson 采用高效的缓冲处理

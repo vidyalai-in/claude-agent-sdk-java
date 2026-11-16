@@ -9,7 +9,7 @@
 ```
 ClaudeSDKException (RuntimeException)
 ├── CLIConnectionException
-├── CLINotFoundException
+│   └── CLINotFoundException
 ├── ProcessException
 │   └── ResultException
 ├── CLIJSONDecodeException
@@ -28,6 +28,11 @@ public class ClaudeSDKException extends RuntimeException {
 }
 ```
 
+`hasNext()` で待機しているスレッドが割り込まれたとき、`ClaudeSDKClient.receiveMessages()` と
+`receiveResponse()` のメッセージイテレータがそのまま（原因は `InterruptedException`）投げます。
+割り込みフラグは復元されます。0.2.6 以降の動作で、それ以前は割り込みがあるとストリームが完了したかの
+ように終了していました。
+
 ## CLIConnectionException
 
 Claude Code CLI への接続に失敗しました。
@@ -40,8 +45,11 @@ public class CLIConnectionException extends ClaudeSDKException {
 ```
 
 **原因**：
-- CLI が見つからない
-- プロセスの起動に失敗した
+- CLI が見つからない（サブクラスの `CLINotFoundException` として）
+- 実行ファイルが存在しないこと以外の理由でプロセスの起動に失敗した。たとえば `EACCES`（実行可能でない）や `ENOEXEC`（有効なバイナリでない）：`"Failed to start Claude Code: ..."`。起動時の `IOException` が原因になります。0.2.6 より前、これらは `CLINotFoundException` として報告されていました
+- 作業ディレクトリ `cwd` が存在しない
+- `user(...)` が設定されている：Java SDK は CLI を別の OS ユーザーとして実行できません（[user()](./feature-configuration-options.md#user) を参照）
+- シリアライズできない `mcpServers` マップまたは `outputFormat` の JSON スキーマ（`"Failed to serialize ..."`）。0.2.6 より前は、警告を出してフラグを落としていました
 - 接続のタイムアウト
 - ネットワークの問題（リモートトランスポート）
 - `sandbox` とのマージのために `settings` を読み込めない（`"Failed to load settings: ..."`）：ファイルが存在しない、読み取れない、JSON が不正、またはオブジェクトではない JSON。[settings()](./feature-configuration-options.md#settings) を参照してください
@@ -52,12 +60,23 @@ public class CLIConnectionException extends ClaudeSDKException {
 Claude Code CLI の実行ファイルが見つかりません。
 
 ```java
-public class CLINotFoundException extends ClaudeSDKException {
+public class CLINotFoundException extends CLIConnectionException {
+    public CLINotFoundException();                                         // default install hint
     public CLINotFoundException(String message);
+    public CLINotFoundException(String message, String cliPath);
+    public CLINotFoundException(String message, String cliPath, Throwable cause);
+
+    @Nullable public String getCliPath();   // the path that was searched
 }
 ```
 
-CLI が見つからない場合、何かを起動する前、トランスポートの構築時に投げられます。Windows では、絶対パスの
+`CLIConnectionException` のサブクラスなので、両方を処理する場合はこちらを先に捕捉してください。
+
+CLI が見つからない場合、何かを起動する前、トランスポートの構築時に投げられます。また、実行ファイルが
+存在しないために起動が失敗した場合（`ENOENT`。起動時の例外が原因になります）には `connect()` が投げます。
+0.2.6 以降、この例外が意味するのはそれだけです：存在するが実行できない CLI は代わりに通常の
+`CLIConnectionException` を送出するため、パーミッションの問題が「インストールされていない」と報告される
+ことはもうありません。Windows では、絶対パスの
 `PATH` エントリにあるネイティブの `claude.exe`、または `~/.local/bin/claude.exe` だけが見つかります。npm の
 `claude.cmd` シムは `allowUnsafeWindowsBatchCli(true)` を指定した場合にのみ見つかり、メッセージにもそう
 書かれます。
@@ -148,14 +167,18 @@ CLI からの JSON の解析に失敗しました。
 
 ```java
 public class CLIJSONDecodeException extends ClaudeSDKException {
-    public CLIJSONDecodeException(String message, Throwable cause);
+    public CLIJSONDecodeException(String line, Throwable cause);
+
+    public String getLine();   // the raw line that failed to parse
 }
 ```
 
 **原因**：
-- 不正な JSON
-- 想定外の形式
+- `{` で始まるがパースできない、または JSON オブジェクトの後に内容がある（`{"a":1} junk`）完全な stdout の行。0.2.6 以降、これはこの例外でメッセージストリームを終了させます（収集を行う `ClaudeSDK.query(...)` はそれを `QueryFailedException` で包みます）。以前は、そのような行が 1 つあると、それ以降のすべてのメッセージが黙って飲み込まれていました。`{` で始まらない行はスキップされ、報告されません
+- `maxBufferSize` より長い stdout の行
 - CLI のバージョン不一致
+
+[トランスポート層 → 行の区切りとバックプレッシャー](./feature-transport-layer.md#行の区切りとバックプレッシャー026)を参照してください。
 
 ## MessageParseException
 
@@ -168,13 +191,16 @@ public class MessageParseException extends ClaudeSDKException {
 ```
 
 **原因**：
-- 未知のメッセージ型
+- `type` フィールドのないメッセージ
 - 必須フィールドの欠落
-- 型変換のエラー
+- 構造が不正な既知のメッセージ型（たとえば、リストではない `assistant` の content）
+
+未知のメッセージ型はスキップされ、報告されません。0.2.6 以降、明示的な `null` や型の違う*省略可能な*
+フィールドでも、この例外は送出されなくなりました。[メッセージ型](./feature-message-types.md)を参照してください。
 
 ## QueryFailedException
 
-収集を行うクエリがエラー結果で終わりました。すでに届いていたメッセージを保持します。
+収集を行うクエリがエラー結果で終わったか、そのスレッドが割り込まれました。すでに届いていたメッセージを保持します。
 
 ```java
 public class QueryFailedException extends ClaudeSDKException {
@@ -189,6 +215,9 @@ public class QueryFailedException extends ClaudeSDKException {
 - `error_max_turns` —— `maxTurns` に到達
 - `error_max_budget_usd` —— `maxBudgetUsd` に到達
 - `error_during_execution` —— `resumeDropsTurn` に拒否されたレジュームを含む
+- メッセージを待っている間に呼び出し元スレッドが割り込まれた（0.2.6 以降）。
+  原因は `InterruptedException` を原因とする `ClaudeSDKException` で、`resultMessage()` は通常
+  `null`、割り込みフラグは復元されます。例外が投げられる前に、CLI はそれでも正常にシャットダウンされます。
 
 **なぜ存在するのか**：CLI はこれらの状況を、*完全な*ターン —— アシスタントメッセージと、サブタイプ・
 コスト・使用量を持つ最終的な `ResultMessage` —— を発行し、そのあとで意図的に非ゼロ終了することに

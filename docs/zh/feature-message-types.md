@@ -47,6 +47,8 @@ for (Message msg : ClaudeSDK.query(prompt)) {
 
 **未知类型与格式错误的内容不同。** 返回 `null` 只适用于*无法识别的消息类型*。结构无效的*已知*类型（`user` / `assistant`）是另一回事 —— 解析器会抛出 `MessageParseException`，而不是默默丢弃，这样真正的协议违规不会被掩盖。自 0.1.18 起这一点被明确强制：`content` 不是列表的 `assistant` 消息（例如裸字符串）会抛出 `"Invalid assistant content (expected list, got …)"`，而 `content` 列表中不是对象的元素（`user` 和 `assistant` 消息都适用）会抛出 `"Invalid content block (expected dict, got …)"`。以前这些会以原始的 `ClassCastException` 形式出现；现在统一报告为 `MessageParseException`（与解析器的其他结构校验一致）。
 
+自 0.2.6 起，解析器对*可选*字段采取宽松处理，与 Python SDK 一致。显式的 `null` 或类型错误的可选字段不再使整帧失败。在内容块上，非对象的 `input`、`content` 或 `source`，或者非布尔值的 `is_error`，也不再使整帧失败（若类型化 record 无法容纳该值，则读作 `null`）；`type` 不是字符串的块或消息会被跳过，而不再抛出 `ClassCastException`。缺少 `type` 字段的消息，以及上述结构错误，仍会抛出 `MessageParseException`。
+
 ## 消息类型层次
 
 ```
@@ -88,9 +90,16 @@ record UserMessage(
     Object content,                          // String or List<ContentBlock>
     @Nullable String uuid,                   // Unique message identifier
     @Nullable String parentToolUseId,        // Set when inside a subagent tool use
-    @Nullable Map<String, Object> toolUseResult  // Tool execution metadata (file edits, etc.)
+    @Nullable Map<String, Object> toolUseResult, // Tool execution metadata (file edits, etc.)
+    @Nullable MessageOrigin origin,          // Provenance; null when unattributed
+    @Nullable Object toolUseResultRaw        // tool_use_result exactly as sent
 ) implements Message
 ```
+
+`toolUseResultRaw`（自 0.2.6 起）是 CLI 发送的原样 `tool_use_result`：对于 JSON 对象是一个 `Map`（与
+`toolUseResult` 是同一个 map），否则是 `String`、`List`、`Number` 或 `Boolean`。`toolUseResult` 会把非对象值
+包装为 `{"unknown": value}`；这种包装已被弃用，因此当该值可能不是对象时，请读取 `toolUseResultRaw`。不含
+`toolUseResultRaw` 以及不含 `origin` 的构造函数都得以保留。参见[消息来源](#消息来源)。
 
 ### 方法
 
@@ -130,6 +139,12 @@ if (msg instanceof UserMessage user) {
     if (toolResult != null) {
         System.out.println("File edited: " + toolResult.get("filePath"));
     }
+
+    // The value as sent, which need not be an object
+    Object raw = user.toolUseResultRaw();
+    if (raw instanceof String s) {
+        System.out.println("Tool result text: " + s);
+    }
 }
 ```
 
@@ -151,11 +166,14 @@ record AssistantMessage(
     @Nullable String sessionId,              // Session ID this message belongs to
     @Nullable String uuid,                   // Unique identifier in the session transcript
     @Nullable String userMessageUuid,        // uuid of the user message this turn is answering
-    @Nullable List<String> userMessageUuids  // uuid of every user message this turn has taken in so far
+    @Nullable List<String> userMessageUuids, // uuid of every user message this turn has taken in so far
+    @Nullable Object errorRaw                // top-level "error" exactly as sent (normally a String)
 ) implements Message
 ```
 
 `usage` map 在可用时包含每轮的 API token 消耗数据，包括 `input_tokens`、`output_tokens` 以及缓存相关字段。`messageId`、`stopReason`、`sessionId` 和 `uuid` 字段记录 API 级别的标识符。这些字段可为 null，在部分／流式消息中不存在。`userMessageUuid` 和 `userMessageUuids` 只会在其值被设置或发生变化后的第一条顶层助手消息上设置；参见[将结果与你的提示词对应起来](#将结果与你的提示词对应起来)。也提供了不含较新字段的向后兼容构造函数。
+
+对于当前 SDK 版本无法识别的值，或不是字符串的值，`error` 读作 `UNKNOWN`。`errorRaw`（自 0.2.6 起）保留线上的原始值，因此 `assistant.errorRaw()` 会显示 CLI 实际发送的内容。
 
 ### 方法
 
@@ -174,7 +192,7 @@ record AssistantMessage(
 | `RATE_LIMIT` | `"rate_limit"` | 超出速率限制 |
 | `INVALID_REQUEST` | `"invalid_request"` | 请求格式错误 |
 | `SERVER_ERROR` | `"server_error"` | 服务器内部错误 |
-| `UNKNOWN` | `"unknown"` | 未知或无法识别的错误 |
+| `UNKNOWN` | `"unknown"` | 未知或无法识别的错误（线上值见 `errorRaw()`） |
 
 ### 示例
 
@@ -347,7 +365,7 @@ record TaskNotificationMessage(
     String subtype,                  // always "task_notification"
     Map<String, Object> data,        // raw message data
     String taskId,                   // unique task identifier
-    TaskNotificationStatus status,   // COMPLETED, FAILED, or STOPPED
+    @Nullable TaskNotificationStatus status, // COMPLETED, FAILED, STOPPED; null if unknown (see statusValue())
     String outputFile,               // path to task output file
     String summary,                  // human-readable summary
     String uuid,                     // message UUID
@@ -355,6 +373,22 @@ record TaskNotificationMessage(
     @Nullable String toolUseId,      // tool use ID (may be null)
     @Nullable TaskUsage usage        // final usage statistics (may be null)
 ) implements Message
+```
+
+| 方法 | 说明 |
+|--------|-------------|
+| `type()` | 返回 `"system"` |
+| `statusValue()` | CLI 发送的原样 `status` 字符串（缺失或不是字符串时为 null） |
+| `get(String key)` | 从原始数据 map 中取值 |
+
+当 CLI 报告了当前 SDK 版本未建模的状态时，`status()` 为 `null`。此时请读取 `statusValue()`。在 0.2.6 之前，
+未知状态会终止消息流。
+
+```java
+if (msg instanceof TaskNotificationMessage n) {
+    String status = n.status() != null ? n.status().getValue() : n.statusValue();
+    System.out.println("Task " + n.taskId() + " ended: " + status);
+}
 ```
 
 ### TaskNotificationStatus
@@ -366,6 +400,8 @@ enum TaskNotificationStatus {
     STOPPED("stopped")
 }
 ```
+
+`fromValue(String)` 遇到未知值会抛出异常；`fromValueOrNull(String)` 对未知值或 `null` 返回 `null`。
 
 ### TaskUpdatedMessage
 

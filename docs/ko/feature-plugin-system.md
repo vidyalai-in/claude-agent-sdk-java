@@ -22,7 +22,9 @@ public record SdkPluginConfig(String type, String path) {
 ```
 
 `"local"` 타입만 지원됩니다. 전송 계층은 `local` 플러그인마다 CLI 명령에 `--plugin-dir <path>`를
-추가합니다. 다른 `type`을 가진 구성은 오류 없이 건너뛰므로, 구성은 항상 `local(...)`로 만드세요.
+추가합니다. 0.2.6부터는 다른 `type`을 가진 구성이 있으면 `connect()`가 `IllegalArgumentException`
+(`Unsupported plugin type: …`)을 던집니다. Python SDK가 `ValueError`를 일으키는 것과 같습니다. 이전에는
+경고와 함께 건너뛰었습니다. 구성은 `local(...)`로 만드세요.
 
 ## 플러그인 구성
 

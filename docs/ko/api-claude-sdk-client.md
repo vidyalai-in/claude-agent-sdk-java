@@ -36,9 +36,13 @@ public void connect() throws CLIConnectionException
 
 Claude Code CLI와의 연결을 맺습니다.
 
-**스레드 안전성**: 스레드 안전, 멱등
+**스레드 안전성**: 스레드 안전, 멱등. `connect()`, `disconnect()`,
+`close()`는 직렬화됩니다(0.2.6부터): 각각은 다른 스레드에서 이미 실행 중인 호출이
+끝나기를 기다립니다.
 
-**던짐**: close() 이후에 호출하면 `IllegalStateException`
+**던짐**: close() 이후에 호출하거나, 연결이 진행되는 동안 다른 스레드에서 `close()`가
+호출되면 `IllegalStateException`(연결 작업은 먼저 자신이 설정한 모든 것을
+해제합니다)
 
 ### connect(String initialMessage)
 
@@ -46,7 +50,13 @@ Claude Code CLI와의 연결을 맺습니다.
 public void connect(String initialMessage) throws CLIConnectionException
 ```
 
-연결하고 초기 메시지를 보냅니다.
+연결하고 초기 메시지를 보냅니다. null이 아닌 메시지는 빈 문자열을 포함해 모두
+전송됩니다(0.2.6부터, Python SDK와 동일). 메시지 없이 연결하려면 `null`을 넘기거나
+`connect()`를 호출하세요.
+
+**던짐**: CLI를 시작할 수 없거나(실행 파일이 없으면 하위 클래스인 `CLINotFoundException`)
+`user(...)`가 설정되어 있으면 `CLIConnectionException`. 연결에 실패하면 다시 던지기 전에
+프로세스, 그 스레드, 임시 `CLAUDE_CONFIG_DIR`을 정리합니다.
 
 ### isConnected()
 
@@ -67,7 +77,13 @@ public void close()
 
 연결을 닫고 자원을 정리합니다.
 
-**스레드 안전성**: 스레드 안전, 멱등
+**스레드 안전성**: 스레드 안전, 멱등. `connect()`와 직렬화됩니다: 다른 스레드가
+연결하거나 연결을 끊는 중에 호출하면 그 작업이 끝나기를 기다립니다.
+
+0.2.6부터는 `canUseTool`, 훅, SDK MCP 도구 콜백 안에서 호출해도, 호출 스레드의
+인터럽트 플래그가 설정된 상태에서 호출해도 안전합니다. CLI는 여전히 stdin EOF와
+종료를 위한 유예 시간을 받고, 인터럽트 플래그는 보존됩니다. 호출한 콜백이 처리하던
+요청에는 응답하지 않은 채로 남습니다.
 
 ## 메시지 보내기
 
@@ -161,6 +177,10 @@ public Iterator<Message> receiveMessages()
 
 **반환**: `Iterator<Message>`
 
+**던짐**(`hasNext()`에서): 기다리던 스레드가 인터럽트되면 `InterruptedException`으로 인한
+`ClaudeSDKException`을 던지고 인터럽트 플래그를 복원합니다(0.2.6부터. 이전에는 인터럽트가
+완료된 것처럼 스트림을 끝냈습니다)
+
 ### receiveResponse()
 
 ```java
@@ -172,6 +192,10 @@ public Iterable<Message> receiveResponse()
 **스레드 안전성**: 스레드 안전
 
 **반환**: `Iterable<Message>`
+
+**던짐**: `receiveMessages()`와 마찬가지로, 기다리던 스레드가 인터럽트되면
+`InterruptedException`으로 인한 `ClaudeSDKException`을 던지고 인터럽트 플래그를
+복원합니다
 
 ## 제어 메서드
 
@@ -289,12 +313,13 @@ public Map<String, Object> getServerInfo()
 
 서버 초기화 정보를 얻습니다: 사용 가능한 명령, 출력 스타일, 서버 기능.
 
-**반환**: `Map<String, Object>` — `initialize` 응답에 담긴 정보(CLI가 아무것도 반환하지 않은 경우에만
-`null`)
+**반환**: `Map<String, Object>` — `initialize` 응답에 담긴 정보.
+응답에 본문이 없으면 빈 맵입니다(0.2.6부터. 이전에는
+`null`이었습니다)
 
 ## 스레드 안전성
 
-- **connect()**: 스레드 안전, 동기화됨
+- **connect()**: 스레드 안전, `disconnect()` 및 `close()`와 직렬화됨
 - **전송 메서드**: 스레드 안전
 - **수신 메서드**: 스레드 안전하지만 큐를 공유함
 - **제어 메서드**: 스레드 안전

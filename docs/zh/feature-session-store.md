@@ -143,8 +143,10 @@ public record SessionStoreListEntry(String sessionId, long mtime);
 public record SessionSummaryEntry(String sessionId, long mtime, Map<String, Object> data);
 ```
 
-`SessionStoreEntry` 是对 `Map<String, Object>` 的一层薄包装，要求含有 `type` 字段；其余内容都是不透明的
-原样透传：
+`SessionStoreEntry` 是对 `Map<String, Object>` 的一层薄包装，整个 map 都是不透明的原样透传。CLI 写入的每个条目都带有
+字符串类型的 `type`，但这并不是必需的：与 Python SDK 一样，没有 `type` 的条目会在镜像、导入和列举中原样传递，
+`type()` 对它返回 `null`。（在 0.2.5 及之前的版本中，构造函数会对这样的条目抛出 `IllegalArgumentException`。）
+`SessionStoreEntry.of(map)` 会复制该 map 并保留其键的顺序：
 
 ```java
 SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
@@ -155,7 +157,7 @@ SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
     "timestamp", "2026-04-27T00:00:00Z"
 ));
 
-entry.type();      // "user"
+entry.type();      // "user" (null when the entry has no string type)
 entry.uuid();      // "u1"
 entry.timestamp(); // "2026-04-27T00:00:00Z"
 entry.<String>get("custom_field"); // typed convenience accessor
@@ -336,7 +338,16 @@ String spawnedBy = subAgent.get(0).parentToolUseId();
 （与 Python SDK 一致），以免大型项目的列举耗尽适配器的连接池。
 
 如果 `listSessions` 与 `listSessionSummaries` 都未实现，该调用会抛出 `IllegalStateException`。
-适配器 `loadAsync` 的失败会把个别行降级为空摘要条目，而不是让整个列表失败。
+适配器 `loadAsync` 的失败会把个别行降级为空摘要条目（保留列举得到的 mtime，其他所有字段，包括 `cwd`，都为
+`null`），而不是让整个列表失败。
+
+由 `load()` 派生的行（回退路径，以及 `getSessionInfoFromStore`）会经过与本地会话记录相同的解析器：条目被序列化为
+JSONL，`fileSize` 是该 JSONL 的字节大小，`firstPrompt` 和 `createdAt` 来自其前 64 KB。`getSessionInfoFromStore`
+从最后一个条目的 `timestamp` 获取 `lastModified`，并让适配器 `load()` 抛出的异常向上传播，而不是把会话报告为未找到。
+由摘要附属文件构建的行，其 `fileSize` 为 `null`。不带 UTC 偏移的时间戳按 UTC 读取。
+
+`directory` 参数在推导项目键之前会被规范化（解析符号链接，并做 NFC 规范化），与本地磁盘查找完全相同，因此存储键
+总是与磁盘上的项目目录名一致。
 
 ## 基于 SessionStore 的变更操作
 
@@ -357,10 +368,12 @@ ForkSessionResult fork = ClaudeSDK.forkSessionViaStore(
 内部实现：
 
 - `renameSessionViaStore` 追加一条 `custom-title` 条目。
-- `tagSessionViaStore` 追加一条 `tag` 条目；`null` 会通过空字符串来清除。
+- `tagSessionViaStore` 追加一条 `tag` 条目；`null` 会通过空字符串来清除。标签的净化方式与 `tagSession` 完全相同
+  （NFKC 规范化，移除格式字符与私用区字符）。
 - 如果存储未实现 `delete()`，`deleteSessionViaStore` 就是空操作（对于原始 S3 这类 WORM/仅追加的后端很合适）。
 - `forkSessionViaStore` 会执行与磁盘分叉相同的 UUID 重映射变换（共用 `SessionMutations.buildForkLines`）
-  —— 仅在存储层做拷贝是**不够**的。
+  —— 仅在存储层做拷贝是**不够**的。未提供标题时，它会依次回退为源会话的自定义标题、AI 标题、首个提示词，并加上
+  `" (fork)"`。
 
 `listSubagentsFromStore` 需要 `listSubkeys()`，否则抛出 `IllegalStateException`。
 
@@ -398,10 +411,17 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 | 文件 | 为何重要 |
 |------|----------------|
-| `.credentials.json` | OAuth 凭据，其中的 `claudeAiOauth.refreshToken` 已被移除 |
+| `.credentials.json` | OAuth 凭据，其中的 `claudeAiOauth.refreshToken` 已被移除（可用时从 macOS 钥匙串读取，见下文） |
 | `.claude.json` | 用户级的 CLI 状态 |
 | `settings.json` | `apiKeyHelper`，以及你的 `env`、`hooks` 和 `permissions` |
 | `cowork_settings.json` | 在 cowork-plugins 模式下读取的备用设置文件名 |
+
+**macOS 钥匙串。** 在 macOS 上，CLI 的默认配置把 OAuth 登录信息保存在钥匙串中，而不是 `.credentials.json` 中，而被
+重定向的 `CLAUDE_CONFIG_DIR` 会改变子进程查找的钥匙串服务名。因此，当 `CLAUDE_CONFIG_DIR`、`ANTHROPIC_API_KEY` 和
+`CLAUDE_CODE_OAUTH_TOKEN` 都未设置时（无论是在 `options.env` 还是进程环境中），SDK 会与 Python SDK 一样，使用
+`security find-generic-password -a $USER -w -s "Claude Code-credentials"`（5 秒超时）读取登录信息，并把它写入临时的
+`.credentials.json`，其中的刷新令牌会被抹去。钥匙串中的结果优先于凭据文件。这次查找是尽力而为的：在非 macOS 系统上，
+或者当命令失败、超时或没有任何输出时，仍像以前一样使用凭据文件。
 
 播种 `settings.json` 比看上去更重要：除了凭据文件、macOS 钥匙串和环境变量之外，`apiKeyHelper` 是第四种
 认证机制。在 v0.1.23 之前它不会被复制，因此仅通过 `apiKeyHelper` 认证的主机，一旦从存储恢复就会以
@@ -462,6 +482,10 @@ for (Message msg : ClaudeSDK.query("Hello", options)) {
 超时**不会**重试（进行中的调用仍可能落地 —— 重试会引发一次并发的重复写入）。适配器应基于
 `entry.uuid()` 去重，使部分成功后的重试对重复写入是安全的。
 
+在两种刷写模式下，`MirrorErrorMessage` 总是先于其批次失败的那一轮的 `ResultMessage` 到达，也先于结束失败流的那个错误
+到达（自 0.2.6 起；此前在 eager 模式下它可能在 result 之后到达，而在读取线程失败时它可能丢失）。因此，一旦你看到某一轮
+的结果，该轮的所有镜像失败都已经被报告过了。
+
 ## 刷写模式（BATCHED 与 EAGER）
 
 默认情况下，`TranscriptMirrorBatcher` 会缓冲每一个 `transcript_mirror` 帧，并在每轮结束时（在 `result`
@@ -484,8 +508,14 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 | `BATCHED`（默认） | 每条 `result` 消息刷写一次，或待处理量超过 500 条 / 1 MiB 时 | 几乎所有生产工作负载 —— 把适配器延迟挡在流式热路径之外 |
 | `EAGER` | 每入队一帧就调度一次后台排空 | 向客户端实时流式传输会话记录、实时审计管道、无法等到 `result` 的超大轮次 |
 
-`EAGER` 会把批处理器的待处理阈值清零 —— 每入队一帧都会在 SDK 自有的排空执行器上调度一次后台排空（每个任务一个 `session-store-mirror-drain-<n>` 线程；在 Java 21+ 上是虚拟线程），由它在所配置的 `SessionStoreExecutor` 上调用你的适配器的 `appendAsync`。追加仍按入队顺序串行进行；慢速适配器不会拖住
+`EAGER` 会把批处理器的待处理阈值清零 —— 每入队一帧都会在 SDK 自有的排空执行器上调度一次后台排空（每个任务一个 `session-store-mirror-drain-<n>` 线程；在 Java 21+ 上是虚拟线程），由它在所配置的 `SessionStoreExecutor` 上调用你的适配器的 `appendAsync`。追加仍按入队顺序串行进行；慢速适配器不会在两次 result 之间拖住
 读取循环，但在它忙碌期间会看到帧被合并。未设置 `sessionStore` 时该选项会被忽略。
+
+> **注意：慢速存储会在每个 result 处拖住消息流。** 在两种模式下，读取线程都会在交出每个 `ResultMessage` 之前等待
+> 待处理的条目追加完成。在此期间不会从 CLI 读取任何其他内容，包括控制响应，因此在这次刷写期间发起的 `interrupt()`、
+> `setModel()` 或 `getMcpStatus()` 等控制调用也会随之等待。`close()` 同样会等待最后一次刷写。每次等待都以
+> `TranscriptMirrorBatcher.flushTimeoutMs()` 为上限，默认 181 秒（参见 [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)）。
+> Python SDK 的行为相同。请让 `append` 保持快速，或在适配器内部把慢速工作交给一个队列。
 
 ## 把本地会话导入存储
 
@@ -502,7 +532,8 @@ ClaudeSDK.importSessionToStore(
 
 该辅助方法：
 
-- 逐行流式读取本地 JSONL（跳过空行）。
+- 逐行流式读取本地 JSONL（跳过空行）。没有 `type` 的行会像其他行一样被导入，不再中止导入。是合法 JSON 但不是对象的
+  行会被跳过并给出警告。
 - 每 `batchSize` 条（默认 500）或每 1 MiB 的行字节数（以先到者为准）调用一次 `store.append(key, batch)`。
 - 当 `includeSubagents=true` 时，递归导入 `<sessionDir>/subagents/**/*.jsonl` 与 `.meta.json` 附属文件
   （`.meta.json` 会变成一条 `agent_metadata` 条目）。
@@ -540,6 +571,9 @@ SessionStoreConformance.run(WormStore::new,
 该套件使用纯粹的 `AssertionError`（不依赖任何测试框架），因此在 JUnit、TestNG、Spock，甚至一个普通的
 `main()` 冒烟测试中都能工作。
 
+自 0.2.6 起，该套件更加严格：在需要空列表的地方（例如 `listSessions` 或 `listSubkeys` 没有可列出的内容时）它会拒绝
+`null`，并且会拒绝有摘要却不在 `listSessions` 中的会话。以前返回 `null` 列表的适配器能通过，现在会失败。
+
 这 14 项契约涵盖：
 
 | # | 契约 |
@@ -570,7 +604,11 @@ SessionStoreConformance.run(WormStore::new,
 - 立即刷写的阈值：`MAX_PENDING_ENTRIES=500`、`MAX_PENDING_BYTES=1 MiB`。设置了
   `sessionStoreFlush(EAGER)` 时两个阈值都会清零，于是每入队一帧都会调度一次后台排空
   （参见[刷写模式](#刷写模式batched-与-eager)）。
-- 在每条 `result` 消息之前显式刷写，并在流结束 / 关闭时再刷写一次。
+- 在每条 `result` 消息之前显式刷写，并在流结束 / 关闭时再刷写一次。消息流会等待每一次这样的刷写，不再像 0.2.6 之前
+  那样在 5 秒时切断，因此当你看到某一轮的 `result` 时，存储中已保存该轮。这个等待仍然是有上限的：每次刷写都会在
+  `flushTimeoutMs()` 内完成，它等于追加超时 × 尝试次数再加上退避（默认 `3 × 60 000 + 200 + 800 = 181 000 ms`）。
+  如果达到这个上限，刷写照样返回，记录一条警告，排空则在后台继续运行。
+- 排空严格遵循 FIFO：即时排空与显式刷写都按入队顺序追加，绝不交错。
 - 按 `filePath` 合并帧，使每个唯一文件在每次刷写时只产生一次 `append` 调用。
 - 路径落在 `projectsDir` 之外的帧会被丢弃并给出警告（当父进程与子进程的 `CLAUDE_CONFIG_DIR` 不一致时
   会发生这种情况）。

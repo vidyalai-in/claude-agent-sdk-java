@@ -46,9 +46,17 @@ que lleva las peticiones de permiso también está disponible allí. No se puede
 })
 ```
 
+El SDK no fija ningún límite de tiempo para el callback, igual que el SDK de Python, así que puede
+esperar a que una persona lo apruebe. Antes de la 0.2.6 se cortaba a los 60 segundos, lo que hacía
+fallar cualquier aprobación que tardara más. (Las peticiones de control salientes del propio SDK,
+como `setModel`, conservan su tiempo de espera de 60 segundos.)
+
 Si el CLI abandona la petición de permiso antes de que responda el callback (envía un
 `control_cancel_request`, por ejemplo cuando se interrumpe el turno), el SDK cancela el future que
-devolvió el callback, interrumpe el hilo que lo espera y no envía ninguna respuesta.
+devolvió el callback, interrumpe el hilo que lo espera y no envía ninguna respuesta. Cerrar el client
+hace lo mismo, de inmediato, con todos los callbacks que sigan en curso. El callback puede cerrar él
+mismo el client (desde la 0.2.6): el CLI sigue recibiendo el EOF de stdin y su periodo de gracia, el
+hilo que cierra no se interrumpe y la petición de ese mismo callback queda sin respuesta.
 
 > **`canUseTool` solo se dispara en decisiones `"ask"`.** Este callback es el sustituto en el SDK
 > del prompt interactivo de permisos: solo se ejecuta cuando las reglas de permisos del CLI dan
@@ -147,6 +155,16 @@ record ToolPermissionContext(
     @Nullable String description             // human-readable subtitle for the permission UI
 )
 ```
+
+`suggestions` se lee de forma tolerante: una sugerencia cuyo tipo, destino, comportamiento o modo no
+conoce esta versión del SDK se omite (se registra en `FINE`) en lugar de hacer fallar la petición, y
+un valor que no es una lista se lee como vacío. Antes de la 0.2.6, una sola sugerencia así impedía
+que se llamara al callback.
+
+El `destination` de una sugerencia es un `PermissionUpdateDestination`: `USER_SETTINGS`,
+`PROJECT_SETTINGS`, `LOCAL_SETTINGS`, `SESSION` o `CLI_ARG` (`"cliArg"`, reglas que vienen de la
+línea de comandos, como `--allowedTools`). `CLI_ARG` es nuevo en la 0.2.6, así que un `switch`
+exhaustivo sobre el enum necesita un caso para él.
 
 Se conservan constructores retrocompatibles para el código escrito antes de que existieran los
 campos enriquecidos:

@@ -154,8 +154,12 @@ public record SessionStoreListEntry(String sessionId, long mtime);
 public record SessionSummaryEntry(String sessionId, long mtime, Map<String, Object> data);
 ```
 
-`SessionStoreEntry` es una envoltura fina sobre `Map<String, Object>` que exige un campo `type`; todo
-lo demás pasa de forma opaca:
+`SessionStoreEntry` es una envoltura fina sobre `Map<String, Object>`, y todo el mapa pasa de forma
+opaca. Cada entrada que escribe el CLI lleva un `type` de tipo cadena, pero no se exige ninguno: igual
+que en el SDK de Python, una entrada sin él atraviesa sin cambios la réplica, la importación y el
+listado, y `type()` devuelve `null` para ella. (Hasta la 0.2.5 el constructor lanzaba
+`IllegalArgumentException` para una entrada así.) `SessionStoreEntry.of(map)` copia el mapa y conserva
+el orden de sus claves:
 
 ```java
 SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
@@ -166,7 +170,7 @@ SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
     "timestamp", "2026-04-27T00:00:00Z"
 ));
 
-entry.type();      // "user"
+entry.type();      // "user" (null when the entry has no string type)
 entry.uuid();      // "u1"
 entry.timestamp(); // "2026-04-27T00:00:00Z"
 entry.<String>get("custom_field"); // typed convenience accessor
@@ -367,7 +371,20 @@ adaptador.
 
 Si `listSessions` y `listSessionSummaries` están ambos sin implementar, la llamada lanza
 `IllegalStateException`. Los fallos de `loadAsync` del adaptador degradan filas individuales a
-entradas de resumen vacío en lugar de tumbar toda la lista.
+entradas de resumen vacío (el mtime del listado y todos los demás campos, `cwd` incluido, a `null`)
+en lugar de tumbar toda la lista.
+
+Las filas derivadas de `load()` (la ruta de respaldo, y `getSessionInfoFromStore`) pasan por el mismo
+parser que una transcripción local: las entradas se serializan a JSONL, `fileSize` es el tamaño en
+bytes de ese JSONL, y `firstPrompt` y `createdAt` salen de sus primeros 64 KB.
+`getSessionInfoFromStore` toma `lastModified` del `timestamp` de la última entrada, y deja que una
+excepción del `load()` del adaptador se propague en lugar de notificar la sesión como no encontrada.
+Las filas construidas a partir de un adjunto de resumen tienen un `fileSize` `null`. Las marcas de
+tiempo sin desfase UTC se leen como UTC.
+
+El argumento `directory` se canonicaliza (se resuelven los enlaces simbólicos y se normaliza a NFC)
+antes de derivar la clave del proyecto, exactamente igual que en las búsquedas en disco local, así
+que una clave del store siempre coincide con el nombre del directorio del proyecto en disco.
 
 ## Mutaciones respaldadas por SessionStore
 
@@ -388,12 +405,15 @@ ForkSessionResult fork = ClaudeSDK.forkSessionViaStore(
 Por dentro:
 
 - `renameSessionViaStore` añade una entrada `custom-title`.
-- `tagSessionViaStore` añade una entrada `tag`; `null` la borra mediante una cadena vacía.
+- `tagSessionViaStore` añade una entrada `tag`; `null` la borra mediante una cadena vacía. La etiqueta
+  se sanea exactamente igual que la sanea `tagSession` (normalización NFKC, eliminación de caracteres
+  de formato y de uso privado).
 - `deleteSessionViaStore` no hace nada si el store no implementa `delete()` (apropiado para back-ends
   WORM o de solo anexado, como S3 puro).
 - `forkSessionViaStore` ejecuta la misma transformación de reasignación de UUID que la bifurcación en
   disco (el `SessionMutations.buildForkLines` compartido): una copia a nivel de almacenamiento NO
-  basta.
+  basta. Sin título, recurre al título personalizado del origen, luego a su título de IA y luego a su
+  primer prompt, más `" (fork)"`.
 
 `listSubagentsFromStore` requiere `listSubkeys()` y, si no, lanza `IllegalStateException`.
 
@@ -438,10 +458,21 @@ tus configuraciones. El SDK copia cuatro archivos desde el directorio de configu
 
 | Archivo | Por qué importa |
 |------|----------------|
-| `.credentials.json` | Credenciales OAuth, con `claudeAiOauth.refreshToken` eliminado |
+| `.credentials.json` | Credenciales OAuth, con `claudeAiOauth.refreshToken` eliminado (se leen del Llavero de macOS cuando está disponible, véase abajo) |
 | `.claude.json` | Estado del CLI a nivel de usuario |
 | `settings.json` | `apiKeyHelper`, además de tus `env`, `hooks` y `permissions` |
 | `cowork_settings.json` | El nombre alternativo de archivo de ajustes que se lee en modo cowork-plugins |
+
+**Llavero de macOS.** En macOS, la configuración por defecto del CLI guarda el inicio de sesión OAuth
+en el Llavero, no en `.credentials.json`, y un `CLAUDE_CONFIG_DIR` redirigido cambia el nombre del
+servicio del Llavero que busca el subproceso. Por eso, cuando no está definida ninguna de
+`CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY` y `CLAUDE_CODE_OAUTH_TOKEN` (en `options.env` o en el entorno
+del proceso), el SDK lee el inicio de sesión con
+`security find-generic-password -a $USER -w -s "Claude Code-credentials"` (tiempo límite de 5
+segundos), igual que el SDK de Python, y lo escribe en el `.credentials.json` temporal con el token de
+refresco eliminado. Un resultado del Llavero gana a un archivo de credenciales. La búsqueda es
+best-effort: fuera de macOS, o cuando el comando falla, agota el tiempo o no imprime nada, se usa el
+archivo de credenciales como antes.
 
 Sembrar `settings.json` importa más de lo que parece: `apiKeyHelper` es un cuarto mecanismo de
 autenticación, junto al archivo de credenciales, el Llavero de macOS y las variables de entorno. Antes
@@ -508,6 +539,11 @@ Los tiempos de espera NO se reintentan (la llamada en vuelo todavía puede llega
 un duplicado concurrente). Los adaptadores deben deduplicar por `entry.uuid()` para que un reintento
 tras un éxito parcial sea seguro frente a duplicados.
 
+Un `MirrorErrorMessage` siempre llega antes del `ResultMessage` del turno cuyo lote falló, en ambos
+modos de volcado, y antes del error que termina un flujo fallido (desde la 0.2.6; en modo eager podía
+llegar después del resultado, y ante un fallo del lector podía perderse). Así que, en cuanto ves el
+resultado de un turno, ya se han notificado todos los fallos de réplica de ese turno.
+
 ## Modo de volcado (batched frente a eager)
 
 Por defecto, el `TranscriptMirrorBatcher` almacena todos los marcos `transcript_mirror` y los vuelca
@@ -536,8 +572,17 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 segundo plano en el ejecutor de drenaje propio del SDK (un hilo `session-store-mirror-drain-<n>` por
 tarea; virtual en Java 21+), que llama al `appendAsync` de tu adaptador en el `SessionStoreExecutor`
 configurado. Las adiciones siguen serializadas en el orden de encolado; un adaptador lento no detendrá el
-bucle de lectura, pero verá marcos agrupados mientras esté ocupado. La opción se ignora cuando
-`sessionStore` no está definido.
+bucle de lectura entre resultados, pero verá marcos agrupados mientras esté ocupado. La opción se
+ignora cuando `sessionStore` no está definido.
+
+> **Advertencia: un store lento retiene el flujo en cada resultado.** En ambos modos, el lector espera
+> a que se anexen las entradas pendientes antes de entregar cada `ResultMessage`. Mientras tanto no se
+> lee nada más del CLI, tampoco las respuestas de control, así que una llamada de control como
+> `interrupt()`, `setModel()` o `getMcpStatus()` hecha durante ese volcado espera con él. `close()`
+> espera igualmente al volcado final. Cada espera está acotada por
+> `TranscriptMirrorBatcher.flushTimeoutMs()`, 181 s por defecto (consulta
+> [`TranscriptMirrorBatcher`](#transcriptmirrorbatcher)). El SDK de Python se comporta del mismo modo.
+> Mantén `append` rápido, o pasa el trabajo lento a una cola dentro de tu adaptador.
 
 ## Importar sesiones locales a un store
 
@@ -555,7 +600,9 @@ ClaudeSDK.importSessionToStore(
 
 El helper:
 
-- Lee el JSONL local línea a línea (omite las líneas en blanco).
+- Lee el JSONL local línea a línea (omite las líneas en blanco). Una línea sin `type` se importa como
+  cualquier otra; ya no detiene la importación. Una línea que es JSON válido pero no un objeto se omite
+  con un aviso.
 - Llama a `store.append(key, batch)` cada `batchSize` entradas (por defecto 500) o cada 1 MiB de bytes
   de línea, lo que ocurra antes.
 - Con `includeSubagents=true`, importa recursivamente `<sessionDir>/subagents/**/*.jsonl` y los
@@ -598,6 +645,11 @@ SessionStoreConformance.run(WormStore::new,
 El conjunto usa `AssertionError` a secas (sin dependencia de ningún framework de pruebas), así que
 funciona con JUnit, TestNG, Spock o incluso con una prueba de humo en un `main()` normal.
 
+Desde la 0.2.6 el conjunto es más estricto: rechaza `null` donde se exige una lista vacía (por
+ejemplo, desde `listSessions` o `listSubkeys` cuando no hay nada que listar), y rechaza una sesión que
+tiene resumen pero falta en `listSessions`. Un adaptador que devuelve listas `null` antes pasaba y
+ahora falla.
+
 Los 14 contratos cubren:
 
 | # | Contrato |
@@ -630,7 +682,14 @@ Almacena los marcos `transcript_mirror` que el CLI emite por la salida estándar
 - Umbrales de volcado inmediato: `MAX_PENDING_ENTRIES=500`, `MAX_PENDING_BYTES=1 MiB`. Con
   `sessionStoreFlush(EAGER)` ambos umbrales se ponen a cero, de modo que cada marco encolado programa
   un drenaje en segundo plano (consulta [Modo de volcado](#modo-de-volcado-batched-frente-a-eager)).
-- Volcado explícito antes de cada mensaje `result` y otra vez al final del flujo o al cerrar.
+- Volcado explícito antes de cada mensaje `result` y otra vez al final del flujo o al cerrar. El flujo
+  de mensajes espera a cada uno de estos volcados, sin el corte de 5 segundos de antes de la 0.2.6,
+  así que el store ya tiene el turno cuando ves su `result`. La espera sigue acotada: cada volcado
+  termina dentro de `flushTimeoutMs()`, que es el tiempo de espera del anexado × intentos más las
+  esperas (`3 × 60 000 + 200 + 800 = 181 000 ms` por defecto). Si se alcanza ese límite, el volcado
+  vuelve igualmente, registra un aviso y el drenaje sigue ejecutándose en segundo plano.
+- Los drenajes son estrictamente FIFO: los drenajes eager y los volcados explícitos anexan en el
+  orden de encolado, nunca intercalados.
 - Agrupa los marcos por `filePath`, de modo que cada archivo único reciba una llamada `append` por
   volcado.
 - Los marcos cuya ruta cae fuera de `projectsDir` se descartan con un aviso (ocurriría si el

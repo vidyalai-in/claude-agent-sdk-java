@@ -155,10 +155,10 @@ client.connect();  // No initial message
 client.connect("Initial prompt");  // With initial message
 ```
 
-**Segurança de threads**: seguro para threads e idempotente. Chamadas concorrentes são protegidas.
+**Segurança de threads**: seguro para threads e idempotente. `connect()`, `disconnect()` e `close()` são serializados: cada um espera por outro que já esteja em execução em outra thread.
 
 **Lança**:
-- `IllegalStateException` — se chamado depois de `close()`
+- `IllegalStateException` — se chamado depois de `close()`, ou se outra thread chamar `close()` enquanto a conexão está em andamento (a conexão libera antes tudo o que havia preparado)
 - `CLIConnectionException` — se a conexão falhar
 
 ### isConnected()
@@ -187,6 +187,8 @@ try (var client = ClaudeSDK.createClient()) {
 ```
 
 **Segurança de threads**: seguro para threads e idempotente. Pode ser chamado várias vezes com segurança.
+
+Também é seguro chamá-lo de dentro de um callback `canUseTool`, de hook ou de ferramenta MCP do SDK, e de uma thread cuja flag de interrupção esteja definida: o CLI ainda recebe o EOF no stdin e seu período de tolerância, e a flag é preservada. A requisição que o callback chamador atende fica sem resposta.
 
 ## Enviando mensagens
 
@@ -269,6 +271,7 @@ while (messages.hasNext()) {
 - O iterador bloqueia até haver mensagens disponíveis
 - Continua retornando mensagens até o fim do stream
 - Vários iteradores compartilham a mesma fila (as mensagens são distribuídas)
+- Interromper a thread bloqueada em `hasNext()` lança `ClaudeSDKException` (causa `InterruptedException`) com a flag de interrupção restaurada; isso nunca é tratado como o fim do stream
 
 ### receiveResponse()
 
@@ -292,6 +295,7 @@ for (Message msg : response) {
 - Bloqueia até haver mensagens disponíveis
 - Para no ResultMessage e fecha automaticamente
 - Retorna todas as mensagens de uma resposta
+- Uma interrupção durante a espera lança `ClaudeSDKException`, como em `receiveMessages()`
 
 ### Processando mensagens
 
@@ -502,7 +506,7 @@ client.interrupt();
 client.setModel("claude-sonnet-4-5");
 client.setPermissionMode(PermissionMode.ACCEPT_ALL);
 
-// ✅ Safe: connect() is synchronized
+// ✅ Safe: connect(), disconnect() and close() are serialized
 client.connect();  // Only one connection established
 ```
 

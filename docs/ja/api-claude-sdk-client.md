@@ -36,9 +36,11 @@ public void connect() throws CLIConnectionException
 
 Claude Code CLI への接続を確立します。
 
-**スレッド安全性**：スレッドセーフ、冪等
+**スレッド安全性**：スレッドセーフ、冪等。`connect()`、`disconnect()`、`close()` は
+直列化されます（0.2.6 以降）：別のスレッドですでに実行中の呼び出しがあれば、それを待ちます。
 
-**送出**：close() の後に呼ばれた場合は `IllegalStateException`
+**送出**：close() の後に呼ばれた場合、または接続の途中で別のスレッドから `close()` が
+呼ばれた場合は `IllegalStateException`（接続処理はまず自分が用意したものをすべて解放します）
 
 ### connect(String initialMessage)
 
@@ -46,7 +48,14 @@ Claude Code CLI への接続を確立します。
 public void connect(String initialMessage) throws CLIConnectionException
 ```
 
-接続して初期メッセージを送信します。
+接続して初期メッセージを送信します。null でないメッセージは空文字列も含めてすべて送信されます
+（0.2.6 以降、Python SDK と同様）。メッセージなしで接続するには `null` を渡すか、`connect()` を
+呼んでください。
+
+**送出**：CLI を起動できない場合（実行ファイルが見つからない場合はサブクラスの
+`CLINotFoundException`）、または `user(...)` が設定されている場合は `CLIConnectionException`。
+接続に失敗した場合は、再送出の前にプロセス、そのスレッド、一時的な `CLAUDE_CONFIG_DIR` を
+片づけます。
 
 ### isConnected()
 
@@ -67,7 +76,13 @@ public void close()
 
 接続を閉じ、リソースを片づけます。
 
-**スレッド安全性**：スレッドセーフ、冪等
+**スレッド安全性**：スレッドセーフ、冪等。`connect()` と直列化されます：別のスレッドが接続中
+または切断中に行われた呼び出しは、その完了を待ちます。
+
+0.2.6 以降、`canUseTool`、フック、SDK MCP ツールのコールバックの内部からでも、呼び出し元
+スレッドの割り込みフラグが立っている状態でも、安全に呼び出せます。CLI にはそれでも stdin の
+EOF と終了のための猶予期間が与えられ、割り込みフラグは保持されます。呼び出し元のコールバックが
+処理中のリクエストには応答が返されないままになります。
 
 ## メッセージの送信
 
@@ -166,6 +181,10 @@ public Iterator<Message> receiveMessages()
 
 **戻り値**：`Iterator<Message>`
 
+**送出**（`hasNext()` から）：待機中のスレッドが割り込まれた場合、`InterruptedException` を
+原因とする `ClaudeSDKException`。割り込みフラグは復元されます（0.2.6 以降。それ以前は、割り込みが
+あるとストリームが完了したかのように終了していました）
+
 ### receiveResponse()
 
 ```java
@@ -177,6 +196,9 @@ public Iterable<Message> receiveResponse()
 **スレッド安全性**：スレッドセーフ
 
 **戻り値**：`Iterable<Message>`
+
+**送出**：`receiveMessages()` と同様、待機中のスレッドが割り込まれた場合は
+`InterruptedException` を原因とする `ClaudeSDKException`。割り込みフラグは復元されます
 
 ## 制御メソッド
 
@@ -295,12 +317,12 @@ public Map<String, Object> getServerInfo()
 
 サーバーの初期化情報を取得します：利用可能なコマンド、出力スタイル、サーバーの機能。
 
-**戻り値**：`Map<String, Object>` —— `initialize` レスポンスからの情報（CLI が何も返さなかった場合に
-限り `null`）
+**戻り値**：`Map<String, Object>` —— `initialize` レスポンスからの情報。レスポンスに本体がない
+場合は空のマップ（0.2.6 以降。以前は `null` でした）
 
 ## スレッド安全性
 
-- **connect()**：スレッドセーフ、同期化済み
+- **connect()**：スレッドセーフ、`disconnect()` および `close()` と直列化
 - **送信系メソッド**：スレッドセーフ
 - **受信系メソッド**：スレッドセーフですが、キューを共有します
 - **制御系メソッド**：スレッドセーフ

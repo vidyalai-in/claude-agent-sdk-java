@@ -74,13 +74,13 @@ Claude Agent SDK for Java は、Claude の AI 機能を Java アプリケーシ�
 - **[MCP サーバー](./feature-mcp-servers.md)** —— Model Context Protocol によるカスタムツールの作成
   - SDK MCP サーバー（インプロセス）
   - 外部 MCP サーバー（stdio/SSE/HTTP）
-  - @Tool アノテーションの使い方
-  - プログラムによるツールの作成
+  - @Tool アノテーションの使い方、型付きパラメータ（リスト、enum、`Optional`、レコード、`java.time`）と `@ToolParam`
+  - プログラムによるツールの作成（`Map.of("text", String.class)` によるスキーマの省略記法を含む）
   - ツールスキーマと、ツールの `inputSchema` に対する引数の検証
   - 失敗時のセマンティクス（ツール呼び出しが遭遇するあらゆる事象に対する `isError` 結果）
   - `ToolCallContext` による実行中ツールのキャンセル
   - プロトコルの詳細（バージョンネゴシエーション、通知、メソッド）
-  - `McpMessageHandler` によるカスタム MCP ハンドラ
+  - `McpMessageHandler` によるカスタム MCP ハンドラと、クライアントごとに 1 つのセッション（`openSession()`）
   - 非同期実行のパターン
   - 完全なサンプル（電卓、データベース、API 連携）
 
@@ -88,11 +88,11 @@ Claude Agent SDK for Java は、Claude の AI 機能を Java アプリケーシ�
   - インラインのエージェント定義
   - ファイルシステムベースのエージェント
   - 大きなエージェントのサポート（stdin 経由で 260KB 超）
-  - AgentDefinition API（skills、メモリスコープ、MCP サーバーのフィールドを含む）
+  - AgentDefinition API（skills、メモリスコープ、MCP サーバーのフィールド、`withEffort(int)` による数値の effort を含む）
   - サブエージェントの出力の観測と `forwardSubagentText`
 
 - **[セッション履歴](./feature-session-history.md)** —— 過去の Claude Code 会話セッションをディスクから読み取り、管理する
-  - 全プロジェクト横断、またはディレクトリで絞り込んだセッション一覧
+  - 全プロジェクト横断、またはディレクトリで絞り込んだセッション一覧（git worktree を含む）
   - ID による単一セッションの参照（`getSessionInfo`）
   - 会話トランスクリプト全体の読み取り
   - サブエージェントのトランスクリプトの読み取り（`listSubagents`、`getSubagentMessages`）。
@@ -137,7 +137,8 @@ Claude Agent SDK for Java は、Claude の AI 機能を Java アプリケーシ�
 - **[フックシステム](./feature-hooks.md)** —— ライフサイクルイベントの傍受と応答
   - 10 のフックイベント
   - HookMatcher、HookCallback と HookOutput
-  - 型付きのフック入力（`promptId`、`effort`、ツールの `durationMs`、Stop 時のバックグラウンドタスクとスケジュール済みウェイクアップを含む）
+  - 型付きのフック入力（`promptId`、`effort`、ツールの `durationMs`、Stop 時のバックグラウンドタスクとスケジュール済みウェイクアップを含む）。SDK より新しいフィールドには `raw()`
+  - ビルダーがモデル化していない出力キーのための `HookOutput.Builder.extraField(...)`
   - 21 種類すべてのフック固有出力型（例：Stop フックの `additionalContext` でモデルに処理を続けさせる）
   - PostToolUse の `updatedToolOutput`（任意のツールの出力を置き換え）と `updatedMCPToolOutput`
   - `PermissionDecision.DEFER` と ResultMessage 上の `DeferredToolUse`

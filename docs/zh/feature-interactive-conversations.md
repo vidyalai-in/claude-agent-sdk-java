@@ -155,10 +155,10 @@ client.connect();  // No initial message
 client.connect("Initial prompt");  // With initial message
 ```
 
-**线程安全**：线程安全且幂等。多个并发调用会受到保护。
+**线程安全**：线程安全且幂等。`connect()`、`disconnect()` 和 `close()` 是串行执行的：每个调用都会等待另一个线程上正在运行的同类调用完成。
 
 **抛出**：
-- `IllegalStateException` —— 如果在 `close()` 之后调用
+- `IllegalStateException` —— 如果在 `close()` 之后调用，或在连接过程中另一个线程调用了 `close()`（此时连接操作会先释放它已建立的一切）
 - `CLIConnectionException` —— 如果连接失败
 
 ### isConnected()
@@ -187,6 +187,8 @@ try (var client = ClaudeSDK.createClient()) {
 ```
 
 **线程安全**：线程安全且幂等。可以安全地多次调用。
+
+在 `canUseTool`、钩子或 SDK MCP 工具回调内部调用，以及在中断标志已被设置的线程上调用，也都是安全的：CLI 仍会收到 stdin EOF 并获得宽限期，中断标志也会被保留。正在发起调用的那个回调所服务的请求不会得到应答。
 
 ## 发送消息
 
@@ -269,6 +271,7 @@ while (messages.hasNext()) {
 - 迭代器会阻塞直到有消息可用
 - 会一直返回消息，直到流结束
 - 多个迭代器共享同一个队列（消息会被分散）
+- 中断阻塞在 `hasNext()` 中的线程会抛出 `ClaudeSDKException`（cause 为 `InterruptedException`），并恢复中断标志；这绝不会被报告为流的结束
 
 ### receiveResponse()
 
@@ -292,6 +295,7 @@ for (Message msg : response) {
 - 阻塞直到有消息可用
 - 在 ResultMessage 处停止并自动关闭
 - 返回一次完整响应的全部消息
+- 等待期间发生中断会抛出 `ClaudeSDKException`，与 `receiveMessages()` 相同
 
 ### 处理消息
 
@@ -502,7 +506,7 @@ client.interrupt();
 client.setModel("claude-sonnet-4-5");
 client.setPermissionMode(PermissionMode.ACCEPT_ALL);
 
-// ✅ Safe: connect() is synchronized
+// ✅ Safe: connect(), disconnect() and close() are serialized
 client.connect();  // Only one connection established
 ```
 

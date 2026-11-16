@@ -155,10 +155,10 @@ client.connect();  // No initial message
 client.connect("Initial prompt");  // With initial message
 ```
 
-**스레드 안전성**: 스레드 안전하고 멱등합니다. 동시 호출로부터 보호됩니다.
+**스레드 안전성**: 스레드 안전하고 멱등합니다. `connect()`, `disconnect()`, `close()`는 직렬화됩니다: 각각은 다른 스레드에서 이미 실행 중인 호출이 끝나기를 기다립니다.
 
 **예외**:
-- `IllegalStateException` — `close()` 이후에 호출한 경우
+- `IllegalStateException` — `close()` 이후에 호출한 경우, 또는 연결이 진행되는 동안 다른 스레드가 `close()`를 호출한 경우(연결 작업은 먼저 자신이 설정한 모든 것을 해제합니다)
 - `CLIConnectionException` — 연결에 실패한 경우
 
 ### isConnected()
@@ -187,6 +187,8 @@ try (var client = ClaudeSDK.createClient()) {
 ```
 
 **스레드 안전성**: 스레드 안전하고 멱등합니다. 여러 번 호출해도 안전합니다.
+
+`canUseTool`, 훅, SDK MCP 도구 콜백 안에서 호출해도 안전하고, 인터럽트 플래그가 설정된 스레드에서 호출해도 안전합니다: CLI는 여전히 stdin EOF와 유예 시간을 받고, 플래그는 보존됩니다. 호출한 콜백이 처리하던 요청에는 응답하지 않은 채로 남습니다.
 
 ## 메시지 보내기
 
@@ -269,6 +271,7 @@ while (messages.hasNext()) {
 - 이터레이터는 메시지가 올 때까지 블로킹합니다
 - 스트림이 끝날 때까지 메시지를 계속 반환합니다
 - 여러 이터레이터가 같은 큐를 공유합니다(메시지가 나뉩니다)
+- `hasNext()`에서 블로킹된 스레드를 인터럽트하면 `ClaudeSDKException`(원인 `InterruptedException`)을 던지고 인터럽트 플래그를 복원합니다. 스트림의 끝으로 보고되는 일은 없습니다
 
 ### receiveResponse()
 
@@ -292,6 +295,7 @@ for (Message msg : response) {
 - 메시지가 올 때까지 블로킹합니다
 - ResultMessage에서 멈추고 자동으로 닫힙니다
 - 한 번의 응답에 해당하는 모든 메시지를 반환합니다
+- 기다리는 동안 인터럽트되면 `receiveMessages()`와 마찬가지로 `ClaudeSDKException`을 던집니다
 
 ### 메시지 처리
 
@@ -502,7 +506,7 @@ client.interrupt();
 client.setModel("claude-sonnet-4-5");
 client.setPermissionMode(PermissionMode.ACCEPT_ALL);
 
-// ✅ Safe: connect() is synchronized
+// ✅ Safe: connect(), disconnect() and close() are serialized
 client.connect();  // Only one connection established
 ```
 

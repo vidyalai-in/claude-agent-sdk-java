@@ -71,10 +71,15 @@ Transport transport = new SubprocessCLITransport(options);
 | `thinking(ThinkingConfigAdaptive(SUMMARIZED))` | `--thinking adaptive --thinking-display summarized` | `--thinking-display` が転送されるのは `Adaptive` と `Enabled` の設定のときだけです（しかも `display != null` のときのみ）。`Disabled` は決して出しません。 |
 | `thinking(ThinkingConfigEnabled(20000, OMITTED))` | `--max-thinking-tokens 20000 --thinking-display omitted` | `display` が設定されている場合、両方のフラグが一緒に出ます。 |
 | `systemPrompt(SystemPromptCustom.of(p, …))` | `--system-prompt <p>` | 普通の文字列と同じです。`snapshot` は代わりに `initialize` リクエストで送られます。 |
-| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | `local` プラグインごとに 1 つ。それ以外の種類はスキップされます。 |
+| `plugins(List.of(SdkPluginConfig.local(dir)))` | `--plugin-dir <dir>` | `local` プラグインごとに 1 つ。それ以外の種類は `IllegalArgumentException` を投げます（0.2.6 より前はスキップされていました）。 |
+| `thinking(ThinkingConfigEnabled(0))` | `--max-thinking-tokens 0` | Python SDK と同様、予算 0 も受け付けて送ります。 |
+| `maxTurns(0)`、`model("")`、`fallbackModel("")`、`permissionPromptToolName("")`、`resume("")`、`sessionId("")`、`settings("")`、`mcpServersJson("")` | *（なし）* | Python が偽値を省略するのと同様、空文字列と `0` は省略されます（0.2.6 以降）。 |
+| `mcpServers(Map)`、`outputFormat(json_schema)` | `--mcp-config`、`--json-schema` | シリアライズできない値は、フラグを落とす代わりに `CLIConnectionException` で `connect()` を失敗させます。 |
 
 **stderr のパイプ**：stderr がパイプされるのは `options.stderrCallback() != null` のときだけです。
-従来の `--debug-to-stderr` 追加引数の検出は 0.1.13 で削除されました（当該 CLI フラグの非推奨化への
+それ以外の場合、CLI は JVM の stderr を継承します（0.2.6 以降。Python SDK の `stderr=None` と同じ
+です）。以前はパイプされたまま一度も読まれなかったため、パイプのバッファ（約 64 KB）を超える stderr を
+書いた CLI は次の書き込みでブロックしていました。従来の `--debug-to-stderr` 追加引数の検出は 0.1.13 で削除されました（当該 CLI フラグの非推奨化への
 備え）。CLI の詳細なデバッグ出力を取得したい場合は、`extraArgs(Map.of("debug-file", "/path/to/log"))`
 を渡し、そのファイルを読んでください。
 
@@ -83,6 +88,23 @@ Transport transport = new SubprocessCLITransport(options);
 読み取りループは次の行へ進みます。以前は 1 度の送出でループが抜けてしまい、そのセッションの残りの
 間、後続の stderr 行がすべて黙って捨てられていました。外側ループの失敗（ストリームの予期せぬ閉鎖、
 I/O エラー）も、黙って握りつぶされる代わりに `FINE` で記録されます。
+
+**時間制限付きの `close()`**（0.2.6）：Python SDK と同様、`close()` のすべての段階に時間制限があるため、
+黙ったままの CLI や、満杯の stdin パイプでブロックした書き込みによってハングすることはもうありません：
+
+1. stdin を閉じるために書き込みロックを取得し、最大 5 秒待ちます。書き込みがまだロックを保持している
+   場合は、stdin を閉じずに CLI を停止し、書き込みがロックを手放した後で別のスレッドから stdin を閉じます。
+2. stdin の EOF の後、CLI がセッションファイルをフラッシュできるよう、終了を最大 5 秒待ちます。
+3. SIGTERM を送り、最大 5 秒待ちます。
+4. SIGKILL を送り、最大 5 秒待ちます。
+5. stderr と stdout のリーダーのエグゼキュータをシャットダウンし（2 秒、その後 1 秒で強制）、その下の
+   パイプを閉じます。
+
+割り込みによってこれらの待機が短くなることはありません。`close()` は実行中は割り込みフラグをクリアし、
+戻るときに再び立てます。そのため、フラグが立っている呼び出し元や、途中で割り込まれた呼び出し元でも、
+stdin を閉じて CLI に猶予期間を与えます。`canUseTool`、フック、SDK MCP のコールバックの内部から
+呼ばれた `disconnect()`/`close()` でも同じです。そのコールバックが処理中のリクエストには応答が返されない
+ままになります。0.2.6 より前は、そのような close は stdin を閉じずに CLI を kill していました。
 
 **孤児となった子プロセスの後始末**（0.1.18）：生成された CLI プロセスはすべて静的な
 `ACTIVE_CHILDREN` 集合に登録され、`close()` が走る前にプロセスが終了した場合は、JVM のシャット
@@ -105,6 +127,35 @@ argv トークン（`--resume=<value>`、`--session-id=<value>`）として出�
 （オプションごとに 1 引数、**シェルは一切介在しません**）、コマンド実行ではなくフラグ注入であり、
 信頼できない入力をこれらのオプションへ転送しているアプリだけに影響します。`buildCommand()` の他所で
 すでに使われている `--setting-sources=` のスタイルと揃っています。
+
+### 行の区切りとバックプレッシャー（0.2.6）
+
+**stderr**：stderr は Python SDK の `_handle_stderr` と同じ方法で行に分割されます：`\n` でのみ分割する
+ため、単独の `\r`（進捗表示の行）は行の中に残ります。末尾の空白は取り除かれ、空行はスキップされます。
+`maxBufferSize` より長い行は、際限なくバッファリングされる代わりに分割して渡されます。改行のない最後の
+行や、ストリームが失敗する前に読み取られた行の一部も、それでも届けられます。
+
+**stdout**：stdout は NDJSON で、`\n` でのみ分割されます。完全な行ごとに：
+
+| 行 | 結果 |
+|---|---|
+| 空行 | スキップ |
+| `{` で始まらない（例：`[SandboxDebug] …`） | スキップし、`FINE` で記録 |
+| 1 つの JSON オブジェクト | 届けられる |
+| `{` で始まるがパースできない、またはオブジェクトの後に内容がある（`{"a":1} junk`） | `CLIJSONDecodeException` |
+| `maxBufferSize` より長い | `CLIJSONDecodeException` |
+
+完全な行が後続のデータで補完されることはないので、壊れた行はバッファリングを続ける対象ではなくエラーです：
+Python SDK と同様、例外はメッセージストリームを終了させ、消費者のイテレータがそれを再送出します。0.2.6 より
+前は、不正な行が 1 つあると、それ以降のすべてのメッセージが黙って飲み込まれていました。ストリームの終端で
+切れた最後の行は、パースできれば届けられ、できなければ破棄されます。stdout が正常に終わったとき、CLI の
+非ゼロの終了コードは `ProcessException` として報告されます。
+
+**バックプレッシャー**：リーダーはメッセージを破棄する代わりにキューに空きができるのを待つため、遅い消費者は
+出力を失う代わりに CLI を遅くします。1 つ上の層、`QueryHandler` のメッセージキューでも同じです
+（[アーキテクチャ → QueryHandler](./architecture.md#queryhandler) を参照）。そのキューの `maxMsgQSize` は
+ソフトリミットです：送信側の制御リクエストが応答を待っている間、`QueryHandler` は上限を超えて読み続ける
+ため、キューに溜まったメッセージの後ろにある `control_response` も届くことができます。
 
 ### Windows：バッチスクリプト CLI の拒否（0.1.21）
 
@@ -223,6 +274,10 @@ ClaudeAgentOptions.builder().resume("Refactor the parser (part 2)").build();
 | `Map.of("some-flag", "value")` | `--some-flag`、`value` |
 | `Map.of("some-flag", "--evil")` | `--some-flag=--evil` |
 | `Map.of("verbose-thing", "")` | `--verbose-thing`（裸の真偽フラグ） |
+| `verbose-thing` → `null`（`HashMap` / `LinkedHashMap` 内） | `--verbose-thing`（裸の真偽フラグ、0.2.6 以降） |
+
+エントリはマップの反復順で出力されます（0.2.6 以降）。フラグの順序が重要な場合は `LinkedHashMap` を
+渡してください。
 
 ### Windows：バッチ CLI のオプトイン（0.1.22）
 

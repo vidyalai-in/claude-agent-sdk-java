@@ -150,8 +150,11 @@ public record SessionStoreListEntry(String sessionId, long mtime);
 public record SessionSummaryEntry(String sessionId, long mtime, Map<String, Object> data);
 ```
 
-`SessionStoreEntry` は `Map<String, Object>` の薄いラッパーで、`type` フィールドを必須とします。その他は
-不透明なまま素通しされます：
+`SessionStoreEntry` は `Map<String, Object>` の薄いラッパーで、マップ全体が不透明なまま素通しされます。
+CLI が書き込むエントリはすべて文字列の `type` を持ちますが、必須ではありません：Python SDK と同様に、`type`
+のないエントリもミラーリング、取り込み、一覧を通じてそのまま運ばれ、その場合 `type()` は `null` を返します。
+（0.2.5 までは、そのようなエントリに対してコンストラクタが `IllegalArgumentException` を投げていました。）
+`SessionStoreEntry.of(map)` はマップをコピーし、キーの順序を保ちます：
 
 ```java
 SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
@@ -162,7 +165,7 @@ SessionStoreEntry entry = SessionStoreEntry.of(Map.of(
     "timestamp", "2026-04-27T00:00:00Z"
 ));
 
-entry.type();      // "user"
+entry.type();      // "user" (null when the entry has no string type)
 entry.uuid();      // "u1"
 entry.timestamp(); // "2026-04-27T00:00:00Z"
 entry.<String>get("custom_field"); // typed convenience accessor
@@ -359,7 +362,18 @@ String spawnedBy = subAgent.get(0).parentToolUseId();
 
 `listSessions` と `listSessionSummaries` の両方が未実装なら、この呼び出しは `IllegalStateException` を
 送出します。アダプタの `loadAsync` の失敗は、リスト全体を失敗させるのではなく、その行だけを空の要約
-エントリへ降格させます。
+エントリ（一覧の mtime を持ち、`cwd` を含む他のすべてのフィールドは `null`）へ降格させます。
+
+`load()` から導出される行（フォールバック経路と `getSessionInfoFromStore`）は、ローカルのトランスクリプトと
+同じパーサーを通ります：エントリは JSONL にシリアライズされ、`fileSize` はその JSONL のバイトサイズ、
+`firstPrompt` と `createdAt` はその先頭 64 KB から取得されます。`getSessionInfoFromStore` は `lastModified`
+を最後のエントリの `timestamp` から取り、アダプタの `load()` からの例外を、セッションが見つからないと報告する
+代わりにそのまま伝播させます。要約サイドカーから組み立てられた行の `fileSize` は `null` です。UTC オフセットの
+ないタイムスタンプは UTC として読まれます。
+
+`directory` 引数は、ローカルディスクでの参照とまったく同じく、プロジェクトキーを導出する前に正規化されます
+（シンボリックリンクを解決し、NFC 正規化）。そのため、ストアのキーは常にディスク上のプロジェクトディレクトリ
+名と一致します。
 
 ## SessionStore を使う変更操作
 
@@ -380,11 +394,14 @@ ForkSessionResult fork = ClaudeSDK.forkSessionViaStore(
 内部の動き：
 
 - `renameSessionViaStore` は `custom-title` エントリを追記します。
-- `tagSessionViaStore` は `tag` エントリを追記します。`null` は空文字列によって消去します。
+- `tagSessionViaStore` は `tag` エントリを追記します。`null` は空文字列によって消去します。タグは
+  `tagSession` とまったく同じ方法でサニタイズされます（NFKC 正規化、書式文字と私用領域の文字の除去）。
 - ストアが `delete()` を実装していない場合、`deleteSessionViaStore` は何もしません（素の S3 のような
   WORM／追記専用のバックエンドに適切です）。
 - `forkSessionViaStore` はディスク上のフォークと同じ UUID 振り直しの変換を行います（共通の
-  `SessionMutations.buildForkLines`）—— ストレージ層でのコピーだけでは**不十分**です。
+  `SessionMutations.buildForkLines`）—— ストレージ層でのコピーだけでは**不十分**です。タイトルを指定しない
+  場合は、元のセッションのカスタムタイトル、AI タイトル、最初のプロンプトの順にフォールバックし、
+  `" (fork)"` を付け加えます。
 
 `listSubagentsFromStore` は `listSubkeys()` を必要とし、なければ `IllegalStateException` を送出します。
 
@@ -427,10 +444,19 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 
 | ファイル | なぜ重要か |
 |------|----------------|
-| `.credentials.json` | OAuth の資格情報。`claudeAiOauth.refreshToken` は取り除かれます |
+| `.credentials.json` | OAuth の資格情報。`claudeAiOauth.refreshToken` は取り除かれます（利用可能な場合は macOS のキーチェーンから読み取ります。後述） |
 | `.claude.json` | ユーザーレベルの CLI 状態 |
 | `settings.json` | `apiKeyHelper` と、あなたの `env`、`hooks`、`permissions` |
 | `cowork_settings.json` | cowork-plugins モードで読まれる代替の設定ファイル名 |
+
+**macOS のキーチェーン。** macOS では、CLI の既定のセットアップは OAuth のログイン情報を `.credentials.json`
+ではなくキーチェーンに保持し、リダイレクトされた `CLAUDE_CONFIG_DIR` はサブプロセスが参照するキーチェーンの
+サービス名を変えてしまいます。そのため、`CLAUDE_CONFIG_DIR`、`ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN`
+のいずれも（`options.env` にもプロセスの環境にも）設定されていない場合、SDK は Python SDK と同様に
+`security find-generic-password -a $USER -w -s "Claude Code-credentials"`（5 秒のタイムアウト）でログイン
+情報を読み取り、リフレッシュトークンを伏せたうえで一時的な `.credentials.json` に書き込みます。キーチェーンで
+見つかったものが資格情報ファイルより優先されます。この参照はベストエフォートです：macOS 以外の場合や、
+コマンドが失敗した、タイムアウトした、何も出力しなかった場合は、従来どおり資格情報ファイルが使われます。
 
 `settings.json` を撒くことは見た目以上に重要です。`apiKeyHelper` は、資格情報ファイル・macOS の
 キーチェーン・環境変数と並ぶ第 4 の認証手段です。v0.1.23 より前はコピーされていなかったため、
@@ -495,6 +521,11 @@ for (Message msg : ClaudeSDK.query("Hello", options)) {
 重複を生むためです）。アダプタは `entry.uuid()` で重複排除し、部分的に成功したあとの再試行が重複安全に
 なるようにしてください。
 
+`MirrorErrorMessage` は、どちらのフラッシュモードでも、バッチが失敗したターンの `ResultMessage` より先に、
+また失敗したストリームを終わらせるエラーより先に必ず届きます（0.2.6 以降。即時モードでは result の後に
+届くことがあり、リーダーの失敗時には失われることがありました）。したがって、あるターンの result を見た
+時点で、そのターンのミラーの失敗はすべて報告済みです。
+
 ## フラッシュモード（BATCHED と EAGER）
 
 既定では `TranscriptMirrorBatcher` はすべての `transcript_mirror` フレームをバッファし、1 ターンごとに
@@ -522,9 +553,17 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 `EAGER` はバッチャーの保留しきい値をゼロにします —— フレームをキューに入れるたびに、SDK 自身の排出用
 エグゼキュータ上でバックグラウンドの排出がスケジュールされ（タスクごとに `session-store-mirror-drain-<n>`
 スレッド 1 本。Java 21+ では仮想スレッド）、それが設定された `SessionStoreExecutor` 上であなたのアダプタの
-`appendAsync` を呼び出します。追記はキューの順序どおり直列のままです。遅いアダプタが読み取り
-ループを止めることはありませんが、忙しい間はフレームがまとめられて見えます。`sessionStore` が未設定の
-場合、このオプションは無視されます。
+`appendAsync` を呼び出します。追記はキューの順序どおり直列のままです。遅いアダプタが result と result の
+間で読み取りループを止めることはありませんが、忙しい間はフレームがまとめられて見えます。`sessionStore` が
+未設定の場合、このオプションは無視されます。
+
+> **注意：遅いストアは result ごとにストリームを止めます。** どちらのモードでも、リーダーは各 `ResultMessage`
+> を渡す前に、保留中のエントリが追記されるのを待ちます。その間は制御レスポンスも含めて CLI から何も読まれない
+> ため、そのフラッシュ中に行われた `interrupt()`、`setModel()`、`getMcpStatus()` のような制御呼び出しも
+> 一緒に待たされます。`close()` も同様に最後のフラッシュを待ちます。それぞれの待機は
+> `TranscriptMirrorBatcher.flushTimeoutMs()`（既定では 181 秒）で上限が決まっています
+> （[`TranscriptMirrorBatcher`](#transcriptmirrorbatcher) を参照）。Python SDK も同じ挙動です。`append` を
+> 速く保つか、遅い処理はアダプタ内のキューに渡してください。
 
 ## ローカルのセッションをストアへ取り込む
 
@@ -542,7 +581,9 @@ ClaudeSDK.importSessionToStore(
 
 このヘルパーは：
 
-- ローカルの JSONL を 1 行ずつストリーム読みします（空行はスキップ）。
+- ローカルの JSONL を 1 行ずつストリーム読みします（空行はスキップ）。`type` のない行も他の行と同じように
+  取り込まれ、取り込みを止めることはもうありません。有効な JSON だがオブジェクトでない行は、警告付きで
+  スキップされます。
 - `batchSize` エントリごと（既定 500）、または行のバイト数が 1 MiB に達するごとの、いずれか早い方で
   `store.append(key, batch)` を呼びます。
 - `includeSubagents=true` のときは、`<sessionDir>/subagents/**/*.jsonl` と `.meta.json` サイドカーを
@@ -584,6 +625,10 @@ SessionStoreConformance.run(WormStore::new,
 ハーネスは素の `AssertionError` を使う（テストフレームワークに依存しない）ので、JUnit、TestNG、Spock、
 さらには単なる `main()` のスモークテストでも動きます。
 
+0.2.6 以降、ハーネスはより厳格です：空リストが必要な箇所での `null`（たとえば、一覧するものがないときの
+`listSessions` や `listSubkeys` から）を拒否し、要約を持つのに `listSessions` に含まれないセッションを拒否
+します。以前は通っていた、`null` のリストを返すアダプタは、今後は失敗します。
+
 14 の契約が扱う内容：
 
 | # | 契約 |
@@ -617,6 +662,13 @@ CLI が stdout に出す `transcript_mirror` フレームをバッファし、`s
   `sessionStoreFlush(EAGER)` では両方がゼロになり、キューに入れたすべてのフレームがバックグラウンドの
   排出をスケジュールします（[フラッシュモード](#フラッシュモードbatched-と-eager)を参照）。
 - 各 `result` メッセージの前に明示的にフラッシュし、ストリーム終端／クローズ時にもう一度行います。
+  メッセージストリームはこれらのフラッシュをそれぞれ待ち、0.2.6 より前のような 5 秒での打ち切りはないため、
+  `result` を見る時点でストアはそのターンを保持しています。それでも待機には上限があります：すべての
+  フラッシュは `flushTimeoutMs()` 以内に完了し、これは追記のタイムアウト × 試行回数 + バックオフです（既定では
+  `3 × 60 000 + 200 + 800 = 181 000 ms`）。その上限に達した場合、フラッシュはいずれにせよ戻り、警告を記録し、
+  排出はバックグラウンドで続きます。
+- 排出は厳密に FIFO です：即時の排出と明示的なフラッシュはキューに入った順に追記し、決して交錯
+  しません。
 - `filePath` ごとにフレームをまとめ、フラッシュごとに一意なファイルにつき `append` 呼び出しを 1 回に
   します。
 - パスが `projectsDir` の外にあるフレームは警告付きで破棄されます（親プロセスとサブプロセスで

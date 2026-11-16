@@ -44,8 +44,15 @@
 })
 ```
 
+SDK는 Python SDK와 마찬가지로 콜백에 시간 제한을 두지 않으므로, 콜백은 사람이 승인할 때까지 기다릴 수 있습니다.
+0.2.6 이전에는 60초가 지나면 끊겼기 때문에, 그보다 오래 걸린 승인은 모두 실패했습니다. (`setModel` 같은 SDK 자신의
+나가는 제어 요청은 60초 타임아웃을 유지합니다.)
+
 콜백이 답하기 전에 CLI가 권한 요청을 포기하면(예를 들어 턴이 중단되어 `control_cancel_request`를 보내면),
 SDK는 콜백이 반환한 future를 취소하고, 그 future를 기다리던 스레드를 인터럽트하며, 응답을 보내지 않습니다.
+클라이언트를 닫으면 아직 실행 중인 모든 콜백에 대해 즉시 같은 일이 일어납니다. 콜백이 직접 클라이언트를 닫을 수도
+있습니다(0.2.6부터): CLI는 여전히 stdin EOF와 유예 시간을 받고, 닫는 스레드는 인터럽트되지 않으며, 그 콜백 자신의
+요청에는 응답하지 않은 채로 남습니다.
 
 > **`canUseTool`은 `"ask"` 결정에서만 발동합니다.** 이 콜백은 대화형 권한 프롬프트를 대신하는 SDK의
 > 수단이며, CLI의 권한 규칙이 `"ask"`로 평가될 때만 실행됩니다. `allowedTools`, `permissionMode`(예:
@@ -135,6 +142,14 @@ record ToolPermissionContext(
     @Nullable String description             // human-readable subtitle for the permission UI
 )
 ```
+
+`suggestions`는 관대하게 읽힙니다: 이 SDK 버전이 모르는 타입, 대상, 동작, 모드를 가진 제안은 요청을 실패시키지 않고
+건너뛰며(`FINE` 수준으로 기록), 리스트가 아닌 값은 빈 것으로 읽힙니다. 0.2.6 이전에는 그런 제안 하나 때문에 콜백이
+아예 호출되지 않았습니다.
+
+제안의 `destination`은 `PermissionUpdateDestination`입니다: `USER_SETTINGS`, `PROJECT_SETTINGS`, `LOCAL_SETTINGS`,
+`SESSION`, 또는 `CLI_ARG`(`"cliArg"`, `--allowedTools`처럼 명령줄에서 온 규칙). `CLI_ARG`는 0.2.6에서 새로 추가되었으므로,
+이 열거형에 대한 망라적 `switch`에는 이를 위한 case가 필요합니다.
 
 풍부한 필드가 생기기 전에 작성된 코드를 위해 하위 호환 생성자가 유지됩니다:
 
