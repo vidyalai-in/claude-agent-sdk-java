@@ -310,7 +310,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` requires `store.implementsListSessions()`.
 - `sessionStore + enableFileCheckpointing` is rejected — checkpoints are local-disk only.
 
-**Results wait for the store; control calls don't (since 0.2.7).** Each `ResultMessage`, and every message after it, is held until the store has appended the turn, so you never see a result the store lacks. The reader keeps reading meanwhile, so a control call such as `interrupt()` is answered at once, and the CLI's `canUseTool` and hook requests are served (they can therefore run while earlier messages are still held). `close()` waits for the final flush. Each wait is bounded by the batcher's flush timeout, 181 s by default. See the [Session Store guide](./feature-session-store.md#flush-mode-batched-vs-eager).
+**Results wait for the store; control calls don't (since 0.2.7).** Each `ResultMessage`, and every message after it, is held until the store has appended the turn, so you never see a result the store lacks. The reader keeps reading meanwhile, so a control call such as `interrupt()` is answered at once, and the CLI's `canUseTool` and hook requests are served. A turn that starts before the previous result is delivered (streaming-input prompts sent ahead, a background-agent follow-up turn) can therefore have its callback run before you receive its `tool_use`; sending the next prompt after `receiveResponse()` returns is not affected. `close()` waits for the final flush. Each wait is bounded by the batcher's flush timeout, 181 s by default. See the [Session Store guide](./feature-session-store.md#flush-mode-batched-vs-eager).
 
 ### sessionStoreFlush()
 
