@@ -33,7 +33,7 @@ Released to Maven Central, so no repository or authentication setup is needed.
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.2.5</version>
+    <version>0.2.6</version>
 </dependency>
 ```
 
@@ -45,7 +45,7 @@ repositories {
 }
 
 dependencies {
-    implementation("in.vidyalai:claude-agent-sdk-java:0.2.5")
+    implementation("in.vidyalai:claude-agent-sdk-java:0.2.6")
 }
 ```
 
@@ -1248,7 +1248,7 @@ To test examples against your local development version of the SDK (not the publ
 
 3. Run examples as described in Option 1 or 2.
 
-**Note:** You can also pin the examples module to a released SDK version by setting the dependency's `<version>` in `examples/pom.xml` to that release (e.g. `0.2.5`). It resolves from Maven Central, so no repository or authentication setup is needed.
+**Note:** You can also pin the examples module to a released SDK version by setting the dependency's `<version>` in `examples/pom.xml` to that release (e.g. `0.2.6`). It resolves from Maven Central, so no repository or authentication setup is needed.
 
 ## Thread Safety
 

@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g., 0.2.5)'
+        description: 'Version to publish (e.g., 0.2.6)'
         required: true
-        default: '0.2.5'
+        default: '0.2.6'
       publish_to_github_packages:
         description: 'Also publish to GitHub Packages'
         required: false
