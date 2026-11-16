@@ -35,7 +35,7 @@ Maven Central에 배포되어 있으므로 저장소나 인증 설정이 필요�
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.2.6</version>
+    <version>0.2.7</version>
 </dependency>
 ```
 
@@ -47,7 +47,7 @@ repositories {
 }
 
 dependencies {
-    implementation("in.vidyalai:claude-agent-sdk-java:0.2.6")
+    implementation("in.vidyalai:claude-agent-sdk-java:0.2.7")
 }
 ```
 
@@ -1257,7 +1257,7 @@ java -cp target/classes:target/dependency/* examples.QuickStart
 
 3. 방법 1 또는 방법 2대로 예제를 실행합니다.
 
-**참고:** `examples/pom.xml`의 의존성 `<version>`을 배포된 버전(예: `0.2.6`)으로 지정해
+**참고:** `examples/pom.xml`의 의존성 `<version>`을 배포된 버전(예: `0.2.7`)으로 지정해
 examples 모듈을 해당 릴리스에 고정할 수도 있습니다. Maven Central에서 해석되므로 저장소나
 인증 설정은 필요하지 않습니다.
 

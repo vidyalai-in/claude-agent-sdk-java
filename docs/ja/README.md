@@ -35,7 +35,7 @@ Maven Central で公開されているため、リポジトリや認証の設定
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.2.6</version>
+    <version>0.2.7</version>
 </dependency>
 ```
 
@@ -47,7 +47,7 @@ repositories {
 }
 
 dependencies {
-    implementation("in.vidyalai:claude-agent-sdk-java:0.2.6")
+    implementation("in.vidyalai:claude-agent-sdk-java:0.2.7")
 }
 ```
 
@@ -1263,7 +1263,7 @@ java -cp target/classes:target/dependency/* examples.QuickStart
 
 3. 方法 1 または方法 2 の手順でサンプルを実行します。
 
-**注意：** `examples/pom.xml` の依存の `<version>` をリリース版（例：`0.2.6`）に設定して、
+**注意：** `examples/pom.xml` の依存の `<version>` をリリース版（例：`0.2.7`）に設定して、
 examples モジュールをそのリリースに固定することもできます。Maven Central から解決されるため、
 リポジトリや認証の設定は不要です。
 

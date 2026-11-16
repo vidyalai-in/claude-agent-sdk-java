@@ -35,7 +35,7 @@ Publicado no Maven Central, portanto não é preciso configurar repositório nem
 <dependency>
     <groupId>in.vidyalai</groupId>
     <artifactId>claude-agent-sdk-java</artifactId>
-    <version>0.2.6</version>
+    <version>0.2.7</version>
 </dependency>
 ```
 
@@ -47,7 +47,7 @@ repositories {
 }
 
 dependencies {
-    implementation("in.vidyalai:claude-agent-sdk-java:0.2.6")
+    implementation("in.vidyalai:claude-agent-sdk-java:0.2.7")
 }
 ```
 
@@ -1264,7 +1264,7 @@ Para testar os exemplos contra sua versão local de desenvolvimento do SDK (não
 
 **Observação:** você também pode fixar o módulo de exemplos em uma versão publicada do SDK
 definindo o `<version>` da dependência em `examples/pom.xml` para essa versão (por exemplo,
-`0.2.6`). Ela é resolvida pelo Maven Central, então não é preciso configurar repositório nem
+`0.2.7`). Ela é resolvida pelo Maven Central, então não é preciso configurar repositório nem
 autenticação.
 
 ## Segurança em relação a threads
