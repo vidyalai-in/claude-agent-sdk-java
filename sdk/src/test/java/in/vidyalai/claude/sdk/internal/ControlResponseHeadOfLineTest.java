@@ -30,6 +30,8 @@ class ControlResponseHeadOfLineTest {
 
     private static final long WAIT_SECONDS = 5;
     private static final int QUEUE_SIZE = 3;
+    // Well past the hard ceiling (4 x QUEUE_SIZE), which applies only while
+    // a transcript-mirror flush holds messages back.
     private static final int BUFFERED = 20;
 
     private final List<QueryHandler> handlers = new ArrayList<>();

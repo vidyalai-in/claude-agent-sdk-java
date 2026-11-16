@@ -96,7 +96,7 @@ class MirrorNonObjectEntriesTest {
 
         try (QueryHandler handler = new QueryHandler(transport, true, null, null, Duration.ofSeconds(10))) {
             handler.setTranscriptMirrorBatcher(SessionResume.buildMirrorBatcher(
-                    store, null, Map.of(), (k, e) -> {
+                    store, null, Map.of(), (k, e, d) -> {
                     }, SessionStoreFlushMode.BATCHED));
             transport.connect();
             handler.start();

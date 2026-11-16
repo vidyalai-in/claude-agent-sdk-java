@@ -81,7 +81,7 @@ class TranscriptMirrorBatcherOrderingTest {
     }
 
     private static TranscriptMirrorBatcher batcher(SessionStore store, long timeoutMs, int maxEntries) {
-        return new TranscriptMirrorBatcher(store, PROJECTS.toString(), (k, e) -> {
+        return new TranscriptMirrorBatcher(store, PROJECTS.toString(), (k, e, d) -> {
         }, timeoutMs, maxEntries, TranscriptMirrorBatcher.MAX_PENDING_BYTES,
                 SessionStoreExecutor.getDefault());
     }
@@ -169,7 +169,7 @@ class TranscriptMirrorBatcherOrderingTest {
             }
         };
         TranscriptMirrorBatcher b = new TranscriptMirrorBatcher(blocking, PROJECTS.toString(),
-                (k, e) -> errors.add(e), 200L, TranscriptMirrorBatcher.MAX_PENDING_ENTRIES,
+                (k, e, d) -> errors.add(e), 200L, TranscriptMirrorBatcher.MAX_PENDING_ENTRIES,
                 TranscriptMirrorBatcher.MAX_PENDING_BYTES, SessionStoreExecutor.getDefault());
 
         b.enqueue(mainPath(), List.of(numbered(1)));
@@ -208,7 +208,7 @@ class TranscriptMirrorBatcherOrderingTest {
         };
         CountDownLatch allReported = new CountDownLatch(20);
         TranscriptMirrorBatcher b = new TranscriptMirrorBatcher(hanging, PROJECTS.toString(),
-                (k, e) -> allReported.countDown(), 200L, TranscriptMirrorBatcher.MAX_PENDING_ENTRIES,
+                (k, e, d) -> allReported.countDown(), 200L, TranscriptMirrorBatcher.MAX_PENDING_ENTRIES,
                 TranscriptMirrorBatcher.MAX_PENDING_BYTES, SessionStoreExecutor.getDefault());
         assertThat(b.flushTimeoutMs()).isEqualTo(1_600L);
         for (int i = 0; i < 20; i++) {
@@ -227,7 +227,7 @@ class TranscriptMirrorBatcherOrderingTest {
     @Test
     void defaultFlushTimeoutIsAttemptsTimesSendTimeoutPlusBackoff() {
         TranscriptMirrorBatcher b = new TranscriptMirrorBatcher(new RecordingStore(), PROJECTS.toString(),
-                (k, e) -> {
+                (k, e, d) -> {
                 });
         assertThat(b.flushTimeoutMs()).isEqualTo(3 * 60_000L + 200L + 800L);
     }

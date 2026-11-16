@@ -1,7 +1,7 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
 **Analysis Date:** 2026-11-16 (full side-by-side audit)
-**Java SDK Version:** 0.2.6
+**Java SDK Version:** 0.2.7
 **Python SDK Version:** [0.2.182](https://github.com/anthropics/claude-agent-sdk-python/commit/4720d367f7db9d5df8a166c74d7f36a538ac8c34) (latest)
 **Status:** ✅ **Feature parity, verified by a full code audit on 2026-11-16** (deliberate differences listed in §7)
 
@@ -672,6 +672,7 @@ Everything else the 2026-11-16 audit found was fixed. These differences remain o
 | **Session field extraction** | Accepts only `":"` / `": "` around the colon | Any whitespace | Never produces wrong data. |
 | **Fork line splitting** | `splitlines()` (also U+2028, U+0085) | `\n` / `\r` only | JSONL lines end in `\n`. |
 | **Invalid UTF-8 transcript** | Raises `UnicodeDecodeError` | Treated as not found | Matches how other unreadable files are handled. |
+| **Control traffic during the pre-result mirror flush** | The reader blocks on the flush before each result, so control responses and the CLI's requests wait (up to the flush bound) | The reader keeps reading; the result and later messages are held in order until the flush completes, while control frames are handled at once. Same guarantees: result after the store has the turn, mirror errors first, stdout order (0.2.7) | ✅ Java enhancement. Python's control calls can time out behind a slow store; Java's don't. A `canUseTool`/hook callback can run while earlier messages are still held. |
 | **Naive timestamps in the summary fold** | Read in the host's local time | Read as UTC | Results don't depend on the machine; the CLI always writes `Z`. |
 | **Non-object lines on import** | Passed to `append` | Skipped with a warning | `SessionStoreEntry` is a map. |
 | **Non-object `transcript_mirror` entries** | Passed to the batcher and on to `append` | Skipped with a warning; object entries in the same frame are still mirrored | `SessionStoreEntry` is a map, so the typed `SessionStore` API cannot carry them. The CLI writes transcript lines as objects. |

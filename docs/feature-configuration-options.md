@@ -310,7 +310,7 @@ ClaudeAgentOptions options = ClaudeAgentOptions.builder()
 - `continueConversation + sessionStore` requires `store.implementsListSessions()`.
 - `sessionStore + enableFileCheckpointing` is rejected — checkpoints are local-disk only.
 
-**A slow store holds up the stream.** Before each `ResultMessage` the reader waits for the pending entries to be appended, and reads nothing else from the CLI meanwhile, so a control call such as `interrupt()` waits too. `close()` likewise waits for the final flush. Each wait is bounded by the batcher's flush timeout, 181 s by default. The Python SDK behaves the same way; see the [caveat in the Session Store guide](./feature-session-store.md#flush-mode-batched-vs-eager).
+**Results wait for the store; control calls don't (since 0.2.7).** Each `ResultMessage`, and every message after it, is held until the store has appended the turn, so you never see a result the store lacks. The reader keeps reading meanwhile, so a control call such as `interrupt()` is answered at once, and the CLI's `canUseTool` and hook requests are served (they can therefore run while earlier messages are still held). `close()` waits for the final flush. Each wait is bounded by the batcher's flush timeout, 181 s by default. See the [Session Store guide](./feature-session-store.md#flush-mode-batched-vs-eager).
 
 ### sessionStoreFlush()
 
@@ -489,8 +489,12 @@ It is a soft limit (since 0.2.6). While a control request the SDK sent
 reader keeps reading past the limit, because that answer arrives on the same
 stdout as the messages. A control call made before anyone drains the queue
 therefore no longer times out behind a full queue. Nothing is dropped and the
-order is kept. The value must be at least 1: a smaller one fails `connect()`
-(or `ClaudeSDK.query`) with `IllegalArgumentException`.
+order is kept. Messages held back for a slow `sessionStore` count toward the
+limit, and while any are held the overflow has a hard ceiling of four times
+`maxMsgQSize` (since 0.2.7): you cannot drain held messages, so past it the
+reader waits even while a control request is pending, and in that extreme case
+the control call can time out. With nothing held there is no ceiling. The value must be at least 1: `Builder.maxMsgQSize` rejects a smaller
+one with `IllegalArgumentException`.
 
 ## Model Configuration
 

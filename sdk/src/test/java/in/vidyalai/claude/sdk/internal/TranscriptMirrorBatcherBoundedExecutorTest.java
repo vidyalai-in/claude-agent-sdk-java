@@ -72,7 +72,7 @@ class TranscriptMirrorBatcherBoundedExecutorTest {
         return new TranscriptMirrorBatcher(
                 store,
                 projects.toString(),
-                (key, message) -> errors.add(String.valueOf(message)),
+                (key, message, drain) -> errors.add(String.valueOf(message)),
                 SHORT_TIMEOUT_MS,
                 TranscriptMirrorBatcher.MAX_PENDING_ENTRIES,
                 TranscriptMirrorBatcher.MAX_PENDING_BYTES,

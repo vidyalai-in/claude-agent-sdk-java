@@ -43,6 +43,7 @@ public final class PipeTransport implements Transport {
     private final AtomicBoolean readEnded = new AtomicBoolean(false);
     private final AtomicInteger taken = new AtomicInteger();
     private final AtomicInteger closeCalls = new AtomicInteger();
+    private final AtomicInteger endInputCalls = new AtomicInteger();
     private volatile @Nullable Thread readerThread;
 
     /**
@@ -171,6 +172,11 @@ public final class PipeTransport implements Transport {
         return closeCalls.get();
     }
 
+    /** How many times the SDK closed stdin. */
+    public int endInputCalls() {
+        return endInputCalls.get();
+    }
+
     @Override
     public void connect() {
         ready.set(true);
@@ -251,7 +257,7 @@ public final class PipeTransport implements Transport {
 
     @Override
     public void endInput() {
-        // no-op
+        endInputCalls.incrementAndGet();
     }
 
     @Override

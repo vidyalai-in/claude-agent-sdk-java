@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-11-16
+
+### Changed
+- **A slow `SessionStore` no longer holds up control calls.** Before each `ResultMessage` the SDK waits for the store to append the turn, so a result is never seen before the store has it. Until now the reader thread did that waiting itself, and read nothing else from the CLI meanwhile: `interrupt()`, `setModel()`, `getMcpStatus()` and other control calls timed out after 60 seconds behind a slow store, and the CLI's `canUseTool` and hook requests waited. The reader now starts the flush and keeps reading. The result, and every message after it, is held in order and released when the flush completes. The guarantees are unchanged:
+  - a result is delivered only after the store has its turn;
+  - a `MirrorErrorMessage` arrives before the result of the turn it belongs to;
+  - messages keep stdout order;
+  - the end of the stream comes after everything held.
+
+  Control responses and the CLI's requests are handled at once. Messages within a turn are never held, but when a turn starts before the previous turn's result has been delivered (streaming-input prompts sent ahead, background-agent follow-up turns, or a prompt sent without waiting for `receiveResponse()`), its `canUseTool` or hook callback can now run before the consumer receives that turn's `tool_use`, by up to the flush bound (181 s by default). Sending the next prompt after `receiveResponse()` returns is not affected. `close()` still waits for the final flush. The Python SDK blocks its reader instead; this is a Java-only improvement.
+- **`maxMsgQSize` has a hard ceiling of four times its value while messages are held for the store.** The soft limit lets the reader read past it while a control request waits for its answer. Held messages count toward it, and since the consumer cannot drain them, a stuck store could otherwise grow the buffer without bound; past the ceiling the reader now waits even with a control request pending, which can then time out. With nothing held there is no ceiling, as in 0.2.6.
+- **A `MirrorErrorMessage` reported after the stream has ended** is logged at WARNING, with its session and error, instead of being queued where no iterator would read it.
+
 ## [0.2.6] - 2026-11-16
 
 A full parity audit against Python SDK v0.2.182 (commit `4720d36`). Earlier syncs ported only the Python commits made since the previous sync, so a gap one sync missed was never looked at again. This release compares the current code of both SDKs area by area: control protocol, transport, message parsing, hook/permission/config types, SDK MCP servers, local sessions and SessionStore. It fixes every difference found, or records it below and in `PYTHON_SDK_PARITY.md` as deliberate.

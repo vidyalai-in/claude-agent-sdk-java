@@ -9,7 +9,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -80,12 +79,29 @@ import in.vidyalai.claude.sdk.types.session.SessionStoreExecutor;
  * {@code onError} never holds up a later append; it only delays the flush
  * that waits for it.
  *
- * <p><b>A slow store holds up the stream.</b> The receive loop waits for
- * {@link #flush()} before it yields each {@code result}, so while a store is
- * slow (up to {@link #flushTimeoutMs()}, 181 s by default) no further message
- * or control response is read; an outbound control request such as
- * {@code interrupt()} waits too, and {@code close()} waits for
- * {@link #close()} up to the same bound. The Python SDK behaves the same way.
+ * <p><b>A slow store holds back the result, not the stream.</b> The receive
+ * loop in {@code QueryHandler} starts {@link #flush()} at each {@code result}
+ * but does not wait for it: the result, and every regular message read after
+ * it, is held back until that flush completes (up to {@link #flushTimeoutMs()},
+ * 181 s by default), so the consumer still sees each result only once its
+ * turn is in the store. Control responses, the CLI's own control requests and
+ * further {@code transcript_mirror} frames are handled meanwhile, so a control
+ * call such as {@code interrupt()} is answered promptly. One consequence: the
+ * CLI's {@code can_use_tool} and hook requests for the next turn can be
+ * dispatched while this turn's result, and the next turn's own
+ * {@code tool_use} message, are still held (up to that bound with a slow
+ * store), so a callback can run before the consumer has seen the messages
+ * that led to it. Held messages count
+ * toward the {@code maxMsgQSize} soft limit, so a hung store stops the reader
+ * at that limit rather than letting memory grow. {@code close()} still waits
+ * for {@link #close()} up to the same bound.
+ *
+ * <p><b>Drain numbers.</b> Every drain is numbered in the order it is
+ * scheduled. {@code flushBarrier()} returns the number of the last drain its
+ * flush covers, and each report to the {@link MirrorErrorSink} carries the
+ * number of the drain that dropped the batch, so the receive loop can place a
+ * {@code mirror_error} ahead of the result whose flush it belongs to and
+ * behind the results before it.
  */
 public final class TranscriptMirrorBatcher {
 
@@ -131,7 +147,7 @@ public final class TranscriptMirrorBatcher {
 
     private final SessionStore store;
     private final String projectsDir;
-    private final BiConsumer<@Nullable SessionKey, String> onError;
+    private final MirrorErrorSink onError;
     private final long sendTimeoutMs;
     private final int maxPendingEntries;
     private final int maxPendingBytes;
@@ -159,6 +175,27 @@ public final class TranscriptMirrorBatcher {
      */
     private CompletableFuture<?> reportTail = CompletableFuture.completedFuture(null);
 
+    /**
+     * Number of the most recently scheduled drain; drains are numbered from 1
+     * in scheduling order. Guarded by {@code this}.
+     */
+    private long scheduledDrains = 0L;
+
+    /**
+     * A flush and the drains it covers: {@code done} completes (normally, and
+     * within {@link #flushTimeoutMs()}) once every drain numbered up to
+     * {@code drain} has appended and reported.
+     *
+     * @param drain the number of the last drain the flush covers ({@code 0}: none)
+     * @param done  completes when the flush does
+     */
+    record Barrier(long drain, CompletableFuture<Void> done) {
+    }
+
+    /** A scheduled drain: its number and its unbounded report future. */
+    private record Scheduled(long drain, CompletableFuture<?> reported) {
+    }
+
     private volatile boolean closed = false;
 
     private record MirrorEntry(String filePath, List<SessionStoreEntry> entries, int size) {
@@ -167,7 +204,7 @@ public final class TranscriptMirrorBatcher {
     public TranscriptMirrorBatcher(
             SessionStore store,
             String projectsDir,
-            BiConsumer<@Nullable SessionKey, String> onError) {
+            MirrorErrorSink onError) {
         this(store, projectsDir, onError, SEND_TIMEOUT_MS, MAX_PENDING_ENTRIES, MAX_PENDING_BYTES,
                 SessionStoreExecutor.getDefault());
     }
@@ -175,7 +212,7 @@ public final class TranscriptMirrorBatcher {
     public TranscriptMirrorBatcher(
             SessionStore store,
             String projectsDir,
-            BiConsumer<@Nullable SessionKey, String> onError,
+            MirrorErrorSink onError,
             long sendTimeoutMs,
             int maxPendingEntries,
             int maxPendingBytes,
@@ -226,7 +263,16 @@ public final class TranscriptMirrorBatcher {
      * {@link #flushTimeoutMs()} (see the class Javadoc).
      */
     public CompletableFuture<Void> flush() {
-        return bounded(scheduleDrain(), "flush");
+        return flushBarrier().done();
+    }
+
+    /**
+     * {@link #flush()}, together with the number of the last drain it covers,
+     * read in the same critical section that schedules the drain.
+     */
+    Barrier flushBarrier() {
+        Scheduled scheduled = scheduleDrain();
+        return new Barrier(scheduled.drain(), bounded(scheduled.reported(), "flush"));
     }
 
     /**
@@ -235,7 +281,7 @@ public final class TranscriptMirrorBatcher {
      */
     public CompletableFuture<Void> close() {
         closed = true;
-        return bounded(scheduleDrain(), "close flush");
+        return bounded(scheduleDrain().reported(), "close flush");
     }
 
     /**
@@ -279,17 +325,20 @@ public final class TranscriptMirrorBatcher {
      * <p>Detaching and chaining happen in one critical section, which is what
      * makes drains FIFO: a later drain can never overtake an earlier one.
      *
-     * <p>The returned future is {@link #reportTail}: it covers this drain and
+     * <p>The returned future is {@link #reportTail}, with the number of the
+     * last drain scheduled (this one, or the latest earlier one when nothing
+     * is pending). The future covers this drain and
      * every earlier one, each one's appends and then its {@code onError}
      * reports. With nothing pending it still waits for the in-flight drains
      * and their reports, so {@link #flush()} serializes after them. The
      * reports are not part of the append chain, so a slow {@code onError}
      * callback cannot hold up later drains.
      */
-    private synchronized CompletableFuture<?> scheduleDrain() {
+    private synchronized Scheduled scheduleDrain() {
         if (pending.isEmpty()) {
-            return reportTail;
+            return new Scheduled(scheduledDrains, reportTail);
         }
+        long drain = ++scheduledDrains;
         List<MirrorEntry> items = new ArrayList<>(pending);
         pending.clear();
         pendingEntries = 0;
@@ -301,11 +350,11 @@ public final class TranscriptMirrorBatcher {
                 appended.handle((r, e) -> ((r != null) ? r : List.<KeyError>of()));
         reportTail = reportTail
                 .thenCombineAsync(errors, (ignored, errs) -> {
-                    reportErrors(errs);
+                    reportErrors(drain, errs);
                     return null;
                 }, DRAIN_EXECUTOR)
                 .handle((r, e) -> null);
-        return reportTail;
+        return new Scheduled(drain, reportTail);
     }
 
     /** Send one detached batch. Never raises. */
@@ -319,11 +368,14 @@ public final class TranscriptMirrorBatcher {
         return errors;
     }
 
-    /** Report dropped batches through {@code onError}. Never raises. */
-    private void reportErrors(List<KeyError> errors) {
+    /**
+     * Report drain {@code drain}'s dropped batches through {@code onError},
+     * each tagged with that drain's number. Never raises.
+     */
+    private void reportErrors(long drain, List<KeyError> errors) {
         for (KeyError ke : errors) {
             try {
-                onError.accept(ke.key, ke.message);
+                onError.report(ke.key, ke.message, drain);
             } catch (RuntimeException cb) {
                 logger.log(Level.SEVERE, "[TranscriptMirrorBatcher] onError callback raised", cb);
             }

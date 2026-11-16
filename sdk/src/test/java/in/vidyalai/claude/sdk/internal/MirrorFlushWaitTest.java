@@ -2,6 +2,7 @@ package in.vidyalai.claude.sdk.internal;
 
 import static in.vidyalai.claude.sdk.internal.PipeTransport.awaitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -31,9 +32,10 @@ import in.vidyalai.claude.sdk.types.session.SessionStoreFlushMode;
  * long the store takes (the batcher bounds each append itself).
  *
  * <p>
- * Read through the reader thread's state rather than by outwaiting the old
- * 5s cap: a wait with a deadline parks it {@code TIMED_WAITING}, a wait
- * without one {@code WAITING}.
+ * The reader no longer waits for that flush itself: it holds the result back
+ * and reads on, so frames after the result (control responses included) are
+ * read while the store is slow. It used to park in the flush, reading
+ * nothing until the store returned.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 @SuppressWarnings("null")
@@ -42,7 +44,7 @@ class MirrorFlushWaitTest {
     private static final long WAIT_SECONDS = 5;
 
     @Test
-    void theResultWaitsForASlowStoreWithNoCap() throws Exception {
+    void theResultWaitsForASlowStoreWhileTheReaderReadsOn() throws Exception {
         CountDownLatch appendStarted = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         Map<SessionKey, List<SessionStoreEntry>> stored = new ConcurrentHashMap<>();
@@ -81,10 +83,11 @@ class MirrorFlushWaitTest {
         transport.push(Map.of("type", "transcript_mirror", "filePath", filePath,
                 "entries", List.of(Map.of("type", "user", "uuid", "u1"))));
         transport.push(result);
+        transport.push(Map.of("type", "user", "message", Map.of("role", "user", "content", "after")));
 
         try (QueryHandler handler = new QueryHandler(transport, true, null, null, Duration.ofSeconds(10))) {
             handler.setTranscriptMirrorBatcher(SessionResume.buildMirrorBatcher(
-                    slow, null, Map.of(), (k, e) -> {
+                    slow, null, Map.of(), (k, e, d) -> {
                     }, SessionStoreFlushMode.BATCHED));
             transport.connect();
             handler.start();
@@ -103,10 +106,13 @@ class MirrorFlushWaitTest {
             });
 
             assertThat(appendStarted.await(WAIT_SECONDS, TimeUnit.SECONDS)).isTrue();
-            Thread reader = transport.readerThread();
-            assertThat(reader).isNotNull();
-            awaitUntil("the reader to wait for the flush with no deadline (state " + reader.getState() + ")",
-                    WAIT_SECONDS, () -> reader.getState() == Thread.State.WAITING);
+            // The reader reads past the result while the store is still busy:
+            // the next frame is taken, and a control call made now gets its
+            // response (it used to wait behind the flush).
+            awaitUntil("the reader to read past the result", WAIT_SECONDS, () -> transport.taken() == 3);
+            assertTimeoutPreemptively(Duration.ofSeconds(5), handler::interrupt);
+            assertThat(transport.requestsWritten("interrupt")).hasSize(1);
+            // The result itself is withheld until the store has the turn.
             assertThat(consumer).isNotDone();
             assertThat(stored).isEmpty();
 

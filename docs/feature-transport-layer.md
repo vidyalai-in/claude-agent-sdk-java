@@ -90,7 +90,7 @@ An interrupt does not shorten these waits. `close()` clears the interrupt flag f
 
 A complete line cannot be completed by later data, so a corrupt one is an error rather than something to keep buffering: the exception ends the message stream, as in the Python SDK, and the consumer's iterator rethrows it. Before 0.2.6 a malformed line silently swallowed every message after it. A last line cut off by the end of the stream is delivered if it parses and dropped otherwise. When stdout ends normally, a non-zero CLI exit code is reported as `ProcessException`.
 
-**Back-pressure**: the reader waits for room in its queue rather than dropping a message, so a slow consumer slows the CLI down instead of losing output. The same holds one layer up, in `QueryHandler`'s message queue (see [Architecture → QueryHandler](./architecture.md#queryhandler)). That queue's `maxMsgQSize` is a soft limit: while an outbound control request waits for its answer, `QueryHandler` keeps reading past it, so the `control_response` behind the queued messages can still arrive.
+**Back-pressure**: the reader waits for room in its queue rather than dropping a message, so a slow consumer slows the CLI down instead of losing output. The same holds one layer up, in `QueryHandler`'s message queue (see [Architecture → QueryHandler](./architecture.md#queryhandler)). That queue's `maxMsgQSize` is a soft limit: while an outbound control request waits for its answer, `QueryHandler` keeps reading past it, so the `control_response` behind the queued messages can still arrive. While a slow `SessionStore` holds messages back, that reading on stops at a hard ceiling of four times the limit.
 
 ### Windows: batch-script CLI refusal (0.1.21)
 

@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -28,6 +29,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiFunction;
+import java.util.function.UnaryOperator;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -151,6 +153,31 @@ import in.vidyalai.claude.sdk.types.permission.ToolPermissionContext;
  * (permissions, hooks, MCP messages).</li>
  * </ul>
  *
+ * <h2>Transcript-Mirror Delivery Barrier</h2>
+ * <p>
+ * With a {@link TranscriptMirrorBatcher} attached, a {@code result} is
+ * delivered only once the turn it ends is in the {@code SessionStore}, but
+ * the reader does not wait for that. At a {@code result} it starts a flush and
+ * opens a <i>held segment</i>: the flush, the {@code mirror_error} reports of
+ * the drains that flush covers, the result and every regular message read
+ * after it. Segments are released strictly in order, each once its flush
+ * completes (bounded by {@link TranscriptMirrorBatcher#flushTimeoutMs()}), a
+ * segment's mirror errors first, then its messages. Meanwhile the reader goes
+ * on reading: {@code control_response} frames settle their requests at once,
+ * the CLI's {@code control_request} and {@code control_cancel_request} frames
+ * are dispatched as always (they never go through the message queue), and
+ * {@code transcript_mirror} frames go to the batcher. So the CLI's
+ * {@code can_use_tool} and hook requests for the next turn can be dispatched
+ * while this turn's result, and the next turn's own {@code tool_use} message,
+ * are still held (up to the flush bound with a slow store): a callback can
+ * run before the consumer has seen the messages that led to it. Held messages
+ * count toward the {@code maxMsgQSize} soft limit, and while anything is held
+ * the reader stops at a hard ceiling of four times it
+ * ({@code HARD_LIMIT_FACTOR}) even with a control request pending. The end of
+ * the stream, or the
+ * error it ends with, is published only after every held segment and the
+ * final flush have been released. Without a batcher nothing is held.
+ *
  * <h2>Usage Pattern</h2>
  * <p>
  * The intended usage pattern is:
@@ -213,6 +240,8 @@ import in.vidyalai.claude.sdk.types.permission.ToolPermissionContext;
  * When {@link #close()} is called:
  * <ol>
  * <li>Sets the closed flag to prevent new operations</li>
+ * <li>Drops the messages still held behind a transcript-mirror flush:
+ * iterators end at once, so they would never be read</li>
  * <li>Waits for the final transcript-mirror flush (bounded by the batcher)</li>
  * <li>Completes all pending control request futures exceptionally</li>
  * <li>Cancels the CLI's control requests still being answered (their
@@ -248,6 +277,17 @@ public class QueryHandler implements AutoCloseable {
     private static final Logger logger = Logger.getLogger(QueryHandler.class.getName());
     private static final SecureRandom random = new SecureRandom();
     private static final int DEFAULT_MSG_Q_SIZE = 1000;
+    /**
+     * The hard ceiling on buffered messages (queued plus held), as a multiple
+     * of {@code maxMsgQSize}, while messages are held behind a
+     * transcript-mirror flush. Past the soft limit the reader still reads on
+     * while an outbound control request waits for its response, but not past
+     * this while a flush holds messages back: the consumer cannot drain held
+     * messages, so a hung store would otherwise let them grow without bound,
+     * at the cost of that request possibly timing out. With nothing held the
+     * consumer can always drain, and there is no ceiling (as in 0.2.6).
+     */
+    static final int HARD_LIMIT_FACTOR = 4;
     /**
      * Deadline for an OUTBOUND control request (SDK to CLI), as in the Python
      * SDK. Inbound requests (canUseTool, hooks, SDK MCP) have no SDK-side
@@ -373,14 +413,35 @@ public class QueryHandler implements AutoCloseable {
 
     // Message stream. The queue itself is unbounded: maxMsgQSize is a soft
     // limit the reader enforces in enqueueBlocking, so that it can run past
-    // it while an outbound control request waits for its response (see
-    // enqueueBlocking). One FIFO either way, so message order never changes.
+    // it while an outbound control request waits for its response, up to the
+    // hard ceiling (see enqueueBlocking). One FIFO either way, so message
+    // order never changes. Messages held behind a transcript-mirror flush
+    // (holdback) come before the queue's later additions and count toward
+    // the same limits.
     private final BlockingQueue<Map<String, Object>> messageQueue = new LinkedBlockingQueue<>();
     private final int maxMsgQSize;
+    // HARD_LIMIT_FACTOR x maxMsgQSize: while anything is held, queued plus
+    // held never exceeds it.
+    private final int maxBufferedMessages;
     // Wakes a reader waiting for room: signalled when a consumer takes a
-    // message, when an outbound control request is registered and on close().
+    // message, when an outbound control request is registered, when held
+    // messages are released or dropped, and on close().
+    // Also guards the holdback, heldCount and every addition to messageQueue
+    // that must keep its place relative to the holdback (the reader's
+    // enqueues, releases, mirror errors and the terminal markers). Never held
+    // while calling user code or blocking on anything but its conditions.
     private final ReentrantLock queueLock = new ReentrantLock();
     private final Condition queueRoom = queueLock.newCondition();
+    // Signalled when the holdback becomes empty, and on close().
+    private final Condition holdbackReleased = queueLock.newCondition();
+    // Segments held behind a transcript-mirror flush, oldest first; released
+    // strictly in this order (see releaseHeld). Guarded by queueLock.
+    private final ArrayDeque<HeldSegment> holdback = new ArrayDeque<>();
+    // Messages in the holdback, mirror errors included. Guarded by queueLock.
+    private int heldCount = 0;
+    // Test seam, set through setBarrierHookForTest; null in production.
+    @Nullable
+    private volatile UnaryOperator<CompletableFuture<Void>> barrierHookForTest = null;
     private final AtomicBoolean initialized = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean readerStarted = new AtomicBoolean(false);
@@ -607,6 +668,7 @@ public class QueryHandler implements AutoCloseable {
             throw new IllegalArgumentException("maxMsgQSize must be at least 1, got " + queueSize);
         }
         this.maxMsgQSize = queueSize;
+        this.maxBufferedMessages = (int) Math.min(Integer.MAX_VALUE, (long) HARD_LIMIT_FACTOR * queueSize);
 
         // Create separate executors for reader and control tasks.
         // Threads gives virtual threads on Java 21+ and named daemon platform
@@ -814,8 +876,10 @@ public class QueryHandler implements AutoCloseable {
      * {@code transcript_mirror} frames.
      *
      * <p>When set, the read loop peels {@code transcript_mirror} frames off
-     * stdout (they are not yielded to consumers), enqueues them on the
-     * batcher, and flushes before yielding each {@code result} message.
+     * stdout (they are not yielded to consumers) and enqueues them on the
+     * batcher. At each {@code result} it starts a flush and holds the result,
+     * and the regular messages after it, until that flush completes; it keeps
+     * reading meanwhile (see the class Javadoc).
      */
     public void setTranscriptMirrorBatcher(TranscriptMirrorBatcher batcher) {
         this.transcriptMirrorBatcher = batcher;
@@ -824,15 +888,27 @@ public class QueryHandler implements AutoCloseable {
     /**
      * Surface a {@link in.vidyalai.claude.sdk.types.session.SessionStore#append}
      * failure as a {@code mirror_error} system message in the consumer stream.
+     * This is the batcher's {@link MirrorErrorSink}.
      *
-     * <p>Called from the batcher's {@code onError} once a batch has been
-     * dropped (after its retries, or after a single timed-out attempt), so this
-     * is the consumer's only signal.
-     * Non-blocking, and never dropped: the queue's limit is a soft one that
-     * only the reader enforces, so the report is queued even when the reader
-     * is waiting for room.
+     * <p>Called once a batch has been dropped (after its retries, or after a
+     * single timed-out attempt), so this is the consumer's only signal.
+     * Non-blocking: the queue's limit is one only the reader enforces, so the
+     * report is queued even when the reader is waiting for room. Once the
+     * stream has ended or the handler is closed no consumer could read it, so
+     * it is dropped, with a warning naming the session and the error.
+     *
+     * <p>Placement: if a held segment's flush covers {@code drain} (its
+     * {@code Barrier.drain()} is at least {@code drain}), the first such
+     * segment delivers the report right before its messages, so ahead of its
+     * {@code result}. Otherwise (a later drain, or a segment already released
+     * at the flush bound) it takes its place behind everything read so far.
+     *
+     * @param key   the session the dropped batch was for, or {@code null}
+     * @param error the failure's message
+     * @param drain the number of the drain that dropped the batch
      */
-    public void reportMirrorError(in.vidyalai.claude.sdk.types.session.@Nullable SessionKey key, String error) {
+    public void reportMirrorError(in.vidyalai.claude.sdk.types.session.@Nullable SessionKey key, String error,
+            long drain) {
         Map<String, Object> msg = new HashMap<>();
         msg.put("type", "system");
         msg.put("subtype", "mirror_error");
@@ -850,8 +926,38 @@ public class QueryHandler implements AutoCloseable {
             msg.put("session_id", "");
         }
         msg.put("uuid", java.util.UUID.randomUUID().toString());
-        if (!messageQueue.offer(msg)) {
-            logger.warning("Dropping mirror_error message (buffer full)");
+        boolean dropped;
+        queueLock.lock();
+        try {
+            dropped = streamEnded || closed.get();
+            if (!dropped) {
+                placeLocked(msg, drain);
+            }
+        } finally {
+            queueLock.unlock();
+        }
+        if (dropped) {
+            logger.warning("Dropping a mirror_error reported after the end of the message stream"
+                    + " (SessionStore append failed for " + ((key != null) ? key : "an unknown session")
+                    + "): " + error);
+        }
+    }
+
+    /** Places a mirror error by its drain number. Caller holds queueLock. */
+    private void placeLocked(Map<String, Object> msg, long drain) {
+        for (HeldSegment segment : holdback) {
+            if (drain <= segment.drain) {
+                segment.mirrorErrors.add(msg);
+                heldCount++;
+                return;
+            }
+        }
+        HeldSegment tail = holdback.peekLast();
+        if (tail != null) {
+            tail.messages.add(msg);
+            heldCount++;
+        } else {
+            messageQueue.add(msg);
         }
     }
 
@@ -993,8 +1099,12 @@ public class QueryHandler implements AutoCloseable {
                 // Never a cast: a frame with a non-string type must not kill
                 // the reader (it reaches the parser, which skips it).
                 String msgType = ((message.get("type") instanceof String type) ? type : null);
+                // The flush a result is held behind, if any.
+                TranscriptMirrorBatcher.Barrier barrier = null;
 
-                // Route control messages
+                // Route control messages. None of these goes through the
+                // message queue or the holdback, so they are handled at once
+                // even while a result waits for its mirror flush.
                 if ("control_response".equals(msgType)) {
                     handleControlResponse(message);
                     continue;
@@ -1075,12 +1185,14 @@ public class QueryHandler implements AutoCloseable {
 
                 // Track results for proper stream closure
                 if ("result".equals(msgType)) {
-                    // Flush pending transcript mirror entries before yielding
-                    // result so consumers observing the result can rely on the
-                    // SessionStore being up to date for this turn.
+                    // Flush pending transcript mirror entries so consumers
+                    // observing the result can rely on the SessionStore being
+                    // up to date for this turn. The reader does not wait for
+                    // it: the result is held behind the flush (enqueueBlocking)
+                    // while the reader goes on reading control responses.
                     TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
                     if (batcher != null) {
-                        awaitMirror(batcher.flush(), "Mirror flush before result");
+                        barrier = batcher.flushBarrier();
                     }
                     synchronized (runLock) {
                         resultReceived = true;
@@ -1129,10 +1241,11 @@ public class QueryHandler implements AutoCloseable {
                     }
                 }
 
-                // Regular SDK messages go to the stream. A full queue holds the
-                // reader back until the consumer catches up (back-pressure, as
-                // the Python SDK's awaited send), and never drops a message.
-                if (!enqueueBlocking(message)) {
+                // Regular SDK messages go to the stream, behind any held
+                // segment. A full queue holds the reader back until the
+                // consumer catches up (back-pressure, as the Python SDK's
+                // awaited send), and never drops a message.
+                if (!enqueueBlocking(message, barrier)) {
                     break; // closed while waiting for room
                 }
             }
@@ -1195,27 +1308,44 @@ public class QueryHandler implements AutoCloseable {
                 terminalError = errMessage;
             }
         } finally {
-            // Final flush before end-of-stream so an early stdout EOF or
-            // transport error doesn't drop entries batched this turn. It runs
-            // before the terminal error is queued, as before the end marker,
-            // so a mirror_error it reports is not stranded behind either.
+            // Release what is still held, then make the final flush, so an
+            // early stdout EOF or transport error doesn't drop entries
+            // batched this turn. The final flush is held like a result's (an
+            // empty segment) and starts only once the earlier segments are
+            // out, so its own bound is not spent waiting for theirs, as when
+            // the reader waited for each flush in turn. The end is published
+            // only after both: a mirror_error the final flush reports, and
+            // every held message, is not stranded behind the terminal error
+            // or the end marker. Stdout is done, so waiting here holds
+            // nothing up; each flush is bounded by the batcher, and close()
+            // ends the wait.
+            awaitHoldbackReleased();
             TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
             if (batcher != null) {
-                awaitMirror(batcher.flush(), "Mirror flush at end-of-stream");
+                holdBehind(batcher.flushBarrier(), null);
+                awaitHoldbackReleased();
             }
-            if (terminalError != null) {
-                streamError = terminalError;
-                messageQueue.offer(terminalError);
-            }
-            // Signal end of stream. The flag is the guarantee: it is set after
-            // the reader's last enqueue, so a consumer that finds it set and
-            // the queue empty has seen everything. The in-band marker only
-            // wakes a waiting consumer at once (the queue's limit is soft, so
-            // it is never refused).
-            streamEnded = true;
             Map<String, Object> endMessage = new HashMap<>();
             endMessage.put("type", "end");
-            messageQueue.offer(endMessage);
+            queueLock.lock();
+            try {
+                // Whatever close() left held is dropped with it.
+                dropHoldback();
+                if (terminalError != null) {
+                    streamError = terminalError;
+                    messageQueue.add(terminalError);
+                }
+                // Signal end of stream. The flag is the guarantee: it is set
+                // after the reader's last enqueue, so a consumer that finds it
+                // set and the queue empty has seen everything. The in-band
+                // marker only wakes a waiting consumer at once (the queue's
+                // limit is soft, so it is never refused). Set under queueLock,
+                // so no mirror_error can be queued behind it.
+                streamEnded = true;
+                messageQueue.add(endMessage);
+            } finally {
+                queueLock.unlock();
+            }
             // Unblock the stdin-closing waiter so it doesn't stall on early
             // exit.
             synchronized (runLock) {
@@ -1226,39 +1356,231 @@ public class QueryHandler implements AutoCloseable {
     }
 
     /**
+     * A {@code result} (or the end of the stream) held behind a
+     * transcript-mirror flush, with everything that must reach the consumer
+     * between the segment before it and the one after it.
+     */
+    private static final class HeldSegment {
+
+        /** The last mirror drain the flush covers. */
+        final long drain;
+        /** The {@code mirror_error} reports of the drains the flush covers. */
+        final List<Map<String, Object>> mirrorErrors = new ArrayList<>();
+        /**
+         * The result first, then every message read after it, up to the next
+         * segment; empty for the end-of-stream flush.
+         */
+        final List<Map<String, Object>> messages = new ArrayList<>();
+        /** Whether the flush has completed. Guarded by queueLock. */
+        boolean flushed = false;
+
+        HeldSegment(long drain) {
+            this.drain = drain;
+        }
+
+        int size() {
+            return mirrorErrors.size() + messages.size();
+        }
+    }
+
+    /**
      * Puts a message on the consumer queue, waiting for room as long as it
-     * takes: once {@code maxMsgQSize} messages are waiting, the reader stops
-     * reading from the CLI until the consumer catches up (back-pressure, as
-     * the Python SDK's awaited send; nothing is dropped).
+     * takes: once {@code maxMsgQSize} messages are waiting, queued or held,
+     * the reader stops reading from the CLI until the consumer catches up
+     * (back-pressure, as the Python SDK's awaited send; nothing is dropped).
+     *
+     * <p>
+     * With a {@code barrier} (a {@code result}'s mirror flush) the message
+     * opens a new held segment instead, unless the flush has already
+     * completed and nothing is held; without one it joins the newest held
+     * segment, or the queue when nothing is held, so the stream stays in
+     * stdout order.
      *
      * <p>
      * The limit is soft. While an outbound control request is waiting for its
      * response, the reader keeps reading past it: the response travels on the
      * same stdout as the messages, so blocking here would leave a control call
      * made by a thread that is not draining the messages ({@code interrupt()},
-     * {@code setModel()}, ...) to time out. The queue is one FIFO either way,
-     * so message order is unchanged. A wait is woken when a consumer takes a
-     * message, when a control request is sent and on close(); the
-     * {@link #QUEUE_WAKE_MS} timeout is only a backstop.
+     * {@code setModel()}, ...) to time out. The same holds while a slow
+     * {@code SessionStore} keeps a result held: held messages count toward
+     * the limit, so a hung store stops the reader at it, but a pending control
+     * request still lets its response through.
+     *
+     * <p>
+     * While messages are held, reading on is bounded too: at
+     * {@link #HARD_LIMIT_FACTOR} times {@code maxMsgQSize} buffered messages,
+     * queued plus held, the reader waits even while a control request is
+     * pending. That request may then time out, but memory stays bounded
+     * however long a store hangs. With nothing held there is no ceiling: the
+     * consumer can drain, and a control call made meanwhile is never left to
+     * time out behind the queue. The queue is one FIFO either way, so message order is
+     * unchanged. A wait is woken when a consumer takes a message, when a
+     * control request is sent, when held messages are released or dropped and
+     * on close(); the {@link #QUEUE_WAKE_MS} timeout is only a backstop.
      *
      * @return false if the handler closed before there was room
      */
-    private boolean enqueueBlocking(Map<String, Object> message) throws InterruptedException {
+    private boolean enqueueBlocking(Map<String, Object> message,
+            TranscriptMirrorBatcher.@Nullable Barrier barrier) throws InterruptedException {
         queueLock.lockInterruptibly();
         try {
-            while ((messageQueue.size() >= maxMsgQSize)
-                    && pendingControlResponses.isEmpty()
-                    && !closed.get()) {
+            while (!closed.get() && mustWaitForRoom(messageQueue.size() + heldCount)) {
                 queueRoom.await(QUEUE_WAKE_MS, TimeUnit.MILLISECONDS);
+            }
+            if (closed.get()) {
+                return false;
+            }
+            if (barrier == null) {
+                HeldSegment tail = holdback.peekLast();
+                if (tail != null) {
+                    tail.messages.add(message);
+                    heldCount++;
+                } else {
+                    messageQueue.add(message);
+                }
+                return true;
             }
         } finally {
             queueLock.unlock();
         }
-        if (closed.get()) {
-            return false;
-        }
-        messageQueue.add(message);
+        holdBehind(barrier, message);
         return true;
+    }
+
+    /**
+     * Whether the reader must wait with {@code buffered} messages queued or
+     * held: at the hard ceiling while anything is held, and at the soft limit
+     * unless an outbound control request is waiting for its response. Caller
+     * holds queueLock.
+     */
+    private boolean mustWaitForRoom(int buffered) {
+        if ((buffered >= maxBufferedMessages) && !holdback.isEmpty()) {
+            return true;
+        }
+        return (buffered >= maxMsgQSize) && pendingControlResponses.isEmpty();
+    }
+
+    /** Test helper: messages buffered right now, queued plus held. */
+    int bufferedCountForTest() {
+        queueLock.lock();
+        try {
+            return messageQueue.size() + heldCount;
+        } finally {
+            queueLock.unlock();
+        }
+    }
+
+    /**
+     * Test seam: when set, each held segment waits for the flush future
+     * {@code hook} returns instead of the flush itself, so a test can complete
+     * barriers out of order. Production code never calls it.
+     */
+    void setBarrierHookForTest(@Nullable UnaryOperator<CompletableFuture<Void>> hook) {
+        this.barrierHookForTest = hook;
+    }
+
+    /**
+     * Holds {@code message} ({@code null}: nothing, for the end-of-stream
+     * flush) behind {@code barrier} in a new segment, released by
+     * {@link #releaseHeld} once the barrier completes and every earlier
+     * segment is released. When nothing is held and the flush is already done
+     * the message goes straight to the queue: every report of that flush has
+     * been placed ahead of it already.
+     */
+    private void holdBehind(TranscriptMirrorBatcher.Barrier barrier, @Nullable Map<String, Object> message) {
+        CompletableFuture<Void> done = barrier.done();
+        UnaryOperator<CompletableFuture<Void>> hook = barrierHookForTest;
+        if (hook != null) {
+            done = hook.apply(done);
+        }
+        HeldSegment segment;
+        queueLock.lock();
+        try {
+            if (closed.get()) {
+                return;
+            }
+            if (holdback.isEmpty() && done.isDone()) {
+                if (message != null) {
+                    messageQueue.add(message);
+                }
+                return;
+            }
+            segment = new HeldSegment(barrier.drain());
+            if (message != null) {
+                segment.messages.add(message);
+                heldCount++;
+            }
+            holdback.addLast(segment);
+        } finally {
+            queueLock.unlock();
+        }
+        // Outside the lock: an already-completed barrier releases inline.
+        done.whenComplete((r, e) -> releaseHeld(segment));
+    }
+
+    /**
+     * Marks {@code segment}'s flush complete and releases, in order, every
+     * segment at the head of the holdback whose flush has completed: each
+     * one's mirror errors, then its messages. A segment whose flush completes
+     * before an earlier one's waits for it. Idempotent, safe on any thread
+     * (it runs on whichever completes the flush), and a no-op once the
+     * handler is closed, so a release racing close() delivers nothing.
+     */
+    private void releaseHeld(HeldSegment segment) {
+        queueLock.lock();
+        try {
+            segment.flushed = true;
+            if (closed.get()) {
+                return;
+            }
+            HeldSegment head;
+            while (((head = holdback.peekFirst()) != null) && head.flushed) {
+                holdback.removeFirst();
+                heldCount -= head.size();
+                messageQueue.addAll(head.mirrorErrors);
+                messageQueue.addAll(head.messages);
+            }
+            if (holdback.isEmpty()) {
+                holdbackReleased.signalAll();
+            }
+            // Released messages can now be drained, and with nothing held
+            // the hard ceiling no longer applies; a reader parked at a limit
+            // re-checks.
+            queueRoom.signalAll();
+        } finally {
+            queueLock.unlock();
+        }
+    }
+
+    /**
+     * Waits, at the end of the stream, until every held segment has been
+     * released, or the handler closes. Each flush is bounded by the batcher,
+     * so this is too.
+     */
+    private void awaitHoldbackReleased() {
+        queueLock.lock();
+        try {
+            while (!holdback.isEmpty() && !closed.get()) {
+                holdbackReleased.await(QUEUE_WAKE_MS, TimeUnit.MILLISECONDS);
+            }
+        } catch (InterruptedException e) {
+            // Only close() interrupts the reader; what is still held is
+            // dropped with it.
+            Thread.currentThread().interrupt();
+        } finally {
+            queueLock.unlock();
+        }
+    }
+
+    /** Drops every held message. Caller holds queueLock. */
+    private void dropHoldback() {
+        if (!holdback.isEmpty()) {
+            logger.fine("Dropping " + heldCount + " message(s) held behind a transcript-mirror flush");
+        }
+        holdback.clear();
+        heldCount = 0;
+        holdbackReleased.signalAll();
+        queueRoom.signalAll();
     }
 
     /** Wakes a reader waiting in {@link #enqueueBlocking} to re-check. */
@@ -1268,29 +1590,6 @@ public class QueryHandler implements AutoCloseable {
             queueRoom.signalAll();
         } finally {
             queueLock.unlock();
-        }
-    }
-
-    /**
-     * Waits for a transcript-mirror flush or close, with no outer cap, as the
-     * Python SDK does.
-     *
-     * <p>
-     * The batcher bounds the wait itself: each append is limited by its
-     * {@code sendTimeoutMs} (60s by default), is attempted a fixed
-     * {@link TranscriptMirrorBatcher#MIRROR_APPEND_MAX_ATTEMPTS} times with a
-     * fixed backoff, and is not retried at all after a timeout, so the future
-     * always completes. A shorter cap here would only let the consumer see a
-     * result before the turn it ends is in the store. Never throws.
-     */
-    private static void awaitMirror(CompletableFuture<Void> mirror, String what) {
-        try {
-            mirror.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.fine(what + " interrupted");
-        } catch (ExecutionException | RuntimeException e) {
-            logger.fine(what + " completed exceptionally: " + e.getMessage());
         }
     }
 
@@ -2326,6 +2625,9 @@ public class QueryHandler implements AutoCloseable {
      * <p>
      * This method:
      * <ul>
+     * <li>Drops the messages still held behind a transcript-mirror flush;
+     * every iterator ends at once, and a flush that completes later releases
+     * nothing</li>
      * <li>Waits for the final transcript-mirror flush (bounded by the batcher)</li>
      * <li>Completes all pending control request futures exceptionally</li>
      * <li>Cancels the control request handlers and waits for them to end</li>
@@ -2382,7 +2684,17 @@ public class QueryHandler implements AutoCloseable {
         // The control request whose callback is closing us, if any.
         InflightControlRequest self = servingRequest.get();
 
-        // 0. Final-flush mirror entries before tearing down so .return()/break
+        // 0. Drop what is held behind a mirror flush. Iterators end as soon
+        // as closed is set, so it would never be read; a release that
+        // completes later finds closed set and delivers nothing.
+        queueLock.lock();
+        try {
+            dropHoldback();
+        } finally {
+            queueLock.unlock();
+        }
+
+        // 0a. Final-flush mirror entries before tearing down so .return()/break
         // don't drop the current turn when the process exits immediately.
         TranscriptMirrorBatcher batcher = transcriptMirrorBatcher;
         if (batcher != null) {

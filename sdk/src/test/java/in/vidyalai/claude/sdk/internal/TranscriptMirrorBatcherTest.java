@@ -52,7 +52,7 @@ class TranscriptMirrorBatcherTest {
         InMemorySessionStore store = new InMemorySessionStore();
         Path projects = Path.of("/tmp/projects-x");
         TranscriptMirrorBatcher batcher = new TranscriptMirrorBatcher(
-                store, projects.toString(), (k, e) -> {
+                store, projects.toString(), (k, e, d) -> {
                 });
 
         String filePath = mainTranscriptPath(projects);
@@ -84,7 +84,7 @@ class TranscriptMirrorBatcherTest {
 
         Path projects = Path.of("/tmp/coalesce-test");
         TranscriptMirrorBatcher batcher = new TranscriptMirrorBatcher(
-                counting, projects.toString(), (k, e) -> {
+                counting, projects.toString(), (k, e, d) -> {
                 });
 
         String filePath = mainTranscriptPath(projects);
@@ -113,7 +113,7 @@ class TranscriptMirrorBatcherTest {
         };
 
         TranscriptMirrorBatcher batcher = new TranscriptMirrorBatcher(
-                counting, "/tmp/projects-y", (k, e) -> {
+                counting, "/tmp/projects-y", (k, e, d) -> {
                 });
 
         // Path is under a DIFFERENT projects dir
@@ -144,7 +144,7 @@ class TranscriptMirrorBatcherTest {
         Path projects = Path.of("/tmp/retry-test");
         TranscriptMirrorBatcher batcher = new TranscriptMirrorBatcher(
                 failing, projects.toString(),
-                (k, e) -> {
+                (k, e, d) -> {
                     errors.add(e);
                     errorReceived.countDown();
                 });
@@ -164,7 +164,7 @@ class TranscriptMirrorBatcherTest {
         InMemorySessionStore store = new InMemorySessionStore();
         Path projects = Path.of("/tmp/close-test");
         TranscriptMirrorBatcher batcher = new TranscriptMirrorBatcher(
-                store, projects.toString(), (k, e) -> {
+                store, projects.toString(), (k, e, d) -> {
                 });
 
         String filePath = mainTranscriptPath(projects);
@@ -180,7 +180,7 @@ class TranscriptMirrorBatcherTest {
         InMemorySessionStore store = new InMemorySessionStore();
         Path projects = Path.of("/tmp/closed-enqueue-test");
         TranscriptMirrorBatcher batcher = new TranscriptMirrorBatcher(
-                store, projects.toString(), (k, e) -> {
+                store, projects.toString(), (k, e, d) -> {
                 });
 
         batcher.close().get(5, TimeUnit.SECONDS);
@@ -226,7 +226,7 @@ class TranscriptMirrorBatcherTest {
     void buildMirrorBatcher_defaultFlushMode_keepsBatchedThresholds() {
         // Default — no flush mode argument.
         TranscriptMirrorBatcher defaultBatcher = SessionResume.buildMirrorBatcher(
-                new InMemorySessionStore(), null, Map.of(), (k, e) -> {
+                new InMemorySessionStore(), null, Map.of(), (k, e, d) -> {
                 });
         assertThat(defaultBatcher.maxPendingEntries())
                 .isEqualTo(TranscriptMirrorBatcher.MAX_PENDING_ENTRIES);
@@ -235,7 +235,7 @@ class TranscriptMirrorBatcherTest {
 
         // Explicit BATCHED — same defaults.
         TranscriptMirrorBatcher batched = SessionResume.buildMirrorBatcher(
-                new InMemorySessionStore(), null, Map.of(), (k, e) -> {
+                new InMemorySessionStore(), null, Map.of(), (k, e, d) -> {
                 }, SessionStoreFlushMode.BATCHED);
         assertThat(batched.maxPendingEntries())
                 .isEqualTo(TranscriptMirrorBatcher.MAX_PENDING_ENTRIES);
@@ -244,7 +244,7 @@ class TranscriptMirrorBatcherTest {
 
         // EAGER — thresholds zeroed so every enqueue schedules a drain.
         TranscriptMirrorBatcher eager = SessionResume.buildMirrorBatcher(
-                new InMemorySessionStore(), null, Map.of(), (k, e) -> {
+                new InMemorySessionStore(), null, Map.of(), (k, e, d) -> {
                 }, SessionStoreFlushMode.EAGER);
         assertThat(eager.maxPendingEntries()).isZero();
         assertThat(eager.maxPendingBytes()).isZero();
@@ -254,7 +254,7 @@ class TranscriptMirrorBatcherTest {
     void buildMirrorBatcher_batchedMode_doesNotAutoDrainOnSingleFrame() throws Exception {
         InMemorySessionStore store = new InMemorySessionStore();
         TranscriptMirrorBatcher batcher = SessionResume.buildMirrorBatcher(
-                store, null, Map.of(), (k, e) -> {
+                store, null, Map.of(), (k, e, d) -> {
                 });
         Path projects = Sessions.getProjectsDirForEnv(Map.of());
         String projectKey = "myproj";
@@ -293,7 +293,7 @@ class TranscriptMirrorBatcherTest {
         };
 
         TranscriptMirrorBatcher batcher = SessionResume.buildMirrorBatcher(
-                counting, null, Map.of(), (k, e) -> {
+                counting, null, Map.of(), (k, e, d) -> {
                 }, SessionStoreFlushMode.EAGER);
 
         // Enqueue two frames sequentially; each one exceeds the (zeroed)
@@ -398,7 +398,7 @@ class TranscriptMirrorBatcherTest {
         try (QueryHandler handler = new QueryHandler(
                 transport, false, null, null, Duration.ofSeconds(60))) {
             TranscriptMirrorBatcher batcher = SessionResume.buildMirrorBatcher(
-                    recording, null, Map.of(), (k, e) -> {
+                    recording, null, Map.of(), (k, e, d) -> {
                     }, SessionStoreFlushMode.EAGER);
             handler.setTranscriptMirrorBatcher(batcher);
 

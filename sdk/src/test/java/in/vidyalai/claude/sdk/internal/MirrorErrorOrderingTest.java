@@ -159,7 +159,7 @@ class MirrorErrorOrderingTest {
         CountDownLatch reporting = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         List<String> reported = new CopyOnWriteArrayList<>();
-        TranscriptMirrorBatcher batcher = new TranscriptMirrorBatcher(store, PROJECTS, (key, error) -> {
+        TranscriptMirrorBatcher batcher = new TranscriptMirrorBatcher(store, PROJECTS, (key, error, drain) -> {
             reporting.countDown();
             try {
                 release.await();

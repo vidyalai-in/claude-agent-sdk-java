@@ -19,7 +19,6 @@ import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.BiConsumer;
 import java.util.function.UnaryOperator;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -137,7 +136,7 @@ public final class SessionResume {
             SessionStore store,
             @Nullable MaterializedResume materialized,
             @Nullable Map<String, String> env,
-            BiConsumer<@Nullable SessionKey, String> onError) {
+            MirrorErrorSink onError) {
         return buildMirrorBatcher(store, materialized, env, onError, SessionStoreFlushMode.BATCHED);
     }
 
@@ -152,7 +151,7 @@ public final class SessionResume {
             SessionStore store,
             @Nullable MaterializedResume materialized,
             @Nullable Map<String, String> env,
-            BiConsumer<@Nullable SessionKey, String> onError,
+            MirrorErrorSink onError,
             SessionStoreFlushMode flushMode) {
         Path projectsDir;
         if (materialized != null) {

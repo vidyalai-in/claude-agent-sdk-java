@@ -1438,11 +1438,22 @@ public final class ClaudeAgentOptions {
          * buffers for a consumer that is not keeping up before the reader
          * stops reading from the CLI (back-pressure; nothing is dropped).
          *
+         * <p>Messages held back until a {@link #sessionStore(SessionStore)}
+         * has the turn (a {@code ResultMessage} and what follows it) count
+         * toward the limit too, so a slow store cannot make the buffer grow
+         * without bound.
+         *
          * <p>This is a soft limit. While a control request the SDK sent (an
          * {@code interrupt()}, {@code setModel()}, {@code getMcpStatus()},
          * ...) waits for its response, the reader keeps reading past it, so
-         * the response can arrive even if nobody drains the messages. The
-         * messages stay in order either way. Defaults to 1000.
+         * the response can arrive even if nobody drains the messages, or
+         * while a slow store holds them back. While messages are held, that
+         * reading on stops at a hard ceiling of four times this value (queued
+         * plus held): held messages cannot be drained, so past it the reader
+         * waits even while a control request is pending, so memory stays
+         * bounded, and that control call may then time out. With nothing held
+         * there is no ceiling. The messages stay in order either way.
+         * Defaults to 1000.
          *
          * @param maxMsgQSize the max message queue size, at least 1
          * @return this builder
@@ -1956,13 +1967,25 @@ public final class ClaudeAgentOptions {
          * to {@code sessionStore.append()}, and {@code resume} can
          * materialize from the store when the local file is absent.
          *
-         * <p>A slow store holds up the message stream: before each
-         * {@code ResultMessage} the reader waits for the pending entries to
-         * be appended (bounded by three times the per-append timeout plus
-         * backoff, 181 s by default), and no message or control response is
-         * read meanwhile, so a control call such as {@code interrupt()} waits
-         * too. {@code close()} likewise waits up to that bound for the final
-         * flush. The Python SDK behaves the same way.
+         * <p>A slow store delays each {@code ResultMessage}, not the rest of
+         * the session: the result is delivered only once the pending entries
+         * of its turn have been appended (or the append failed and was
+         * reported as a {@code MirrorErrorMessage}, which arrives first), a
+         * wait bounded by three times the per-append timeout plus backoff,
+         * 181 s by default. Messages that follow the result are held behind
+         * it, in order. Meanwhile the SDK keeps reading from the CLI, so a
+         * control call such as {@code interrupt()}, {@code setModel()} or
+         * {@code getMcpStatus()} is answered promptly, and permission, hook
+         * and SDK MCP requests are served. A {@code canUseTool} or hook
+         * callback for the next turn can therefore run while this turn's
+         * {@code ResultMessage}, and the next turn's own {@code tool_use}
+         * message, are still held: before the consumer has seen the messages
+         * that led to it. Held messages count toward
+         * {@link #maxMsgQSize(int)}, so a hung store stops the reading at
+         * that limit (at four times it while a control call waits for its
+         * response) instead of buffering without bound. {@code close()}
+         * waits up to the same bound for the final flush, and drops what is
+         * still held.
          *
          * @param sessionStore the session store, or {@code null} to disable mirroring
          * @return this builder
