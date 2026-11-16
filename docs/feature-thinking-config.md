@@ -431,10 +431,10 @@ public record ThinkingConfigEnabled(
 ```
 
 **Parameters**:
-- `budgetTokens` — Maximum thinking tokens (must be > 0)
+- `budgetTokens` — Maximum thinking tokens (zero or more)
 - `display` (optional, may be `null`) — see `ThinkingDisplay` below
 
-**Throws**: `IllegalArgumentException` if `budgetTokens ≤ 0`
+**Throws**: `IllegalArgumentException` if `budgetTokens < 0`
 
 CLI flags: `--max-thinking-tokens <budgetTokens>` (always); `--thinking-display <value>` (when `display != null`).
 
