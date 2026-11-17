@@ -1,7 +1,7 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
 **Analysis Date:** 2026-11-17 (sync to v0.2.183; full side-by-side audit on 2026-11-16)
-**Java SDK Version:** 0.2.8 (unreleased)
+**Java SDK Version:** 0.2.8
 **Python SDK Version:** [0.2.183](https://github.com/anthropics/claude-agent-sdk-python/commit/8ed58affbee28a201bb5aeb34afcd513415acac5) (latest, plus #1502 after the release)
 **Status:** ✅ **Feature parity, verified by a full code audit on 2026-11-16** (deliberate differences listed in §7)
 
@@ -981,5 +981,5 @@ The Java SDK is a high-quality, feature-complete port that maintains full compat
 **Initial Analysis:** 2026-01-22
 **Latest Verification:** 2026-11-17
 **Python SDK Version:** 0.2.183 plus #1502, merged after the release (commit 8ed58affbee28a201bb5aeb34afcd513415acac5)
-**Java SDK Version:** 0.2.8 (unreleased)
+**Java SDK Version:** 0.2.8
 **Status:** ✅ 100% Feature Parity Maintained
