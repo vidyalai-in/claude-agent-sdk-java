@@ -186,6 +186,32 @@ new PermissionResultAllow()
 new PermissionResultDeny("Reason for denial")
 ```
 
+### 权限更新
+
+允许决策可以携带权限更新，CLI 会连同该决策一起应用它们：`new PermissionResultAllow(updatedInput, updates)`。可以用 `PermissionUpdate` 的工厂方法构建它们，也可以把 CLI 自己给出的建议原样传回：
+
+```java
+.canUseTool((toolName, input, context) -> {
+    // Accept what the CLI suggests, e.g. "always allow WebSearch".
+    return CompletableFuture.completedFuture(
+        new PermissionResultAllow(null, context.suggestions()));
+})
+```
+
+| 工厂方法 | 不得为 `null` 的参数 |
+|---------|-----------------------------------|
+| `addRules(rules, behavior, destination)` | `rules`、`behavior` |
+| `replaceRules(rules, behavior, destination)` | `rules`、`behavior` |
+| `removeRules(rules, behavior, destination)` | `rules`、`behavior` |
+| `setMode(mode, destination)` | `mode` |
+| `addDirectories(directories, destination)` | `directories` |
+| `removeDirectories(directories, destination)` | `directories` |
+
+- 不带内容的规则（例如 `new PermissionRuleValue("WebSearch")`）涵盖该工具的所有使用。发送时不带 `ruleContent` 键。
+- destination 为 `null` 时会作为 `"session"` 发送，因此该更新一直持续到会话结束。`LOCAL_SETTINGS`、`PROJECT_SETTINGS` 和 `USER_SETTINGS` 会把它保存在对应的设置文件中；例如，`PROJECT_SETTINGS` 规则会写入 `.claude/settings.json`。
+- CLI 会检查每一条更新，只要其中一条不符合它的 schema，就会忽略整个列表。SDK 会先行检查。当某条更新缺少其类型所需的字段时，`PermissionUpdate.toMap()` 会抛出 `IllegalArgumentException`，SDK 便一条更新都不发送，并记录一条 WARNING，指明是哪条更新（`updatedPermissions[i]`）以及缺失的字段。该工具调用仍会被允许。之所以一条都不发送，是因为失败的那条更新可能是一项限制，而其他更新本应与它一同生效。
+- 不接受 behavior 参数的 `removeRules(rules, destination)` 已被弃用并将被移除：它产生的更新总是无法通过上述检查。在 0.2.8 之前，CLI 会静默忽略这些更新以及与它们一同发送的所有更新，同时也会忽略没有 destination 的更新。
+
 ## 示例
 
 ### 基于路径的权限

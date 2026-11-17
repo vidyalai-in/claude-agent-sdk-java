@@ -325,6 +325,10 @@ HookOutput.builder()
 - **`UserPromptSubmitHookSpecificOutput`** —— `sessionTitle` はセッションのタイトルを設定します。
   `suppressOriginalPrompt` は、出力の `decision` が `"block"` のとき、ブロックメッセージから元のプロンプトを
   省きます。1 引数のコンストラクタ `(additionalContext)` も残されています。
+- **`PermissionRequestHookSpecificOutput`** —— `decision` は書かれたとおりに送られます。その中の
+  `PermissionUpdate`（`updatedPermissions` の下にあるもの）は、[権限 → 権限の更新](./feature-permissions.md#権限の更新)
+  のルールに従います。その type が必要とするフィールドが欠けている更新があると、フックの応答はエラーになるため、
+  フックは失敗したものとみなされ、その `onFailure` が適用されます。
 - **`StopHookSpecificOutput` / `SubagentStopHookSpecificOutput`** —— `additionalContext` はモデル（または
   サブエージェント）に届けられるエラーではないフィードバックです。会話は続行するので、モデルはそれに基づいて
   行動できます。

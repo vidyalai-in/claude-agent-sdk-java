@@ -335,6 +335,11 @@ Notas sobre los campos:
   sesión. `suppressOriginalPrompt` omite el prompt original del mensaje de bloqueo
   cuando el `decision` de la salida es `"block"`. Se conserva un
   constructor de un argumento `(additionalContext)`.
+- **`PermissionRequestHookSpecificOutput`**: `decision` se envía tal como está escrito.
+  Un `PermissionUpdate` dentro de él (en `updatedPermissions`) sigue las reglas de
+  [Permisos → Actualizaciones de permisos](./feature-permissions.md#actualizaciones-de-permisos).
+  Uno al que le falta un campo que su tipo necesita convierte la respuesta del hook en un error, así que
+  el hook cuenta como fallido y se aplica su `onFailure`.
 - **`StopHookSpecificOutput` / `SubagentStopHookSpecificOutput`**:
   `additionalContext` es retroalimentación que no es un error y se entrega al modelo (o al
   subagente); la conversación continúa para que pueda actuar en consecuencia.

@@ -212,6 +212,32 @@ new PermissionResultAllow()
 new PermissionResultDeny("Reason for denial")
 ```
 
+### Actualizaciones de permisos
+
+Una autorización puede llevar actualizaciones de permisos, que el CLI aplica junto con la decisión: `new PermissionResultAllow(updatedInput, updates)`. Constrúyelas con las factorías de `PermissionUpdate`, o devuelve las propias sugerencias del CLI:
+
+```java
+.canUseTool((toolName, input, context) -> {
+    // Accept what the CLI suggests, e.g. "always allow WebSearch".
+    return CompletableFuture.completedFuture(
+        new PermissionResultAllow(null, context.suggestions()));
+})
+```
+
+| Factoría | Argumentos que no pueden ser `null` |
+|---------|-----------------------------------|
+| `addRules(rules, behavior, destination)` | `rules`, `behavior` |
+| `replaceRules(rules, behavior, destination)` | `rules`, `behavior` |
+| `removeRules(rules, behavior, destination)` | `rules`, `behavior` |
+| `setMode(mode, destination)` | `mode` |
+| `addDirectories(directories, destination)` | `directories` |
+| `removeDirectories(directories, destination)` | `directories` |
+
+- Una regla sin contenido, como `new PermissionRuleValue("WebSearch")`, cubre cualquier uso de la herramienta. Se envía sin la clave `ruleContent`.
+- Un destino `null` se envía como `"session"`, así que la actualización dura hasta que termina la sesión. `LOCAL_SETTINGS`, `PROJECT_SETTINGS` y `USER_SETTINGS` la guardan en ese archivo de ajustes; una regla `PROJECT_SETTINGS`, por ejemplo, se escribe en `.claude/settings.json`.
+- El CLI comprueba cada actualización e ignora la lista entera si una de ellas no se ajusta a su esquema. El SDK comprueba primero. Cuando a una actualización le falta un campo que su tipo necesita, `PermissionUpdate.toMap()` lanza `IllegalArgumentException`, y el SDK no envía ninguna de las actualizaciones y registra un WARNING que nombra la actualización (`updatedPermissions[i]`) y el campo que falta. La llamada a la herramienta se sigue autorizando. No se envía ninguna porque la actualización que falló puede ser una restricción que debía acompañar a las demás.
+- `removeRules(rules, destination)`, que no recibe comportamiento, está obsoleto y se eliminará: sus actualizaciones siempre fallan esa comprobación. Antes de la 0.2.8 el CLI las ignoraba en silencio, junto con todas las actualizaciones enviadas con ellas, y también ignoraba las actualizaciones sin destino.
+
 ## Ejemplos
 
 ### Permisos basados en rutas

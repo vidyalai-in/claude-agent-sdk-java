@@ -303,6 +303,9 @@ HookOutput.builder()
 - **`UserPromptSubmitHookSpecificOutput`** —— `sessionTitle` 设置会话标题。当输出的 `decision` 为
   `"block"` 时，`suppressOriginalPrompt` 会在阻止消息中省略原始提示词。单参数构造函数
   `(additionalContext)` 仍然保留。
+- **`PermissionRequestHookSpecificOutput`** —— `decision` 按原样发送。其中的 `PermissionUpdate`（位于
+  `updatedPermissions` 下）遵循 [权限 → 权限更新](./feature-permissions.md#权限更新) 中的规则。若某条更新
+  缺少其类型所需的字段，钩子的答复就会成为错误，因此该钩子被视为失败，其 `onFailure` 随之生效。
 - **`StopHookSpecificOutput` / `SubagentStopHookSpecificOutput`** —— `additionalContext` 是传递给模型
   （或子 agent）的非错误反馈；会话会继续进行，以便它据此采取行动。
 - **`SessionStartHookSpecificOutput`** —— `initialUserMessage` 会成为会话的第一条用户消息；当会话从

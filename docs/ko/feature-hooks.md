@@ -311,6 +311,10 @@ HookOutput.builder()
 - **`UserPromptSubmitHookSpecificOutput`** — `sessionTitle`은 세션 제목을 설정합니다.
   `suppressOriginalPrompt`는 출력의 `decision`이 `"block"`일 때 차단 메시지에서 원래 프롬프트를
   빼냅니다. 인자 하나짜리 생성자 `(additionalContext)`도 남아 있습니다.
+- **`PermissionRequestHookSpecificOutput`** — `decision`은 작성된 그대로 전송됩니다. 그 안의
+  `PermissionUpdate`(`updatedPermissions` 아래)는 [권한 → 권한 업데이트](./feature-permissions.md#권한-업데이트)의
+  규칙을 따릅니다. 타입이 필요로 하는 필드가 빠진 업데이트가 있으면 훅의 응답이 오류가 되므로, 훅은 실패한
+  것으로 간주되고 그 `onFailure`가 적용됩니다.
 - **`StopHookSpecificOutput` / `SubagentStopHookSpecificOutput`** — `additionalContext`는 모델(또는
   서브에이전트)에 전달되는 오류가 아닌 피드백입니다. 모델이 그에 따라 행동할 수 있도록 대화가 계속됩니다.
 - **`SessionStartHookSpecificOutput`** — `initialUserMessage`는 세션의 첫 사용자 메시지가 됩니다.

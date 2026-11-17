@@ -196,6 +196,32 @@ new PermissionResultAllow()
 new PermissionResultDeny("Reason for denial")
 ```
 
+### 권한 업데이트
+
+허용 결과에는 권한 업데이트를 실을 수 있으며, CLI는 결정과 함께 이를 적용합니다: `new PermissionResultAllow(updatedInput, updates)`. 업데이트는 `PermissionUpdate` 팩토리로 만들거나, CLI가 보낸 제안을 그대로 돌려줄 수 있습니다:
+
+```java
+.canUseTool((toolName, input, context) -> {
+    // Accept what the CLI suggests, e.g. "always allow WebSearch".
+    return CompletableFuture.completedFuture(
+        new PermissionResultAllow(null, context.suggestions()));
+})
+```
+
+| 팩토리 | `null`이면 안 되는 인자 |
+|---------|-----------------------------------|
+| `addRules(rules, behavior, destination)` | `rules`, `behavior` |
+| `replaceRules(rules, behavior, destination)` | `rules`, `behavior` |
+| `removeRules(rules, behavior, destination)` | `rules`, `behavior` |
+| `setMode(mode, destination)` | `mode` |
+| `addDirectories(directories, destination)` | `directories` |
+| `removeDirectories(directories, destination)` | `directories` |
+
+- `new PermissionRuleValue("WebSearch")`처럼 내용이 없는 규칙은 그 도구의 모든 사용에 적용됩니다. 이런 규칙은 `ruleContent` 키 없이 전송됩니다.
+- `null` 대상은 `"session"`으로 전송되므로, 업데이트는 세션이 끝날 때까지 유지됩니다. `LOCAL_SETTINGS`, `PROJECT_SETTINGS`, `USER_SETTINGS`는 업데이트를 해당 설정 파일에 보관합니다. 예를 들어 `PROJECT_SETTINGS` 규칙은 `.claude/settings.json`에 기록됩니다.
+- CLI는 모든 업데이트를 검사하며, 그중 하나라도 스키마에 맞지 않으면 목록 전체를 무시합니다. SDK가 먼저 검사합니다. 업데이트에 그 타입이 필요로 하는 필드가 빠져 있으면 `PermissionUpdate.toMap()`이 `IllegalArgumentException`을 던지고, SDK는 업데이트를 하나도 보내지 않은 채 해당 업데이트(`updatedPermissions[i]`)와 빠진 필드를 밝히는 `WARNING`을 기록합니다. 도구 호출은 여전히 허용됩니다. 하나도 보내지 않는 이유는, 실패한 업데이트가 나머지 업데이트와 함께 적용되어야 했던 제한일 수 있기 때문입니다.
+- behavior를 받지 않는 `removeRules(rules, destination)`는 제거 예정으로 deprecated되었습니다: 이것으로 만든 업데이트는 항상 그 검사에서 실패합니다. 0.2.8 이전에는 CLI가 이런 업데이트를, 함께 보낸 모든 업데이트와 더불어 조용히 무시했고, 대상이 없는 업데이트도 무시했습니다.
+
 ## 예제
 
 ### 경로 기반 권한
