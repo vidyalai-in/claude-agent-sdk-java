@@ -201,9 +201,11 @@
  *   "updatedInput": {...},
  *   "updatedPermissions": [{
  *     "type": "addRules",
+ *     "destination": "session",
+ *     "behavior": "allow",
  *     "rules": [{
  *       "toolName": "Bash",
- *       "ruleContent": "allow"
+ *       "ruleContent": "npm test"
  *     }]
  *   }]
  * }

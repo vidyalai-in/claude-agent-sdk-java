@@ -58,7 +58,9 @@ public final class PermissionUpdate {
 
     /**
      * Creates a PermissionUpdate from a Map (for Jackson deserialization).
-     * This is the inverse of {@link #toMap()}.
+     * This is the inverse of {@link #toMap()}, except that an update built
+     * with a {@code null} destination reads back as
+     * {@link PermissionUpdateDestination#SESSION}, which is what it was sent as.
      *
      * <p>
      * Absent optional fields (including the {@code mode} of a
@@ -93,8 +95,8 @@ public final class PermissionUpdate {
                 yield new PermissionUpdate(type, rules, behavior, null, null, destination);
             }
             case SET_MODE -> {
-                // A missing mode is kept as null, as the Python SDK keeps it
-                // (toMap() then omits it), rather than failing the update.
+                // A missing mode is kept as null, as the Python SDK keeps it,
+                // rather than failing the suggestion; toMap() then throws.
                 String modeStr = (String) map.get(MODE);
                 PermissionMode mode = ((modeStr != null) ? PermissionMode.fromValue(modeStr) : null);
                 yield new PermissionUpdate(type, null, null, mode, null, destination);
@@ -124,6 +126,12 @@ public final class PermissionUpdate {
 
     /**
      * Creates an addRules permission update.
+     *
+     * @param rules       the rules to add
+     * @param behavior    the behavior the rules grant
+     * @param destination where the update applies and is kept; {@code null}
+     *                    is sent as {@code "session"}
+     * @return the update
      */
     public static PermissionUpdate addRules(
             List<PermissionRuleValue> rules,
@@ -134,6 +142,12 @@ public final class PermissionUpdate {
 
     /**
      * Creates a replaceRules permission update.
+     *
+     * @param rules       the rules that replace those with this behavior
+     * @param behavior    the behavior whose rules are replaced
+     * @param destination where the update applies and is kept; {@code null}
+     *                    is sent as {@code "session"}
+     * @return the update
      */
     public static PermissionUpdate replaceRules(
             List<PermissionRuleValue> rules,
@@ -144,7 +158,33 @@ public final class PermissionUpdate {
 
     /**
      * Creates a removeRules permission update.
+     *
+     * @param rules       the rules to remove
+     * @param behavior    the behavior the rules were added with
+     * @param destination where the rules are kept; {@code null} is sent as
+     *                    {@code "session"}
+     * @return the update
      */
+    public static PermissionUpdate removeRules(
+            List<PermissionRuleValue> rules,
+            PermissionBehavior behavior,
+            @Nullable PermissionUpdateDestination destination) {
+        return new PermissionUpdate(PermissionUpdateType.REMOVE_RULES, rules, behavior, null, null, destination);
+    }
+
+    /**
+     * Creates a removeRules permission update with no behavior.
+     *
+     * @param rules       the rules to remove
+     * @param destination where the rules are kept
+     * @return the update
+     * @deprecated Claude Code needs a {@code behavior} on a removeRules
+     *             update. Without one it rejected the update and ignored
+     *             every other update in the same response. {@link #toMap()}
+     *             now throws for such an update. Use
+     *             {@link #removeRules(List, PermissionBehavior, PermissionUpdateDestination)}.
+     */
+    @Deprecated(since = "0.2.8", forRemoval = true)
     public static PermissionUpdate removeRules(
             List<PermissionRuleValue> rules,
             @Nullable PermissionUpdateDestination destination) {
@@ -153,6 +193,11 @@ public final class PermissionUpdate {
 
     /**
      * Creates a setMode permission update.
+     *
+     * @param mode        the permission mode to set
+     * @param destination where the update applies and is kept; {@code null}
+     *                    is sent as {@code "session"}
+     * @return the update
      */
     public static PermissionUpdate setMode(
             PermissionMode mode,
@@ -162,6 +207,11 @@ public final class PermissionUpdate {
 
     /**
      * Creates an addDirectories permission update.
+     *
+     * @param directories the directories to allow
+     * @param destination where the update applies and is kept; {@code null}
+     *                    is sent as {@code "session"}
+     * @return the update
      */
     public static PermissionUpdate addDirectories(
             List<String> directories,
@@ -171,6 +221,11 @@ public final class PermissionUpdate {
 
     /**
      * Creates a removeDirectories permission update.
+     *
+     * @param directories the directories to remove
+     * @param destination where the update applies and is kept; {@code null}
+     *                    is sent as {@code "session"}
+     * @return the update
      */
     public static PermissionUpdate removeDirectories(
             List<String> directories,
@@ -210,50 +265,82 @@ public final class PermissionUpdate {
     }
 
     /**
-     * Converts this permission update to a Map for JSON serialization.
+     * Converts this permission update to a Map for JSON serialization, in the
+     * control protocol format.
      *
      * <p>
      * The @JsonValue annotation tells Jackson to use this method's return
      * value when serializing PermissionUpdate objects.
      *
+     * <p>
+     * Claude Code rejects an update that lacks a field its type needs, or
+     * whose {@code ruleContent} is {@code null}, and then ignores every update
+     * in the same response. So this method:
+     * <ul>
+     * <li>leaves {@code ruleContent} out when a rule's
+     * {@link PermissionRuleValue#ruleContent()} is {@code null}, which is how
+     * Claude Code expects a rule for the whole tool;</li>
+     * <li>sends {@code "session"} when {@code destination} is {@code null}, so
+     * the update changes only the current session;</li>
+     * <li>throws {@link IllegalArgumentException} when a field the type needs
+     * is {@code null}: {@code rules} and {@code behavior} for
+     * {@code addRules}, {@code replaceRules} and {@code removeRules},
+     * {@code mode} for {@code setMode}, and {@code directories} for
+     * {@code addDirectories} and {@code removeDirectories}.</li>
+     * </ul>
+     *
+     * <p>
+     * When Jackson serializes the update (this is its {@code @JsonValue}), the
+     * same failure surfaces as a {@code JsonMappingException} whose cause is
+     * the {@code IllegalArgumentException}.
+     *
      * @return a map representation matching the CLI control protocol format
+     * @throws IllegalArgumentException if a field the update's type needs is
+     *                                  {@code null}
      */
     @JsonValue
     public Map<String, Object> toMap() {
         Map<String, Object> result = new HashMap<>();
         result.put(TYPE, type.getValue());
-
-        if (destination != null) {
-            result.put(DEST, destination.getValue());
-        }
+        result.put(DEST, ((destination != null)
+                ? destination.getValue()
+                : PermissionUpdateDestination.SESSION.getValue()));
 
         switch (type) {
             case ADD_RULES, REPLACE_RULES, REMOVE_RULES -> {
-                if (rules != null) {
-                    result.put(RULES, rules.stream()
-                            .map(rule -> {
-                                Map<String, Object> ruleMap = new HashMap<>();
-                                ruleMap.put(TOOL_NAME, rule.toolName());
-                                if (rule.ruleContent() != null) {
-                                    ruleMap.put(RULE_CONTENT, rule.ruleContent());
-                                }
-                                return ruleMap;
-                            })
-                            .toList());
+                if (rules == null) {
+                    throw new IllegalArgumentException("PermissionUpdate(type=" + type.getValue()
+                            + ") has no rules. Set rules to a list of PermissionRuleValue.");
                 }
-                if (behavior != null) {
-                    result.put(BEHAVIOR, behavior.getValue());
+                if (behavior == null) {
+                    throw new IllegalArgumentException("PermissionUpdate(type=" + type.getValue()
+                            + ") has no behavior. Set behavior to ALLOW, DENY or ASK.");
                 }
+                result.put(RULES, rules.stream()
+                        .map(rule -> {
+                            Map<String, Object> ruleMap = new HashMap<>();
+                            ruleMap.put(TOOL_NAME, rule.toolName());
+                            if (rule.ruleContent() != null) {
+                                ruleMap.put(RULE_CONTENT, rule.ruleContent());
+                            }
+                            return ruleMap;
+                        })
+                        .toList());
+                result.put(BEHAVIOR, behavior.getValue());
             }
             case SET_MODE -> {
-                if (mode != null) {
-                    result.put(MODE, mode.getValue());
+                if (mode == null) {
+                    throw new IllegalArgumentException("PermissionUpdate(type=setMode) has no mode. "
+                            + "Set mode to a permission mode such as ACCEPT_EDITS.");
                 }
+                result.put(MODE, mode.getValue());
             }
             case ADD_DIRS, REMOVE_DIRS -> {
-                if (directories != null) {
-                    result.put(DIRS, directories);
+                if (directories == null) {
+                    throw new IllegalArgumentException("PermissionUpdate(type=" + type.getValue()
+                            + ") has no directories. Set directories to a list of paths.");
                 }
+                result.put(DIRS, directories);
             }
         }
 

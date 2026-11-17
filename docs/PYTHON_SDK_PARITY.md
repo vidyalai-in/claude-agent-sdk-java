@@ -1,8 +1,8 @@
 # Claude Agent SDK: Python vs Java - Feature Parity Analysis
 
-**Analysis Date:** 2026-11-16 (full side-by-side audit)
-**Java SDK Version:** 0.2.7
-**Python SDK Version:** [0.2.182](https://github.com/anthropics/claude-agent-sdk-python/commit/4720d367f7db9d5df8a166c74d7f36a538ac8c34) (latest)
+**Analysis Date:** 2026-11-17 (sync to v0.2.183; full side-by-side audit on 2026-11-16)
+**Java SDK Version:** 0.2.8 (unreleased)
+**Python SDK Version:** [0.2.183](https://github.com/anthropics/claude-agent-sdk-python/commit/8ed58affbee28a201bb5aeb34afcd513415acac5) (latest, plus #1502 after the release)
 **Status:** ✅ **Feature parity, verified by a full code audit on 2026-11-16** (deliberate differences listed in §7)
 
 > **What "parity" means here.** Each sync ports the Python commits made since the previous sync, so on its own it cannot catch a gap an earlier sync missed. On 2026-11-16 (Java 0.2.6) the current code of both SDKs was compared side by side, area by area: control protocol, transport and options, message parsing, hook/permission/config types, SDK MCP servers, local sessions, and SessionStore. Every difference found was either fixed (see the 0.2.6 entry in `CHANGELOG.md`) or is listed under *Deliberate differences found by the 0.2.6 audit* in §7. The percentages below mean "nothing known to be missing", not "every line re-verified on every sync".
@@ -13,7 +13,12 @@
 
 The **Java SDK has achieved and maintains 100% feature parity** with the Python SDK. All core functionality, types, examples, and features have been successfully implemented. The Java implementation uses idiomatic Java patterns (sealed interfaces, records, builders, virtual threads) while maintaining full compatibility with the Python SDK's capabilities.
 
-**Recent Python SDK Updates (v0.1.22-0.2.182):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.182. These updates include:
+**Recent Python SDK Updates (v0.1.22-0.2.183):** Since the initial parity analysis on 2026-01-22, the Python SDK has been updated from v0.1.21 to v0.2.183. These updates include:
+- **v0.2.183 + #1502** - One SDK-facing change, merged after the release; v0.2.183 itself bumps the bundled CLI to 2.1.326 (N/A: Java uses the installed CLI). Ported to Java:
+  - **Permission updates are sent in the shape Claude Code accepts** (#1502). Claude Code checks every update in a `canUseTool` allow against its schema and ignores the whole list when one does not fit. `PermissionUpdate.toMap()` now sends `"session"` when `destination` is `null`, and throws `IllegalArgumentException` (Python: `ValueError`) when a field the type needs is `null`: `rules`/`behavior` for the three rules types, `mode` for `setMode`, `directories` for the two directory types. A `null` `ruleContent` was already left out in Java. `QueryHandler.permissionUpdatesToWire` ports `_permission_updates_to_wire`: if any update cannot be sent, none are, a WARNING names its index and the reason, and the call is still allowed. Python's unknown-`type` error is N/A, because `PermissionUpdateType` is an enum.
+    - *Java-side follow-through.* `PermissionUpdate.removeRules(rules, destination)` had no `behavior` parameter, so every list that contained one was ignored by the CLI. The new `removeRules(rules, behavior, destination)` matches Python's field set. The old overload is deprecated for removal, and an update built with it now fails `toMap()`, as Python's `PermissionUpdate(type="removeRules")` without a behavior does.
+    - *Hook path (Java-only).* `toMap()` is `PermissionUpdate`'s `@JsonValue`, so a hook output that holds an unsendable update (e.g. in a `PermissionRequestHookSpecificOutput` decision) now fails serialization. `sendControlResponse` used to log such a failure and write nothing, leaving the CLI waiting for its hook timeout. A success response that cannot be serialized is now answered with an error frame. Python has no counterpart path, because its hook output is a plain dict.
+  - *Tests.* `PermissionUpdateWireShapeTest` ports the new `TestPermissionUpdate` cases in `test_types.py`: whole-tool rules, empty `ruleContent`, the `session` default for all six types, a missing required field for each type, and CLI suggestions that round-trip unchanged. It adds cases for the deprecated factory and for incomplete suggestions read by `fromMap`. `PermissionUpdatesResponseTest` ports the two new `test_tool_callbacks.py` cases (echoing whole-tool suggestions; one malformed update sends none, with the warning) and adds the deprecated factory, the default destination on the wire, and the two hook-output cases (error frame for an unsendable update, `session` default for a valid one). `PermissionSuggestionLeniencyTest` and `AdditionalTypesTest` were updated for the new `toMap()` behavior.
 - **v0.2.169-0.2.182** - Eight SDK-facing changes; the rest is bundled-CLI bumps (2.1.304 → 2.1.325), PyPI trusted publishing and hash-pinned build tools (#1415, #1418, #1455), wheel packaging, and removal of the `@claude` workflow (#1485). Ported to Java:
   - **`user_message_uuid` / `user_message_uuids`** (#1505) on `ResultMessage`, `AssistantMessage` and `StreamEvent` → `userMessageUuid()` / `userMessageUuids()`. The parser keeps an empty list distinct from an absent one (`null`) and drops non-string entries. `MessageOrigin`'s Javadoc no longer suggests `origin` identifies your result; it shows the uuid match instead. `MessageOriginExample` sends a prompt with a `uuid` and checks for it on the result, mirroring the updated `e2e-tests/test_message_origin.py`.
   - **`HookMatcher.on_failure`** (#1460) → `HookMatcher.onFailure` with a new `HookOnFailure` enum (`CONTINUE`, `BLOCK`), sent as `onFailure`. For a `BLOCK` matcher, `QueryHandler.initialize()` throws `CLIConnectionException` unless the reply reports `hook_on_failure_supported`, and when it reports `hooks_applied: false`. A hook that completes with `null` or returns a `null` future already answered with an error frame; it now has an explicit message. `Hooks.java` puts its dangerous-command guard on `BLOCK`.
@@ -661,7 +666,6 @@ Everything else the 2026-11-16 audit found was fixed. These differences remain o
 | **Message parsing, strict side** | A wrong-typed value on a required field is passed through | `MessageParseException` | The typed record cannot hold it; failing with a clear message beats a silent `null`. |
 | **`errors` as a bare string** | Kept as a string | Wrapped in a one-element list | Tolerates older emitters; `errors()` is a `List`. |
 | **Unrepresentable permission suggestion** | Raw strings passed through | Skipped (FINE log); the callback still runs | `PermissionUpdate` is typed. `PermissionUpdateDestination.CLI_ARG` was added so the TS SDK's `cliArg` is not skipped. |
-| **`PermissionUpdate` with no rule content** | Sends `"ruleContent": null` | Omits the key | The TS type is an optional string. |
 | **`HookInput.raw()`** | The hook gets the raw dict | The typed record plus `raw()`; `raw()` is empty for an input built by hand | Typed inputs are the Java API; `raw()` reaches unmodelled keys. |
 | **SDK-MCP schema map vs shorthand** | A dict is a schema only when it has a string `type` *and* `properties`; anything else is the `{name: type}` shorthand | Only a map whose values are all Java types (`Class`, `Type`, `TypeReference`) is the shorthand; any other map is published as written, with `"type": "object"` added when it has no `type`, and a warning when it has no JSON Schema keyword at all | Python's rule would rewrite valid schemas without a top-level `type` (`properties`-only, `anyOf`) and `Map.of("type", "object")` into tools taking arguments named after the schema keywords. |
 | **SDK-MCP unknown method** | `-32602` (mcp library behavior) | `-32601` | `-32601` is the JSON-RPC code for an unknown method. |
@@ -970,12 +974,12 @@ All previously identified gaps have been closed:
 
 **Status: COMPLETE & MAINTAINED** ✅
 
-The Java SDK is a high-quality, feature-complete port that maintains full compatibility with the Python SDK's capabilities (v0.2.182) while following Java best practices and idioms. Regular verification ensures continued parity as both SDKs evolve.
+The Java SDK is a high-quality, feature-complete port that maintains full compatibility with the Python SDK's capabilities (v0.2.183) while following Java best practices and idioms. Regular verification ensures continued parity as both SDKs evolve.
 
 ---
 
 **Initial Analysis:** 2026-01-22
-**Latest Verification:** 2026-11-15
-**Python SDK Version:** 0.2.182 (commit 4720d367f7db9d5df8a166c74d7f36a538ac8c34)
-**Java SDK Version:** 0.2.5
+**Latest Verification:** 2026-11-17
+**Python SDK Version:** 0.2.183 plus #1502, merged after the release (commit 8ed58affbee28a201bb5aeb34afcd513415acac5)
+**Java SDK Version:** 0.2.8 (unreleased)
 **Status:** ✅ 100% Feature Parity Maintained

@@ -569,6 +569,7 @@ class AdditionalTypesTest {
         // Create a PermissionUpdate with removeRules
         PermissionUpdate original = PermissionUpdate.removeRules(
                 List.of(new PermissionRuleValue("Bash")),
+                PermissionBehavior.ALLOW,
                 null);
 
         // Serialize to Map
@@ -582,7 +583,10 @@ class AdditionalTypesTest {
         assertThat(deserialized.rules()).hasSize(1);
         assertThat(deserialized.rules().get(0).toolName()).isEqualTo("Bash");
         assertThat(deserialized.rules().get(0).ruleContent()).isNull();
-        assertThat(deserialized.destination()).isNull();
+        assertThat(deserialized.behavior()).isEqualTo(PermissionBehavior.ALLOW);
+        // A null destination is sent as "session".
+        assertThat(map).containsEntry("destination", "session");
+        assertThat(deserialized.destination()).isEqualTo(PermissionUpdateDestination.SESSION);
     }
 
     // ==================== MCP Server Configs Tests ====================

@@ -3,7 +3,8 @@ package in.vidyalai.claude.sdk.types.permission;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 /**
- * Destination for permission updates.
+ * Where a permission update applies and is kept. An update with a
+ * {@code null} destination is sent as {@link #SESSION}.
  */
 public enum PermissionUpdateDestination {
 

@@ -1791,6 +1791,33 @@ public class QueryHandler implements AutoCloseable {
     }
 
     /**
+     * Converts the permission updates of a {@code canUseTool} allow result.
+     *
+     * <p>
+     * Returns {@code null}, and logs a warning, if any update cannot be
+     * converted. The updates are sent all together or not at all, because the
+     * one that failed may be a restriction the others were meant to come with.
+     */
+    static @Nullable List<Map<String, Object>> permissionUpdatesToWire(List<PermissionUpdate> updates) {
+        List<Map<String, Object>> wire = new ArrayList<>(updates.size());
+        for (int index = 0; index < updates.size(); index++) {
+            PermissionUpdate update = updates.get(index);
+            try {
+                if (update == null) {
+                    throw new IllegalArgumentException("the update is null");
+                }
+                wire.add(update.toMap());
+            } catch (IllegalArgumentException e) {
+                logger.warning("The canUseTool callback allowed the tool call, but none of its "
+                        + "permission updates were applied, because updatedPermissions[" + index
+                        + "] cannot be sent: " + e.getMessage());
+                return null;
+            }
+        }
+        return wire;
+    }
+
+    /**
      * Handles incoming control requests from CLI using strongly-typed classes.
      */
     private void handleControlRequest(Map<String, Object> message, InflightControlRequest inflight) {
@@ -1847,7 +1874,13 @@ public class QueryHandler implements AutoCloseable {
 
                 // Serialize permission result to response format
                 if (result instanceof PermissionResultAllow allow) {
-                    responseData = allow.toMap(input);
+                    responseData = new PermissionResultAllow(allow.updatedInput(), null).toMap(input);
+                    if (allow.updatedPermissions() != null) {
+                        List<Map<String, Object>> updates = permissionUpdatesToWire(allow.updatedPermissions());
+                        if (updates != null) {
+                            responseData.put("updatedPermissions", updates);
+                        }
+                    }
                 } else if (result instanceof PermissionResultDeny deny) {
                     responseData = deny.toMap(input);
                 } else {
@@ -2095,12 +2128,35 @@ public class QueryHandler implements AutoCloseable {
             return;
         }
 
-        SDKControlResponse cr = new SDKControlResponse(crData);
         try {
-            String json = MAPPER.writeValueAsString(cr);
-            transport.write(json + "\n");
+            transport.write(serializeControlResponse(crData) + "\n");
         } catch (Exception e) {
             logger.log(Level.WARNING, "Failed to send control response", e);
+        }
+    }
+
+    /**
+     * Serializes a control response. A success response that cannot be
+     * serialized, such as a hook output holding a {@code PermissionUpdate}
+     * that lacks a field its type needs, is answered with an error response
+     * instead: the request is already marked answered, so writing nothing
+     * would leave the CLI waiting for its own timeout.
+     */
+    private String serializeControlResponse(ControlResponseData crData) throws Exception {
+        try {
+            return MAPPER.writeValueAsString(new SDKControlResponse(crData));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            if (!(crData instanceof ControlResponse success)) {
+                throw e;
+            }
+            Throwable cause = e;
+            while ((cause.getCause() != null) && (cause.getCause() != cause)) {
+                cause = cause.getCause();
+            }
+            logger.log(Level.WARNING, "Control response to " + success.requestId()
+                    + " cannot be serialized; answering with an error", e);
+            return MAPPER.writeValueAsString(new SDKControlResponse(new ControlErrorResponse(
+                    success.requestId(), "Response cannot be sent: " + describeThrowable(cause))));
         }
     }
 

@@ -11,7 +11,11 @@ import org.jspecify.annotations.Nullable;
  *
  * @param updatedInput       optional modified input to use instead of the
  *                           original
- * @param updatedPermissions optional permission updates to apply
+ * @param updatedPermissions optional permission updates to apply along with
+ *                           this allow. If any of them cannot be sent
+ *                           ({@link PermissionUpdate#toMap()} throws), the SDK
+ *                           sends none of them and logs a warning; the tool
+ *                           call is still allowed
  */
 public record PermissionResultAllow(
         @Nullable Map<String, Object> updatedInput,
@@ -47,8 +51,11 @@ public record PermissionResultAllow(
      * Converts this permission result to a Map for JSON serialization.
      *
      * @param input original input
-     * 
+     *
      * @return a map representation matching the CLI control protocol format
+     * @throws IllegalArgumentException if one of the permission updates
+     *                                  cannot be sent; see
+     *                                  {@link PermissionUpdate#toMap()}
      */
     @Override
     public Map<String, Object> toMap(Map<String, Object> input) {

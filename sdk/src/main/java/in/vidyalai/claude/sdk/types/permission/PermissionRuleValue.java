@@ -14,7 +14,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * See {@link in.vidyalai.claude.sdk.types} package documentation for details.
  *
  * @param toolName    the name of the tool this rule applies to
- * @param ruleContent optional content for the rule
+ * @param ruleContent what the rule matches within the tool, e.g.
+ *                    {@code "npm test"} for Bash. {@code null} (or an empty
+ *                    string) makes a rule that covers every use of the tool;
+ *                    {@code null} is sent without a {@code ruleContent} key
  */
 public record PermissionRuleValue(
         @JsonProperty("toolName") String toolName,

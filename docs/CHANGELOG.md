@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-11-17
+
+Synced on 2026-11-17 with Python SDK v0.2.183 plus #1502 (commit `8ed58af`), from v0.2.182. v0.2.183 itself only bumps the bundled CLI (2.1.326), which does not apply to this SDK.
+
+### Breaking
+- **Permission updates the CLI used to ignore now take effect** (Python SDK #1502). When a `canUseTool` callback returns `PermissionResultAllow` with `updatedPermissions`, Claude Code checks every update and ignores the whole list if one of them doesn't fit its schema. An update with no `destination` didn't fit. It is now sent as `"session"`, for every update type, so a grant made without a destination can be revoked the same way. If your callback returned updates without a destination, they now change the session's permissions. Updates that were already valid go out unchanged.
+- **`PermissionUpdate.toMap()` throws `IllegalArgumentException`** when a field the update's type needs is `null`: `rules` and `behavior` for `addRules`, `replaceRules` and `removeRules`, `mode` for `setMode`, and `directories` for `addDirectories` and `removeDirectories`. Claude Code would have ignored the update and every other update sent with it. In a `canUseTool` answer, the SDK then sends none of the updates and logs a WARNING that names the update and the missing field. The tool call is still allowed. It's all or nothing because the update that failed may be a restriction the others were meant to come with. A suggestion from the CLI that lacks such a field is still passed to the callback, but echoing it fails the same way. A hook output that carries such an update (for example in a `PermissionRequestHookSpecificOutput` decision) is answered with an error frame naming the missing field, so the hook counts as failed and `onFailure` applies. This is Java-only: Python's hook output is a plain dict.
+
+### Fixed
+- **A control response that cannot be serialized is answered with an error frame.** Before, the SDK logged the failure and wrote nothing, which left the CLI waiting until its own timeout.
+
+### Deprecated
+- **`PermissionUpdate.removeRules(rules, destination)`**, deprecated for removal. Claude Code needs a `behavior` on a `removeRules` update, and this factory has no way to set one, so the CLI ignored every list that contained one. Its updates now fail `toMap()`. Use the new `removeRules(rules, behavior, destination)`.
+
+### Added
+- **`PermissionUpdate.removeRules(List, PermissionBehavior, PermissionUpdateDestination)`**, with the field set Python's `PermissionUpdate` and the CLI use.
+
 ## [0.2.7] - 2026-11-16
 
 ### Changed

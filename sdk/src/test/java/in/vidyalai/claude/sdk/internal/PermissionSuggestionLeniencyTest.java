@@ -108,8 +108,10 @@ class PermissionSuggestionLeniencyTest {
     void setModeWithoutAModeKeepsTheModeUnset() {
         PermissionUpdate update = PermissionUpdate.fromMap(Map.of("type", "setMode", "destination", "session"));
         assertThat(update.mode()).isNull();
-        // As the Python SDK's to_dict: an unset mode is omitted.
-        assertThat(update.toMap()).isEqualTo(Map.of("type", "setMode", "destination", "session"));
+        // As the Python SDK's to_dict: the suggestion is kept, but it cannot be sent.
+        assertThatThrownBy(update::toMap)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("has no mode");
     }
 
     @Test
