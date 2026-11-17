@@ -338,6 +338,11 @@ Field notes:
   title. `suppressOriginalPrompt` omits the original prompt from the block
   message when the output's `decision` is `"block"`. A one-argument
   constructor `(additionalContext)` remains.
+- **`PermissionRequestHookSpecificOutput`** — `decision` is sent as written.
+  A `PermissionUpdate` in it (under `updatedPermissions`) follows the rules in
+  [Permissions → Permission updates](./feature-permissions.md#permission-updates).
+  One that lacks a field its type needs makes the hook's answer an error, so
+  the hook counts as failed and its `onFailure` applies.
 - **`StopHookSpecificOutput` / `SubagentStopHookSpecificOutput`** —
   `additionalContext` is non-error feedback delivered to the model (or
   subagent); the conversation continues so it can act on it.

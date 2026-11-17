@@ -174,6 +174,32 @@ new PermissionResultAllow()
 new PermissionResultDeny("Reason for denial")
 ```
 
+### Permission updates
+
+An allow can carry permission updates, which the CLI applies along with the decision: `new PermissionResultAllow(updatedInput, updates)`. Build them with the `PermissionUpdate` factories, or pass back the CLI's own suggestions:
+
+```java
+.canUseTool((toolName, input, context) -> {
+    // Accept what the CLI suggests, e.g. "always allow WebSearch".
+    return CompletableFuture.completedFuture(
+        new PermissionResultAllow(null, context.suggestions()));
+})
+```
+
+| Factory | Arguments that must not be `null` |
+|---------|-----------------------------------|
+| `addRules(rules, behavior, destination)` | `rules`, `behavior` |
+| `replaceRules(rules, behavior, destination)` | `rules`, `behavior` |
+| `removeRules(rules, behavior, destination)` | `rules`, `behavior` |
+| `setMode(mode, destination)` | `mode` |
+| `addDirectories(directories, destination)` | `directories` |
+| `removeDirectories(directories, destination)` | `directories` |
+
+- A rule with no content, such as `new PermissionRuleValue("WebSearch")`, covers every use of the tool. It is sent without a `ruleContent` key.
+- A `null` destination is sent as `"session"`, so the update lasts until the session ends. `LOCAL_SETTINGS`, `PROJECT_SETTINGS` and `USER_SETTINGS` keep it in that settings file; a `PROJECT_SETTINGS` rule, for example, is written to `.claude/settings.json`.
+- The CLI checks every update and ignores the whole list if one of them does not fit its schema. The SDK checks first. When an update lacks a field its type needs, `PermissionUpdate.toMap()` throws `IllegalArgumentException`, and the SDK sends none of the updates and logs a WARNING that names the update (`updatedPermissions[i]`) and the missing field. The tool call is still allowed. None are sent because the update that failed may be a restriction the others were meant to come with.
+- `removeRules(rules, destination)`, which takes no behavior, is deprecated for removal: its updates always fail that check. Before 0.2.8 the CLI silently ignored them, along with every update sent with them, and also ignored updates with no destination.
+
 ## Examples
 
 ### Path-based Permissions
